@@ -1,0 +1,83 @@
+# WORLD tier - emergency services, health, government (OSM via Overpass, ODbL).
+defaults:
+  driver: overpass
+  provider: osm
+  license: "ODbL 1.0 - (c) OpenStreetMap contributors"
+  sector: Emergency & Health
+sources:
+  - layer: hospitals
+    entity: hospital
+    tags: ["amenity=hospital"]
+    elements: nwr
+    represent: point
+    fields:
+      beds: {from: ["beds", "capacity:beds"]}
+      emergency: {from: ["emergency"]}
+      helipad: {from: ["helipad"]}
+      phone: {from: ["phone", "contact:phone"]}
+      address: {from: ["addr:full", "addr:street"]}
+
+  - layer: urgent_care
+    tags: ["amenity=clinic;urgent_care=yes", "healthcare=clinic;urgent_care=yes", "amenity=clinic;emergency=yes"]
+    elements: nwr
+    represent: point
+    hidden: true
+
+  - layer: fire_stations
+    entity: fire_station
+    tags: ["amenity=fire_station"]
+    elements: nwr
+    represent: point
+
+  - layer: police
+    entity: police
+    tags: ["amenity=police"]
+    elements: nwr
+    represent: point
+
+  - layer: ems
+    tags: ["emergency=ambulance_station"]
+    elements: nwr
+    represent: point
+
+  - layer: eoc
+    tags: ["emergency=disaster_response", "office=government;government=emergency", "emergency_service"]
+    elements: nwr
+    represent: point
+    notes: "OSM tagging for EOCs is sparse; prefer state/county sources"
+
+  - layer: shelters
+    tags: ["amenity=shelter;shelter_type~^(emergency|disaster|storm|civil)", "social_facility=shelter", "emergency=assembly_point"]
+    elements: nwr
+    represent: point
+    hidden: true
+
+  - layer: nursing_homes
+    tags: ["amenity=nursing_home", "social_facility=nursing_home", "social_facility=assisted_living"]
+    elements: nwr
+    represent: point
+    hidden: true
+    fields:
+      beds: {from: ["beds", "capacity"]}
+
+  - layer: correctional
+    tags: ["amenity=prison"]
+    elements: nwr
+    represent: point
+    sector: Government
+
+  - layer: government
+    tags: ["amenity=townhall", "office=government;government~^(county|state|federal|emergency|public_safety)", "amenity=courthouse"]
+    elements: nwr
+    represent: point
+    hidden: true
+    sector: Government
+
+  - layer: schools
+    tags: ["amenity=school", "amenity=college", "amenity=university"]
+    elements: nwr
+    represent: point
+    hidden: true
+    aoi_kinds: [county, bbox]
+    sector: Government
+    notes: "Potential shelters / mass-care sites; county scale only"

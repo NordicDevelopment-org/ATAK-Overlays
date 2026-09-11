@@ -1,0 +1,69 @@
+# WORLD tier - oil, gas, fuel (OSM via Overpass, ODbL).
+defaults:
+  driver: overpass
+  provider: osm
+  license: "ODbL 1.0 - (c) OpenStreetMap contributors"
+  sector: Energy - Oil & Gas
+sources:
+  - layer: pipelines
+    entity: pipeline
+    tags: ["man_made=pipeline"]
+    elements: w
+    geometry: line
+    group_by: [substance]
+    name: "{name} {substance}"
+    fields:
+      substance: {from: ["substance"]}
+      type: {from: ["usage", "type"]}
+      diameter_in: {from: ["diameter@mm"]}
+      pressure: {from: ["pressure"]}
+    style_rules:
+      - {when: "substance ~ gas",  color: "ffff00aa", width: 2}
+      - {when: "substance ~ oil",  color: "ff2020c0", width: 2}
+      - {when: "substance ~ water", color: "ffffaa00", width: 1}
+    notes: "OSM pipeline coverage is partial; PHMSA NPMS is the authoritative US source but is not redistributable"
+
+  - layer: compressor_stations
+    tags: ["pipeline=substation", "man_made=pumping_station;substance~^(gas|oil)", "industrial=gas_compressor"]
+    elements: nwr
+    represent: point
+    fields:
+      type: {from: ["substation", "pipeline", "industrial"]}
+
+  - layer: gas_storage
+    tags: ["man_made=gasometer", "man_made=storage_tank;content~^(gas|lng|lpg|natural_gas)$", "industrial=gas_storage"]
+    elements: nwr
+    represent: point
+    hidden: true
+    fields:
+      substance: {from: ["content"]}
+
+  - layer: refineries
+    tags: ["industrial=refinery", "man_made=works;product~^(oil|petroleum|fuel)"]
+    elements: nwr
+    represent: both
+    fields:
+      substance: {from: ["product"]}
+
+  - layer: fuel_terminals
+    tags: ["industrial=oil_depot", "industrial=depot;depot~^(fuel|oil)", "man_made=storage_tank;content~^(oil|fuel|gasoline|diesel|kerosene|petroleum)$"]
+    elements: nwr
+    represent: point
+    hidden: true
+    fields:
+      substance: {from: ["content", "depot"]}
+
+  - layer: ethanol_plants
+    tags: ["industrial=ethanol", "man_made=works;product~ethanol", "man_made=works;product~biofuel"]
+    elements: nwr
+    represent: point
+
+  - layer: fuel_stations
+    tags: ["amenity=fuel"]
+    elements: nwr
+    represent: point
+    hidden: true
+    aoi_kinds: [county, bbox]
+    fields:
+      operator: {from: ["brand", "operator"]}
+    notes: "Retail fuel; county scale only. Useful for resupply planning"

@@ -1,0 +1,63 @@
+# US national tier - EMERGENCY SERVICES + HEALTH.
+#
+# HIFLD Open (hospitals, urgent care, EMS, fire stations, law enforcement,
+# EOCs, nursing homes) was shut down 26 Aug 2025 and those layers are not
+# maintained anywhere public. Until a replacement is confirmed, the LIVE
+# sources for these layers are the global OSM tier and state/county tiers.
+# The entries below are disabled placeholders pointing at the NASA NCCS mirror
+# of the last HIFLD Open snapshot; confirm the service path with
+#   overlaybuilder probe https://maps.nccs.nasa.gov/mapping/rest/services/hifld_open
+# then set the url/layer and `enabled: true`.
+defaults:
+  sector: Emergency & Health
+  provider: hifld
+  driver: arcgis
+  enabled: false
+  spatial: bbox
+  license: "Public domain (US Government work) - mirror of retired HIFLD Open; vintage unknown"
+  where_by_aoi:
+    county: "COUNTYFIPS = '{fips5}'"
+    state: "STATE = '{state_abbr}'"
+    region: "STATE IN ({states_sql})"
+  confidence: low
+sources:
+  - layer: hospitals
+    id: hospitals@hifld-mirror
+    entity: hospital
+    url: https://maps.nccs.nasa.gov/mapping/rest/services/hifld_open/public_health/FeatureServer
+    layer_match: "^hospitals?$"
+    fields:
+      name: {from: [NAME]}
+      beds: {from: [BEDS]}
+      trauma: {from: [TRAUMA]}
+      helipad: {from: [HELIPAD]}
+      type: {from: [TYPE]}
+      owner: {from: [OWNER]}
+    source_name: "HIFLD Hospitals (retired; mirror)"
+    source_url: https://maps.nccs.nasa.gov/mapping/rest/services/hifld_open
+  - layer: fire_stations
+    id: fire_stations@hifld-mirror
+    entity: fire_station
+    url: https://maps.nccs.nasa.gov/mapping/rest/services/hifld_open/emergency_services/FeatureServer
+    layer_match: "fire.?stations?"
+    source_name: "HIFLD Fire Stations (retired; mirror)"
+    source_url: https://maps.nccs.nasa.gov/mapping/rest/services/hifld_open
+  - layer: police
+    id: police@hifld-mirror
+    entity: police
+    url: https://maps.nccs.nasa.gov/mapping/rest/services/hifld_open/emergency_services/FeatureServer
+    layer_match: "law.?enforcement"
+    source_name: "HIFLD Local Law Enforcement Locations (retired; mirror)"
+    source_url: https://maps.nccs.nasa.gov/mapping/rest/services/hifld_open
+  - layer: ems
+    id: ems@hifld-mirror
+    url: https://maps.nccs.nasa.gov/mapping/rest/services/hifld_open/emergency_services/FeatureServer
+    layer_match: "emergency.?medical"
+    source_name: "HIFLD EMS Stations (retired; mirror)"
+    source_url: https://maps.nccs.nasa.gov/mapping/rest/services/hifld_open
+  - layer: eoc
+    id: eoc@hifld-mirror
+    url: https://maps.nccs.nasa.gov/mapping/rest/services/hifld_open/emergency_services/FeatureServer
+    layer_match: "emergency.?operations"
+    source_name: "HIFLD Emergency Operations Centers (retired; mirror)"
+    source_url: https://maps.nccs.nasa.gov/mapping/rest/services/hifld_open

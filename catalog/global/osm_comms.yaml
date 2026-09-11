@@ -1,0 +1,40 @@
+# WORLD tier - communications (OSM via Overpass, ODbL).
+defaults:
+  driver: overpass
+  provider: osm
+  license: "ODbL 1.0 - (c) OpenStreetMap contributors"
+  sector: Communications
+sources:
+  - layer: comm_towers
+    entity: comm_tower
+    tags: ["man_made=mast;tower:type=communication", "man_made=tower;tower:type=communication",
+           "man_made=communications_tower", "man_made=mast;communication:mobile_phone=yes",
+           "man_made=tower;communication:mobile_phone=yes"]
+    elements: nw
+    represent: point
+    group_by: [structure_type]
+    fields:
+      height_ft: {from: ["height@m"]}
+      structure_type: {from: ["tower:construction", "man_made"]}
+      type: {from: ["tower:type", "communication:mobile_phone", "communication:radio", "communication:television", "communication:microwave"]}
+    notes: "FCC ASR (US) is authoritative for registered structures >200 ft; OSM adds smaller towers and world coverage"
+
+  - layer: broadcast_towers
+    tags: ["man_made=mast;communication:television=yes", "man_made=mast;communication:radio=yes",
+           "man_made=tower;communication:television=yes", "man_made=tower;communication:radio=yes"]
+    elements: nw
+    represent: point
+    hidden: true
+    fields:
+      height_ft: {from: ["height@m"]}
+
+  - layer: data_centers
+    tags: ["telecom=data_center", "building=data_center", "office=telecommunication;telecom=data_center"]
+    elements: nwr
+    represent: point
+
+  - layer: telecom_exchanges
+    tags: ["telecom=exchange", "telecom=service_device", "building=telephone_exchange"]
+    elements: nwr
+    represent: point
+    hidden: true

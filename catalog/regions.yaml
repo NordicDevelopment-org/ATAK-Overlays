@@ -1,0 +1,16 @@
+# Named multi-state regions for `--aoi region:<name>`.
+# Add your own; keys are case-insensitive. States are USPS abbreviations.
+regions:
+  upper-midwest: [MN, WI, IA]
+  mn-neighbors: [MN, WI, IA, ND, SD]
+  great-lakes: [MN, WI, MI, IL, IN, OH, NY, PA]
+  midwest: [MN, WI, IA, ND, SD, NE, KS, MO, IL, IN, MI, OH]
+  fema-region-5: [MN, WI, IL, IN, MI, OH]
+  fema-region-7: [IA, KS, MO, NE]
+  fema-region-8: [ND, SD, MT, WY, CO, UT]
+  miso-north: [MN, ND, SD, WI, IA, MI]        # approx. MISO North footprint states
+  northeast: [ME, NH, VT, MA, RI, CT, NY, NJ, PA]
+  southeast: [VA, NC, SC, GA, FL, AL, MS, TN, KY, WV]
+  south-central: [TX, OK, AR, LA]
+  mountain: [MT, ID, WY, CO, UT, NV, AZ, NM]
+  pacific: [WA, OR, CA, AK, HI]

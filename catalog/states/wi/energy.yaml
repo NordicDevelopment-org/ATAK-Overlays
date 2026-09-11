@@ -1,0 +1,30 @@
+# Wisconsin - state tier, energy. No statewide PSC transmission/substation layer
+# exists (only per-docket project maps); use national archive + OSM.
+defaults:
+  sector: Energy - Electric
+  license: "Public Service Commission of Wisconsin - public records; boundaries approximate"
+  driver: arcgis
+  url: https://maps.psc.wi.gov/server/rest/services/Electric/PSC_ElectricServiceTerritories/MapServer
+  spatial: bbox
+  hidden: true
+  provider: wi-psc
+  source_name: "Wisconsin PSC Electric Service Territories"
+  source_url: https://maps.psc.wi.gov/server/rest/services/Electric/PSC_ElectricServiceTerritories/MapServer
+  confidence: high
+  fields:
+    name: {from: [UTIL_LAB]}
+    type: {from: [UTIL_TYPE]}
+    source_id: {from: [CODE]}
+sources:
+  - layer: service_territories
+    id: service_territories@wi-psc-municipal
+    layer_id: 0
+    title: "service territories (municipal)"
+  - layer: service_territories
+    id: service_territories@wi-psc-iou
+    layer_id: 1
+    title: "service territories (investor-owned)"
+  - layer: service_territories
+    id: service_territories@wi-psc-coop
+    layer_id: 2
+    title: "service territories (cooperative)"

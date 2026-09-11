@@ -1,0 +1,12 @@
+__pycache__/
+*.pyc
+*.egg-info/
+build/
+dist/
+.cache/
+overlays/
+*.kmz
+*.geojson
+.venv/
+venv/
+.DS_Store

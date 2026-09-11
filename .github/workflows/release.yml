@@ -1,0 +1,57 @@
+name: release-packs
+# Build prebuilt overlay packs and attach them to a GitHub Release, so people
+# who don't run Python can just download a KMZ for their area.
+#
+# Trigger by pushing a tag like `pack-county-27025`, `pack-state-MN`,
+# `pack-region-upper-midwest`, or run manually with an AOI string.
+on:
+  push:
+    tags: [ "pack-*" ]
+  workflow_dispatch:
+    inputs:
+      aoi:
+        description: "AOI: county:27025 | state:MN | region:upper-midwest | us | country:CA | bbox:W,S,E,N"
+        required: true
+        default: "county:27025"
+      sectors:
+        description: "optional sector filter, space separated (energy water comm emergency transport base)"
+        required: false
+        default: ""
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: pip install -e .
+      - name: Resolve AOI
+        id: a
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            AOI="${{ github.event.inputs.aoi }}"
+          else
+            # pack-county-27025 -> county:27025 ; pack-state-MN -> state:MN ; pack-us -> us
+            REF="${GITHUB_REF_NAME#pack-}"
+            case "$REF" in
+              us|conus|world) AOI="$REF" ;;
+              *) AOI="${REF%%-*}:${REF#*-}" ;;
+            esac
+          fi
+          SLUG=$(echo "$AOI" | tr ':,' '__')
+          echo "aoi=$AOI" >> "$GITHUB_OUTPUT"
+          echo "slug=$SLUG" >> "$GITHUB_OUTPUT"
+      - name: Build overlays
+        env:
+          SECTORS: ${{ github.event.inputs.sectors }}
+        run: |
+          overlaybuilder build --aoi "${{ steps.a.outputs.aoi }}" \
+            --format kmz geojson --out pack --flat ${SECTORS:+--sectors $SECTORS}
+          cd pack && zip -r "../overlays_${{ steps.a.outputs.slug }}.zip" .
+      - name: Upload to Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: overlays_${{ steps.a.outputs.slug }}.zip
+          body_path: pack/reconcile.md

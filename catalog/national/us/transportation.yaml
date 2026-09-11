@@ -1,0 +1,92 @@
+# US national tier - TRANSPORTATION (FAA, USDOT/BTS National Transportation Atlas
+# Database on geo.dot.gov). Service names follow the NTAD hosted pattern; the
+# rail/pipeline services on this host were confirmed live in 2026 - confirm the
+# others with `probe` on first use.
+defaults:
+  sector: Transportation
+  license: "Public domain (US Government work)"
+  spatial: bbox
+  driver: arcgis
+sources:
+  - layer: airports
+    id: airports@faa
+    provider: faa
+    entity: airport
+    url: https://services6.arcgis.com/ssFJjBXIUyZDrSYZ/arcgis/rest/services/Airports/FeatureServer
+    layer_id: 0
+    group_by: [type]
+    name: "{source_id} {name}"
+    fields:
+      name: {from: [NAME, Name]}
+      source_id: {from: [IDENT, ICAO_ID, Ident]}
+      type: {from: [TYPE_CODE, TYPE, Type]}
+      elevation_ft: {from: [ELEVATION, ELEV]}
+      owner: {from: [OWNER_TYPE, OWNER]}
+    source_name: "FAA Aeronautical Information Services - Airports (ADIP)"
+    source_url: https://adds-faa.opendata.arcgis.com/
+    notes: "Includes heliports, seaplane bases, gliderports; TYPE_CODE distinguishes. Runway lengths are in the separate FAA Runways layer"
+    confidence: medium
+
+  - layer: railways
+    id: railways@ntad
+    provider: bts
+    url: https://geo.dot.gov/server/rest/services/Hosted/North_American_Rail_Network_Lines/FeatureServer
+    layer_id: 0
+    group_by: [owner]
+    name: "{owner} {type}"
+    fields:
+      owner: {from: [RROWNER1, rrowner1]}
+      operator: {from: [TRKRGHTS1, trkrghts1]}
+      tracks: {from: [TRACKS, tracks]}
+      type: {from: [NET, net, SUBDIV, subdiv]}
+      status: {from: [STATUS, status]}
+    source_name: "USDOT BTS NTAD - North American Rail Network Lines (FRA)"
+    source_url: https://geodata.bts.gov/
+    notes: "NET: M=main, I=industrial, Y=yard, S=siding, A=abandoned; TRACKS = number of main tracks"
+    confidence: medium
+
+  - layer: rail_facilities
+    id: rail_facilities@ntad-amtrak
+    provider: bts
+    url: https://geo.dot.gov/server/rest/services/Hosted/Amtrak_Stations/FeatureServer
+    layer_id: 0
+    hidden: true
+    fields:
+      name: {from: [STNNAME, stnname, NAME]}
+      source_id: {from: [STNCODE, stncode]}
+    source_name: "USDOT BTS NTAD - Amtrak Stations"
+    source_url: https://geodata.bts.gov/
+    confidence: medium
+
+  - layer: bridges
+    id: bridges@nbi
+    provider: fhwa
+    url: https://geo.dot.gov/server/rest/services/Hosted/National_Bridge_Inventory/FeatureServer
+    layer_id: 0
+    hidden: true
+    aoi_kinds: [county, bbox]               # ~620k structures nationally; county scale only
+    name: "{name}"
+    fields:
+      name: {from: [FACILITY_CARRIED_007, facility_carried_007, FACILITY_CARRIED]}
+      source_id: {from: [STRUCTURE_NUMBER_008, structure_number_008, STRUCTURE_NUMBER]}
+      year_built: {from: [YEAR_BUILT_027, year_built_027]}
+      adt: {from: [ADT_029, adt_029]}
+      length_ft: {from: ["STRUCTURE_LEN_MT_049@m", "structure_len_mt_049@m"]}
+      condition: {from: [LOWEST_RATING, lowest_rating, BRIDGE_CONDITION, bridge_condition]}
+      type: {from: [STRUCTURE_KIND_043A, structure_kind_043a]}
+    source_name: "FHWA National Bridge Inventory (USDOT BTS NTAD)"
+    source_url: https://www.fhwa.dot.gov/bridge/nbi.cfm
+    notes: "NBI item numbers suffix the field names (e.g. YEAR_BUILT_027); ADT = average daily traffic"
+    confidence: medium
+
+  - layer: ports
+    id: ports@ntad
+    provider: bts
+    url: https://geo.dot.gov/server/rest/services/Hosted/Principal_Ports/FeatureServer
+    layer_id: 0
+    fields:
+      name: {from: [PORT_NAME, port_name, NAME]}
+      type: {from: [TYPE, type]}
+    source_name: "USDOT BTS NTAD - Principal Ports"
+    source_url: https://geodata.bts.gov/
+    confidence: medium

@@ -1,0 +1,18 @@
+# Iowa - state tier, energy. Iowa has no statewide transmission layer; the IUC
+# electrical service boundaries hub item exists but its FeatureServer URL was not
+# confirmed - resolve it from https://geodata.iowa.gov/datasets/iowa::electrical-service-boundaries-1/about
+# (API tab), then set `url:` and `enabled: true`.
+sources:
+  - layer: service_territories
+    id: service_territories@ia-iuc
+    provider: ia-iuc
+    driver: arcgis
+    enabled: false
+    url: https://geodata.iowa.gov/datasets/iowa::electrical-service-boundaries-1/about
+    layer_match: "service"
+    hidden: true
+    sector: Energy - Electric
+    source_name: "Iowa Electrical Service Boundaries (Iowa Utilities Commission)"
+    source_url: https://geodata.iowa.gov/datasets/iowa::electrical-service-boundaries-1/about
+    license: "State of Iowa open data"
+    confidence: low

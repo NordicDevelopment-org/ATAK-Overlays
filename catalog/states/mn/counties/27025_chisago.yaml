@@ -1,0 +1,43 @@
+# Chisago County, MN (FIPS 27025) - county tier: local sources beyond the
+# global (OSM) + national (EIA/NID/EPA/FCC/TIGER) + state (MnGeo) tiers.
+# Reference example for contributors. Discover layers with:
+#   overlaybuilder probe https://gis.chisagocountymn.gov/arcgis/rest/services/DynamicData/MapServer
+jurisdiction:
+  state: MN
+  county: Chisago
+  fips: "27025"
+
+defaults:
+  license: "Chisago County GIS - public record (verify terms before redistribution)"
+  source_url: https://www.chisagocountymn.gov/427/Geographic-Information-Systems-GIS
+  provider: chisago
+
+sources:
+  - layer: parcels
+    driver: arcgis
+    url: https://gis.chisagocountymn.gov/arcgis/rest/services/DynamicData/MapServer
+    layer_match: "parcel"          # public listing shows Parcels at id 44
+    group_by: [CITY, CTU_NAME, MUNI_NAME]
+    sector: Base
+    hidden: true
+    source_name: "Chisago County GIS - Parcels"
+    notes: "field names auto-detected at runtime; group_by falls back gracefully"
+
+  # Candidate local layers - enable after confirming the layer name with `probe`
+  # (do not assume field names):
+  - layer: address_points
+    driver: arcgis
+    enabled: false
+    url: https://gis.chisagocountymn.gov/arcgis/rest/services/DynamicData/MapServer
+    layer_match: "address"
+    sector: Base
+    hidden: true
+    source_name: "Chisago County GIS - Address Points"
+
+  - layer: fire_stations
+    driver: arcgis
+    enabled: false
+    url: https://gis.chisagocountymn.gov/arcgis/rest/services/DynamicData/MapServer
+    layer_match: "fire.?(station|dept)"
+    sector: Emergency & Health
+    source_name: "Chisago County GIS - Fire Stations"

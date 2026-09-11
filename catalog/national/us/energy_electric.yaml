@@ -1,0 +1,162 @@
+# US national tier - ELECTRIC GENERATION + GRID.
+#
+# Status (Sept 2026): HIFLD Open (DHS) shut down 26 Aug 2025; its substation and
+# transmission layers live on only as frozen archives/mirrors. EIA's U.S. Energy
+# Atlas is the authoritative, maintained source for generation. OSM (global tier)
+# covers everything else and is cross-checked against these via `entity`.
+#
+# Doc-only keys (ignored by the engine): confidence, alternates, evidence.
+# Confirm any source with:  overlaybuilder probe <url>[/<layer_id>] --sample
+defaults:
+  sector: Energy - Electric
+  license: "Public domain (US EIA / US Government work)"
+sources:
+  - layer: power_plants
+    id: power_plants@eia
+    provider: eia
+    entity: power_plant
+    driver: arcgis
+    url: https://services7.arcgis.com/FGr1D95XCGALKXqM/arcgis/rest/services/Power_Plants_Testing/FeatureServer
+    layer_id: 0
+    where_by_aoi:
+      state: "State = '{state_name}'"        # EIA stores the full state name
+    spatial: bbox
+    group_by: [fuel]
+    name: "{name} ({capacity_mw})"
+    fields:
+      name: {from: [Plant_Name]}
+      capacity_mw: {from: [Total_MW]}        # net summer capacity
+      nameplate_mw: {from: [Install_MW]}     # installed / nameplate
+      fuel: {from: [PrimSource]}
+      technology: {from: [tech_desc]}
+      operator: {from: [Utility_Name]}
+      source_id: {from: [Plant_Code]}
+      type: {from: [sector_name]}
+    source_name: "EIA U.S. Energy Atlas - Power Plants (operable, >= 1 MW)"
+    source_url: https://atlas.eia.gov/datasets/eia::power-plants/about
+    notes: "Per-fuel MW columns (Coal_MW, NG_MW, Nuclear_MW, Hydro_MW, HydroPS_MW, Solar_MW, Wind_MW, Bat_MW, Bio_MW, Geo_MW, Crude_MW, Other_MW) ride in the source-attribute table; Period = data vintage. Monthly-quarterly refresh from EIA-860M"
+    confidence: high
+    alternates:
+      - {driver: arcgis, url: "https://services2.arcgis.com/FiaPA4ga0iQKduv3/arcgis/rest/services/Power_Plants_in_the_US/FeatureServer", layer_id: 0, note: "Esri fedmaps copy, checked monthly; shapefile-truncated names (Utility_Na, sector_nam)"}
+      - {driver: file, url: "https://www.eia.gov/maps/map_data/PowerPlants_US_EIA.zip", note: "bulk shapefile, same schema"}
+      - {driver: file, url: "https://atlas.eia.gov/api/download/v1/items/bf5c5110b1b944d299bb683cdbd02d2a/geojson?layers=0", note: "Hub GeoJSON export"}
+
+  - layer: nuclear_reactors
+    id: nuclear_reactors@fema
+    provider: fema
+    driver: arcgis
+    url: https://gis.fema.gov/arcgis/rest/services/Partner/Nuclear_Plant_Power_Reactor_Status/FeatureServer
+    layer_id: 0
+    spatial: bbox
+    name: "{name} - {status}"
+    fields:
+      name: {from: [reactor_name]}
+      status: {from: [power]}                # daily NRC power level, percent
+      source_id: {from: [license_number]}
+      website: {from: [nrc_site_url]}
+    source_name: "FEMA / NRC Nuclear Power Reactor Status (daily)"
+    source_url: https://www.nrc.gov/reading-rm/doc-collections/event-status/reactor-status/
+    license: "Public domain (FEMA / US NRC)"
+    notes: "One point per reactor unit with the public NRC daily power level (%), 10 mi and 50 mi EPZ radii in attributes (epz10m, epz50m). Capacity comes from the EIA power_plants layer (Nuclear_MW)"
+    confidence: high
+
+  - layer: transmission_lines
+    id: transmission_lines@hifld-archive
+    provider: hifld
+    entity: transmission_line
+    driver: arcgis
+    url: https://services2.arcgis.com/FiaPA4ga0iQKduv3/arcgis/rest/services/US_Electric_Power_Transmission_Lines/FeatureServer
+    layer_id: 0
+    spatial: bbox
+    group_by: [voltage_kv]
+    name: "{owner} {voltage_kv}"
+    fields:
+      voltage_kv: {from: ["VOLTAGE@kV"], nulls: [-999999]}     # HIFLD sentinel for unknown
+      volt_class: {from: [VOLT_CLASS]}
+      owner: {from: [OWNER]}
+      status: {from: [STATUS]}
+      type: {from: [TYPE]}
+      source_id: {from: [ID]}
+    style_rules:
+      - {when: "voltage_kv >= 500", color: "ff0000ff", width: 5}
+      - {when: "voltage_kv >= 300", color: "ff0040ff", width: 4}
+      - {when: "voltage_kv >= 200", color: "ff0080ff", width: 3}
+      - {when: "voltage_kv >= 100", color: "ff00b0ff", width: 2}
+      - {when: "voltage_kv < 100",  color: "ff00e0ff", width: 1}
+    source_name: "HIFLD Electric Power Transmission Lines (archived, vintage 2024-09-30; Esri Federal User Community copy)"
+    source_url: https://services2.arcgis.com/FiaPA4ga0iQKduv3/arcgis/rest/services/US_Electric_Power_Transmission_Lines/FeatureServer/0
+    license: "Public domain (US Government work) - hosted copy under Esri ArcGIS Online terms; verify before commercial redistribution"
+    notes: "ARCHIVED - no updates after 2024-09-30. INFERRED=Y rows are estimated routes. SUB_1/SUB_2 name the end substations. Cross-checked against OSM power=line"
+    confidence: high
+    alternates:
+      - {driver: arcgis, url: "https://maps.nccs.nasa.gov/mapping/rest/services/hifld_open/energy/FeatureServer", layer_id: 21, note: "NASA NCCS mirror of HIFLD Open (vintage unknown)"}
+      - {driver: file, url: "https://hifld.publicenvirodata.org/", note: "HIFLD Next archive (GeoParquet/FGDB downloads, resolve per-layer URL)"}
+      - {driver: file, url: "https://source.coop/seerai/hifld", note: "SeerAI GeoParquet archive, CC BY 4.0"}
+
+  - layer: substations
+    id: substations@hifld-mirror
+    provider: hifld
+    entity: substation
+    driver: arcgis
+    url: https://services.arcgis.com/G4S1dGvn7PIgYd6Y/ArcGIS/rest/services/HIFLD_electric_power_substations/FeatureServer
+    layer_match: "substation"
+    spatial: bbox
+    where_by_aoi:
+      county: "COUNTYFIPS = '{fips5}'"
+      state: "STATE = '{state_abbr}'"
+      region: "STATE IN ({states_sql})"
+    group_by: [type]
+    name: "{name} ({max_voltage_kv})"
+    fields:
+      name: {from: [NAME]}
+      max_voltage_kv: {from: ["MAX_VOLT@kV"], nulls: [-999999]}
+      min_voltage_kv: {from: ["MIN_VOLT@kV"], nulls: [-999999]}
+      lines: {from: [LINES]}
+      type: {from: [TYPE]}
+      status: {from: [STATUS]}
+      source_id: {from: [ID]}
+    style_rules:
+      - {when: "type = TAP", icon: ring, color: "ff00c0ff", width: 1}
+      - {when: "max_voltage_kv >= 300", color: "ff0000ff", width: 3, icon: square}
+      - {when: "max_voltage_kv >= 100", color: "ff0080ff", width: 2, icon: square}
+    source_name: "HIFLD Electric Substations (frozen 2024 vintage; third-party ArcGIS mirror)"
+    source_url: https://www.arcgis.com/home/item.html?id=7f965e61225d47f0b61d15d363aa09ea
+    license: "Public domain (US Government work) - mirror host terms apply"
+    notes: "EIA/HIFLD no longer publish substations (EIA FAQ 567). This mirror's vintage and completeness are unverified; TYPE=TAP rows are line taps, not facilities. OSM power=substation (global tier) is the maintained fallback and the reconcile report flags disagreements"
+    confidence: low
+    alternates:
+      - {driver: arcgis, url: "https://services5.arcgis.com/HDRa0B57OVrv2E1q/arcgis/rest/services/Electric_Substations/FeatureServer", layer_id: 0, note: "national mirror, maxRecordCount 2000"}
+      - {driver: file, url: "https://hifld.publicenvirodata.org/", note: "HIFLD Next archive download (authoritative vintage)"}
+
+  - layer: rto_regions
+    id: rto_regions@eia
+    provider: eia
+    driver: arcgis
+    enabled: false                       # context polygons; enable for grid-planning packs
+    url: https://services7.arcgis.com/FGr1D95XCGALKXqM/ArcGIS/rest/services/RTO_Regions/FeatureServer
+    layer_id: 0
+    spatial: bbox
+    hidden: true
+    group_by: [RTO_ISO]
+    source_name: "EIA RTO / ISO Regions"
+    source_url: https://atlas.eia.gov/datasets/eia::rto-regions/about
+    confidence: medium
+
+  - layer: service_territories
+    id: service_territories@hifld-mirror
+    provider: hifld
+    driver: arcgis
+    enabled: false                       # ~3,000 large polygons; enable per need
+    url: https://maps.nccs.nasa.gov/mapping/rest/services/hifld_open/energy/FeatureServer
+    layer_id: 26
+    spatial: bbox
+    hidden: true
+    group_by: [TYPE]
+    fields:
+      name: {from: [NAME]}
+      owner: {from: [HOLDING_CO]}
+      type: {from: [TYPE]}
+    source_name: "Electric Retail Service Territories (HIFLD / EIA-861, NASA NCCS mirror)"
+    source_url: https://maps.nccs.nasa.gov/mapping/rest/services/hifld_open/energy/FeatureServer/26
+    notes: "SUMMR_PEAK / WINTR_PEAK (MW), CUSTOMERS, RETAIL_MWH in source attributes. Frozen at the Aug 2025 HIFLD shutdown"
+    confidence: medium

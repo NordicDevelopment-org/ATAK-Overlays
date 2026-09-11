@@ -1,0 +1,11 @@
+# Building footprints from OpenStreetMap via Overpass (ODbL). Dense: hidden by
+# default, county AOIs only (state-wide buildings = millions of polygons).
+sources:
+  - layer: building_footprints
+    driver: overpass
+    tags: ["building"]
+    elements: wr
+    sector: Base
+    aoi_kinds: [county, bbox]
+    tile_deg: 0.25
+    notes: "OSM coverage varies by area; rural counties may be sparse"

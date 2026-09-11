@@ -1,0 +1,38 @@
+# US national tier - COMMUNICATIONS.
+# HIFLD's cellular / microwave / broadcast tower layers were retired with HIFLD
+# Open (Aug 2025). The FCC Antenna Structure Registration database is the
+# authoritative public source for registered structures (generally > 200 ft AGL
+# or near airports); OSM (global tier) adds smaller towers and world coverage.
+defaults:
+  sector: Communications
+sources:
+  - layer: comm_towers
+    id: comm_towers@fcc-asr
+    provider: fcc
+    entity: comm_tower
+    driver: fcc_asr
+    url: https://data.fcc.gov/download/pub/uls/complete/r_tower.zip
+    status_codes: [C]                       # constructed only; add G for granted-not-built
+    aoi_kinds: [county, state, region, bbox]
+    group_by: [structure_type]
+    name: "{structure_type} {height_ft}"
+    match_radius_m: 150
+    fields:
+      height_ft: {from: ["height_agl_m@m"]}
+      elevation_ft: {from: ["ground_elev_m@m"]}
+      structure_type: {from: [structure_type]}
+      status: {from: [status]}
+      owner: {from: [owner]}
+      source_id: {from: [registration_number]}
+      start_date: {from: [date_constructed]}
+      address: {from: [address]}
+      city: {from: [city]}
+      state: {from: [state]}
+    style_rules:
+      - {when: "height_ft >= 1000", color: "ffff00ff", icon: triangle, width: 3}
+      - {when: "height_ft >= 400",  color: "ffff40ff", icon: triangle, width: 2}
+    source_name: "FCC Antenna Structure Registration (ASR) - registered structures"
+    source_url: https://www.fcc.gov/wireless/systems/antenna-structure-registration-asr-system
+    license: "Public domain (US FCC)"
+    notes: "Weekly full database (~120 MB, cached). Column layout per FCC ASR public-access definitions; override with `layout:` if the FCC re-orders RA/CO/EN. Not every cell site is registered - OSM fills in"
+    confidence: medium

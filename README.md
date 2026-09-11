@@ -1,1 +1,144 @@
-# ATAK-Overlays
+# ATAK-Overlays / overlaybuilder
+
+Build **ATAK-ready critical-infrastructure overlays (KMZ)** from public GIS data,
+for **any area**: one county today, a state, a multi-state region, the whole
+US, another country, or the world.
+
+Power plants with their MW and fuel. Substations and transmission lines by kV.
+Gas, crude, HGL and product pipelines. Dams with height, storage and hazard
+class. Wastewater plants with design flow. Registered towers with height and
+owner. Hospitals, fire, police, EMS. Airports, rail, bridges, ports. Every
+placemark carries the unit-labelled numbers, the full source attribute table,
+and where it came from.
+
+> Public, exterior data only. Facility locations and public operating
+> attributes from EIA, USACE, EPA, FCC, Census, state portals, county GIS and
+> OpenStreetMap. No interiors, no security details, no restricted feeds
+> (see CONTRIBUTING.md).
+
+## Quick start
+
+```bash
+git clone https://github.com/NordicDevelopment-org/ATAK-Overlays
+cd ATAK-Overlays
+pip install -e .                      # pyshp, pyproj, PyYAML; no GDAL
+
+overlaybuilder build --aoi county:27025           # Chisago County, MN - everything
+overlaybuilder build --aoi state:MN --sectors energy water
+overlaybuilder build --aoi region:upper-midwest --layers power_plants substations transmission_lines
+overlaybuilder build --aoi us --layers power_plants dams
+overlaybuilder build --aoi country:CA --sectors energy      # world tier (OpenStreetMap)
+overlaybuilder build --aoi bbox:-93.2,45.3,-92.6,45.8
+```
+
+Output lands in `overlays/<aoi>/` (e.g. `overlays/us/mn/27025_chisago/`):
+
+```
+power_plants.kmz            EIA plants, folders by fuel, "Name (1,146.4 MW)"
+power_plants__osm.kmz       OSM plants, same layer from a second source
+substations.kmz             folders by type, styled by max kV
+transmission_lines.kmz      folders "345 kV (12)", line width by class
+pipelines.kmz  dams.kmz  wastewater_treatment.kmz  comm_towers.kmz  hospitals.kmz ...
+ALL.kmz                     one pack: Sector > Layer > class folders (eye-toggles)
+manifest.json               counts, bbox, provenance per layer, build time
+reconcile.md                EIA vs OSM plants, HIFLD vs OSM substations: matches, deltas, misses
+```
+
+Load into ATAK: Import Manager > Local SD > pick the `.kmz` (or drop it in
+`atak/imports/`). Toggle sectors, layers and classes with the eye in Overlay
+Manager. Dense layers (parcels, buildings, towers, generators) start hidden.
+
+## What it does
+
+```
+AOI ─► catalog tiers ─► drivers ─► normalize ─► clip ─► reconcile ─► KMZ / GeoJSON
+        global (OSM, world)          arcgis      capacity_mw   county/state   EIA vs OSM     icons, styles,
+        national/us (EIA, NID...)    file        voltage_kv    polygon        deltas > 5%    unit-labelled
+        states/mn (MnGeo)            overpass    height_ft ...                               popups, folders
+        states/mn/counties/27025     osm_pbf, fcc_asr, census_tiger
+```
+
+- **Scales by design.** Sources declare their coverage (`world`, `us`,
+  `state:MN`, `county`); the AOI picks what applies and every driver scopes its
+  query to it (ArcGIS envelope + attribute filters, Overpass bbox tiles or
+  country area, whole-file downloads clipped to the boundary). See
+  `docs/ARCHITECTURE.md`.
+- **Keeps the numbers honest.** Canonical fields (`capacity_mw`, `voltage_kv`,
+  `storage_acre_ft`, `flow_mgd`, `beds`, ...) are filled only from mapped source
+  fields with explicit unit conversion (OSM volts to kV, `"1.2 MW"` strings,
+  meters to feet). Nothing is invented; raw attributes are always kept.
+- **Cross-checks sources.** When two sources describe the same thing (EIA and
+  OSM power plants; HIFLD and OSM substations; NID and state dam inventories),
+  features are matched by proximity and capacity/voltage/height deltas are
+  reported in `reconcile.md` and stamped on the placemarks.
+- **Records provenance** on every document, placemark, manifest and GeoJSON.
+
+## Sectors and layers
+
+| sector | layers |
+|---|---|
+| Energy - Electric | power_plants, generators, nuclear_reactors, battery_storage, substations, transmission_lines, power_towers, service_territories, rto_regions |
+| Energy - Oil & Gas | pipelines (gas / crude / HGL / products), compressor_stations, gas_processing, gas_storage, lng_terminals, refineries, fuel_terminals, ethanol_plants, biodiesel_plants, fuel_stations |
+| Water | dams, levees, leveed_areas, water_treatment, wastewater_treatment, water_towers, water_wells, reservoirs, water_service_areas |
+| Communications | comm_towers (FCC ASR + OSM), broadcast_towers, data_centers, telecom_exchanges |
+| Emergency & Health | hospitals, urgent_care, fire_stations, police, ems, eoc, shelters, nursing_homes |
+| Government | correctional, government, schools |
+| Transportation | airports, heliports, railways, rail_facilities, bridges, ports |
+| Base | county/state/city boundaries, roads, parcels, building_footprints, address_points |
+
+`docs/SOURCES.md` lists every endpoint with its 2026 status, rating fields,
+confidence and license. Important context: DHS shut down **HIFLD Open** in
+August 2025, so its substation / transmission / emergency-services layers are
+frozen archives here and OpenStreetMap is the maintained fallback; **EIA** is
+the authoritative, maintained source for generation and fuel.
+
+## Commands
+
+```
+overlaybuilder build     --aoi ... [--sectors ...] [--layers ...] [--exclude ...]
+                         [--format kmz geojson] [--out overlays] [--flat] [--precision 6]
+                         [--no-clip] [--no-combined] [--no-reconcile] [--no-http-cache] [--fail-fast]
+overlaybuilder sources   --aoi ...            what would build, by tier
+overlaybuilder probe     <arcgis url>[/<id>] [--sample]   list layers / fields / count / one record
+overlaybuilder validate                       lint the catalog offline
+overlaybuilder list-drivers | list-regions | list-counties
+```
+
+`--aoi` accepts `county:FIPS`, `state:XX`, `region:NAME` (see
+`catalog/regions.yaml`: upper-midwest, mn-neighbors, fema-region-5, miso-north, ...),
+`us`, `conus`, `country:XX`, `bbox:W,S,E,N`, `world`. Legacy
+`--fips 27025` / `--state MN --county Chisago` still work.
+
+## Scaling path
+
+| target | how | status |
+|---|---|---|
+| Chisago County, MN | `--aoi county:27025` - global + national + MN + county tiers (77 sources) | ready |
+| Minnesota / Wisconsin / Iowa | `--aoi state:MN` etc. - state tiers for MnGeo, WI PSC/DNR, Iowa DNR | ready; add more state portal layers in `catalog/states/<abbr>/` |
+| Surrounding states / regions | `--aoi region:mn-neighbors` (MN WI IA ND SD) | ready |
+| United States | `--aoi us --layers ...` (national tier: EIA, NID, EPA, FCC, BTS) | ready for national layers; Overpass layers tile the bbox (slow) - prefer `osm_pbf` with a US extract |
+| World | `--aoi country:XX` (OSM via Overpass area) or `osm_pbf` with Geofabrik extracts | ready for OSM; add `catalog/national/<cc>/` for other countries' open data |
+
+Prebuilt packs: push a tag like `pack-county-27025` or `pack-state-MN` and the
+release workflow attaches the zip to a GitHub Release.
+
+## Accuracy and verification
+
+The catalog was assembled in September 2026 from published documentation and
+search-verified endpoints; **the data hosts could not be reached from the
+build environment**, so run `overlaybuilder probe <url>` (or a first build)
+to confirm each service before relying on a pack. Field-name defaults are
+broad (EIA / HIFLD / NID / FCC / OSM spellings), so a renamed column degrades
+to "attribute shown in the raw table" rather than a wrong number. Every
+placemark shows the source, retrieval date and license.
+
+## Add your county or state
+
+One YAML, no code: see `CONTRIBUTING.md` and `docs/ADDING_A_SOURCE.md`.
+
+## Data sources and licensing
+
+MIT covers the **code**. Generated data carries each source's license,
+recorded in every output: US federal data is public domain; OpenStreetMap is
+ODbL (attribution + share-alike; OSM layers are kept as separate documents);
+state and county GIS carry that jurisdiction's terms. See `docs/SOURCES.md`.

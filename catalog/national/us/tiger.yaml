@@ -1,0 +1,31 @@
+# National baseline from US Census TIGER/Line (public domain).
+# Works for EVERY US AOI by FIPS - no per-county config needed.
+# Bump --tiger-year when a newer vintage ships.
+defaults:
+  sector: Base
+  license: "Public domain (US Census Bureau)"
+sources:
+  - layer: county_boundary
+    driver: census_tiger
+    product: county
+    priority: 0                     # first: its polygon clips every other layer
+    aoi_kinds: [county, state, region]
+
+  - layer: state_boundary
+    driver: census_tiger
+    product: state
+    priority: 0
+    aoi_kinds: [state, region]
+
+  - layer: city_boundaries
+    driver: census_tiger
+    product: cousub                 # county subdivisions: cities + townships
+    group_by: [NAME, NAMELSAD]
+    aoi_kinds: [county, state]
+
+  - layer: roads
+    driver: census_tiger
+    product: roads
+    # RTTYP route type: I=Interstate, U=US, S=State, C=County, M=Common, O=Other
+    group_by: [RTTYP, MTFCC]
+    aoi_kinds: [county]             # per-county files; use OSM/PBF for larger AOIs

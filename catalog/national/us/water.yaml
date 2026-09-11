@@ -1,0 +1,115 @@
+# US national tier - WATER, WASTEWATER, DAMS, LEVEES.
+# Public water supply WELL locations are deliberately withheld by MN/WI/EPA -
+# do not try to add them. Service-area polygons + OSM water towers/works are the
+# public exterior view.
+defaults:
+  sector: Water
+  license: "Public domain (US Government work)"
+sources:
+  - layer: dams
+    id: dams@nid
+    provider: nid
+    entity: dam
+    driver: file
+    url: https://nid.sec.usace.army.mil/api/nation/csv
+    format: csv
+    skip_lines: 1                          # one-line disclaimer preamble before the header
+    lat_field: Latitude
+    lon_field: Longitude
+    group_by: [hazard_class]
+    name: "{name} ({height_ft}, {hazard_class})"
+    fields:
+      name: {from: ["Dam Name"]}
+      source_id: {from: ["NID ID"]}
+      height_ft: {from: ["NID Height (Ft)", "Dam Height (Ft)"]}
+      storage_acre_ft: {from: ["Max Storage (Acre-Ft)", "NID Storage (Acre-Ft)"]}
+      hazard_class: {from: ["Hazard Potential Classification"]}
+      condition: {from: ["Condition Assessment"]}
+      purpose: {from: ["Primary Purpose"]}
+      year_built: {from: ["Year Completed"]}
+      owner: {from: ["Primary Owner Type"]}
+      type: {from: ["Primary Dam Type"]}
+      county: {from: ["County"]}
+    style_rules:
+      - {when: "hazard_class ~ ^high", color: "ff0000ff", icon: triangle, width: 3}
+      - {when: "hazard_class ~ ^significant", color: "ff0080ff", icon: triangle, width: 2}
+    source_name: "USACE National Inventory of Dams (NID)"
+    source_url: https://nid.sec.usace.army.mil/
+    notes: "~92,000 dams nationwide, downloaded once (cached) and clipped. Restricted fields are already withheld by USACE"
+    confidence: high
+    alternates:
+      - {driver: arcgis, url: "https://geospatial.sec.usace.army.mil/dls/rest/services/NID/National_Inventory_of_Dams_Public_Service/FeatureServer", layer_id: 0, note: "USACE FeatureServer (fields NIDID, NAME, HAZARD, NID_HEIGHT, MAX_STORAGE ...)"}
+      - {driver: arcgis, url: "https://services2.arcgis.com/FiaPA4ga0iQKduv3/arcgis/rest/services/NID_v1/FeatureServer", layer_id: 0, note: "Esri fedmaps weekly cache"}
+
+  - layer: levees
+    id: levees@nld
+    provider: nld
+    driver: arcgis
+    url: https://geospatial.sec.usace.army.mil/dls/rest/services/NLD/Public/FeatureServer
+    layer_id: 15                            # System Routes (levee centerlines)
+    spatial: bbox
+    fields:
+      name: {from: [SYSTEM_NAME, systemName]}
+      source_id: {from: [SYSTEM_ID, systemId]}
+      operator: {from: [AGENCY, agency]}
+    source_name: "USACE National Levee Database - Levee System Routes"
+    source_url: https://levees.sec.usace.army.mil/
+    confidence: medium
+
+  - layer: leveed_areas
+    id: leveed_areas@nld
+    provider: nld
+    driver: arcgis
+    url: https://geospatial.sec.usace.army.mil/dls/rest/services/NLD/Public/FeatureServer
+    layer_id: 16
+    spatial: bbox
+    hidden: true
+    fields:
+      name: {from: [SYSTEM_NAME, systemName]}
+    source_name: "USACE National Levee Database - Leveed Areas"
+    source_url: https://levees.sec.usace.army.mil/
+    confidence: medium
+
+  - layer: wastewater_treatment
+    id: wastewater_treatment@epa-frs
+    provider: epa
+    entity: wastewater_treatment
+    driver: arcgis
+    url: https://geodata.epa.gov/arcgis/rest/services/OEI/FRS_Wastewater/MapServer
+    layer_id: 1                             # all NPDES treatment facilities (Major / Minor / Other)
+    spatial: bbox
+    where_by_aoi:
+      state: "CWP_STATE = '{state_abbr}'"
+      region: "CWP_STATE IN ({states_sql})"
+    group_by: [type]
+    name: "{name} ({flow_mgd})"
+    fields:
+      name: {from: [CWP_NAME]}
+      source_id: {from: [NPDES_ID]}
+      flow_mgd: {from: [CWP_TOTAL_DESIGN_FLOW_NMBR]}
+      type: {from: [CWP_FACILITY_TYPE_INDICATOR]}    # POTW = municipal
+      status: {from: [CWP_PERMIT_STATUS_DESC]}
+      county: {from: [CWP_COUNTY]}
+    source_name: "EPA FRS / ICIS-NPDES Wastewater Treatment Plants"
+    source_url: https://geodata.epa.gov/arcgis/rest/services/OEI/FRS_Wastewater/MapServer
+    notes: "CWP_ACTUAL_AVERAGE_FLOW_NMBR (MGD) in attributes. Coordinates are FRS best-available (may be the permit address)"
+    confidence: high
+
+  - layer: water_service_areas
+    id: water_service_areas@epa
+    provider: epa
+    driver: arcgis
+    url: https://services.arcgis.com/cJ9YHowT8TU7DUyn/arcgis/rest/services/Water_System_Boundaries/FeatureServer
+    layer_id: 0
+    spatial: bbox
+    hidden: true
+    name: "{name} (pop {population_served})"
+    fields:
+      name: {from: [PWS_NAME, PWSName, Name]}
+      source_id: {from: [PWSID]}
+      population_served: {from: ["Population Served Count", Population_Served_Count, POPULATION_SERVED_COUNT]}
+      type: {from: [PRIMARY_SOURCE_CODE, Primary_Source_Code]}
+    source_name: "EPA Community Water System Service Area Boundaries"
+    source_url: https://www.epa.gov/ground-water-and-drinking-water/community-water-system-service-area-boundaries
+    notes: "Service-area polygons (state-published + EPA-modeled); pair with OSM water towers/works for facility points"
+    confidence: medium

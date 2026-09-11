@@ -1,0 +1,20 @@
+# Iowa - state tier, water. Dams: rely on NID (national) - the Iowa DNR inventory
+# hub item's service URL was not confirmed.
+defaults:
+  sector: Water
+  license: "Iowa DNR / Iowa Geodata - public data"
+sources:
+  - layer: wastewater_treatment
+    id: wastewater_treatment@ia-dnr
+    provider: ia-dnr
+    entity: wastewater_treatment
+    driver: arcgis
+    url: https://programs.iowadnr.gov/geospatial/rest/services/OneStop/QueryEnvFacs/MapServer
+    layer_id: 12                            # Wastewater NPDES Facilities (points); 13 = treatment areas (polygons)
+    spatial: bbox
+    fields:
+      name: {from: [facName, FacName, NAME]}
+      county: {from: [countyName]}
+    source_name: "Iowa DNR Wastewater NPDES Facilities"
+    source_url: https://programs.iowadnr.gov/geospatial/rest/services/OneStop/QueryEnvFacs/MapServer
+    confidence: medium
