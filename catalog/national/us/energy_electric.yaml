@@ -160,3 +160,35 @@ sources:
     source_url: https://maps.nccs.nasa.gov/mapping/rest/services/hifld_open/energy/FeatureServer/26
     notes: "SUMMR_PEAK / WINTR_PEAK (MW), CUSTOMERS, RETAIL_MWH in source attributes. Frozen at the Aug 2025 HIFLD shutdown"
     confidence: medium
+
+  - layer: generators
+    id: generators@eia-860m
+    provider: eia
+    driver: file
+    url: "https://www.eia.gov/electricity/data/eia860m/xls/{month}_generator{year}.xlsx"
+    format: xlsx
+    sheet: Operating
+    header_row: 3                          # two title rows precede the header
+    lat_field: Latitude
+    lon_field: Longitude
+    aoi_kinds: [county, state, region, bbox]
+    filter: {field: "Plant State", in: ["{state_abbr}"]}
+    hidden: true
+    group_by: [technology]
+    name: "{name} #{source_id} ({nameplate_mw})"
+    fields:
+      name: {from: ["Plant Name"]}
+      source_id: {from: ["Generator ID"]}
+      nameplate_mw: {from: ["Nameplate Capacity (MW)"]}
+      capacity_mw: {from: ["Net Summer Capacity (MW)"]}
+      technology: {from: ["Technology"]}
+      fuel: {from: ["Energy Source Code"]}
+      type: {from: ["Prime Mover Code"]}
+      status: {from: ["Status"]}
+      start_date: {from: ["Operating Year"]}
+      operator: {from: ["Entity Name"]}
+      county: {from: ["County"]}
+    source_name: "EIA-860M Preliminary Monthly Electric Generator Inventory (generator level)"
+    source_url: https://www.eia.gov/electricity/data/eia860m/
+    notes: "One point per generating unit (all units of a plant share the plant coordinate). {month}/{year} in the url is tried for the current and previous months. 'Plant ID' joins to power_plants Plant_Code. State-scale only (~30k rows nationally). Header spellings vary slightly by release - check the summary if 0 features"
+    confidence: medium

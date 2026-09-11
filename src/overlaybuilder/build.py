@@ -79,8 +79,15 @@ def run_build(ctx: Context, sources: List[dict], out_dir: str,
     os.makedirs(out_dir, exist_ok=True)
     started = time.time()
 
-    order = sorted(sources, key=lambda s: (0 if s["layer"] in BOUNDARY_LAYERS else 1,
-                                          int(s.get("priority", 50))))
+    preferred = "county_boundary" if ctx.aoi.kind == "county" else "state_boundary"
+
+    def _rank(s):
+        if s["layer"] == preferred:
+            return (0, 0)
+        if s["layer"] in BOUNDARY_LAYERS:
+            return (0, 1)
+        return (1, int(s.get("priority", 50)))
+    order = sorted(sources, key=_rank)
     results: List[LayerResult] = []
     specs: Dict[str, dict] = {}
     rows: List[dict] = []

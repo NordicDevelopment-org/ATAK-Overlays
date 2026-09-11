@@ -66,3 +66,29 @@ def test_relation_multipolygon_stitch():
 def test_relation_center_fallback():
     rel = {"type": "relation", "id": 10, "tags": {"power": "plant"}, "members": [], "center": {"lat": 1, "lon": 2}}
     assert element_to_geometry(rel) == {"type": "Point", "coordinates": [2, 1]}
+
+
+def test_tile_guard_refuses_huge_aoi():
+    from overlaybuilder.aoi import parse_aoi
+    from overlaybuilder.drivers import Context
+    from overlaybuilder.drivers.overpass import fetch_elements
+    ctx = Context(aoi=parse_aoi("us"))
+    try:
+        fetch_elements(["power=plant"], "nwr", ctx, {"tile_deg": 1.0})
+    except RuntimeError as e:
+        assert "max_tiles" in str(e) and "osm_pbf" in str(e)
+    else:
+        raise AssertionError("expected a tile-count guard error")
+
+
+def test_world_refused():
+    from overlaybuilder.aoi import parse_aoi
+    from overlaybuilder.drivers import Context
+    from overlaybuilder.drivers.overpass import fetch_elements
+    ctx = Context(aoi=parse_aoi("world"))
+    try:
+        fetch_elements(["power=plant"], "nwr", ctx, {})
+    except RuntimeError as e:
+        assert "osm_pbf" in str(e)
+    else:
+        raise AssertionError("expected refusal")

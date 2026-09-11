@@ -81,3 +81,23 @@ def test_compare_pair_unmatched():
     r = compare_pair(a, b, 500)
     assert r["matched"] == [] and len(r["only_a"]) == 1 and len(r["only_b"]) == 1
     assert a.features[0].properties["xcheck"].startswith("unmatched in B")
+
+
+def test_state_aoi_prefers_state_boundary(tmp_path):
+    from overlaybuilder.build import BOUNDARY_LAYERS
+
+    @driver("_fake_state")
+    def _fs(logical, spec, ctx):
+        prov = Provenance("F", "u", "l", "d", "x")
+        if logical == "state_boundary":
+            ring = [[-97.3, 43.4], [-89.4, 43.4], [-89.4, 49.4], [-97.3, 49.4], [-97.3, 43.4]]
+            return LayerResult(logical, [Feature({"type": "Polygon", "coordinates": [ring]}, {"NAME": "Minnesota"})], prov)
+        if logical == "county_boundary":
+            raise AssertionError("county_boundary should not be needed to set the boundary first")
+        return LayerResult(logical, [], prov)
+
+    ctx = Context(aoi=parse_aoi("state:MN"))
+    srcs = [{"layer": "county_boundary", "driver": "_fake_state"}, {"layer": "state_boundary", "driver": "_fake_state"}]
+    m = run_build(ctx, srcs, str(tmp_path), ["kmz"], False, do_reconcile=False, log=lambda *a: None)
+    assert m["layers"][0]["layer"] == "state_boundary"
+    assert ctx.boundary is not None

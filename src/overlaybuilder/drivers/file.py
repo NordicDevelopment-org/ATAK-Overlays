@@ -6,6 +6,11 @@ Formats (spec `format`, default auto by extension):
   gpkg     GeoPackage (any table; `table:` to pick), reprojected from its SRS
   csv      delimited text with lat/lon columns (`lat_field`, `lon_field`,
            `delimiter`, `encoding`, `skip_lines`, `header: [...]`, `dms: {...}`)
+  xlsx     Excel workbook (`sheet`, `header_row` 1-based, `lat_field`, `lon_field`)
+           - stdlib reader, no openpyxl needed
+
+A `url` containing `{month}`/`{year}` (e.g. EIA-860M's monthly file) is tried
+for the current month and the 12 before it until one downloads.
   A .zip whose member isn't a shapefile: set `zip_member: "<regex>"` to pick
   the file inside and `format:` to say what it is (e.g. FCC ASR RA.dat).
 
@@ -13,6 +18,7 @@ Scoping: `filter: {field: STATE, in: ["{state_abbr}"]}` (templated; `in` may
 list several) is applied while reading; the orchestrator then clips to the AOI
 bbox/boundary. `url` may be templated too (e.g. per-state downloads).
 """
+import datetime as _dt
 import io
 import json
 import os
@@ -24,13 +30,15 @@ from ..model import Feature, LayerResult, Provenance
 from ._csv import read_delimited
 from ._gpkg import read_gpkg
 from ._shp import read_zipped_shapefile
-from .base import Context, driver, http_get, today
+from ._xlsx import read_xlsx
+from .base import Context, HttpStatusError, driver, http_get, today
 
 
 def _guess(url: str) -> str:
     u = url.lower().split("?")[0]
     for ext, fmt in ((".zip", "shp"), (".geojson", "geojson"), (".json", "geojson"),
-                     (".gpkg", "gpkg"), (".csv", "csv"), (".txt", "csv"), (".dat", "csv")):
+                     (".gpkg", "gpkg"), (".csv", "csv"), (".txt", "csv"), (".dat", "csv"),
+                     (".xlsx", "xlsx"), (".xlsm", "xlsx")):
         if u.endswith(ext):
             return fmt
     return "shp"
@@ -55,11 +63,33 @@ def _make_keep(spec: dict, ctx: Context):
     return keep
 
 
-def _load_bytes(url: str) -> bytes:
+def _month_candidates(url: str, months_back: int = 12):
+    """Expand {month}/{year} for the current month and the previous ones."""
+    today_ = _dt.date.today()
+    y, m = today_.year, today_.month
+    for _ in range(months_back + 1):
+        yield url.replace("{month}", _dt.date(y, m, 1).strftime("%B").lower()).replace("{year}", str(y))
+        m -= 1
+        if m == 0:
+            m, y = 12, y - 1
+
+
+def _load_bytes(url: str):
+    """Return (bytes, url_used)."""
+    if "{month}" in url or "{year}" in url:
+        last = None
+        for cand in _month_candidates(url):
+            try:
+                return http_get(cand, timeout=600), cand
+            except HttpStatusError as e:
+                last = e
+                if e.code not in (403, 404):
+                    raise
+        raise RuntimeError(f"no monthly file found for pattern {url}: {last}")
     if url.startswith(("http://", "https://")):
-        return http_get(url, timeout=600)
+        return http_get(url, timeout=600), url
     with open(url, "rb") as fh:
-        return fh.read()
+        return fh.read(), url
 
 
 @driver("file")
@@ -68,7 +98,7 @@ def fetch(logical: str, spec: dict, ctx: Context) -> LayerResult:
     fmt = spec.get("format", "auto")
     if fmt == "auto":
         fmt = _guess(url)
-    raw = _load_bytes(url)
+    raw, url = _load_bytes(url)
     keep = _make_keep(spec, ctx)
 
     if spec.get("zip_member"):
@@ -102,6 +132,20 @@ def fetch(logical: str, spec: dict, ctx: Context) -> LayerResult:
                                delimiter=spec.get("delimiter", ","), encoding=spec.get("encoding", "utf-8"),
                                skip_lines=int(spec.get("skip_lines", 0)), header=spec.get("header"),
                                keep=keep, dms=spec.get("dms"))
+    elif fmt == "xlsx":
+        rows = read_xlsx(raw, spec.get("sheet"), int(spec.get("header_row", 1)))
+        lat_f, lon_f = spec.get("lat_field", "Latitude"), spec.get("lon_field", "Longitude")
+        feats = []
+        for props in rows:
+            if keep and not keep(props):
+                continue
+            try:
+                la, lo = float(props.get(lat_f, "")), float(props.get(lon_f, ""))
+            except ValueError:
+                continue
+            if not (-90 <= la <= 90 and -180 <= lo <= 180):
+                continue
+            feats.append(Feature({"type": "Point", "coordinates": [lo, la]}, props))
     else:
         raise RuntimeError(f"unsupported file format '{fmt}'")
 

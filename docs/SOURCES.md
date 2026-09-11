@@ -57,7 +57,7 @@ endpoints, and backs off on 429/504. For a whole country or the planet use the
 | power_plants | EIA U.S. Energy Atlas - Power Plants | `services7.arcgis.com/FGr1D95XCGALKXqM/.../Power_Plants_Testing/FeatureServer/0` | Total_MW (net summer), Install_MW (nameplate), per-fuel *_MW, PrimSource, tech_desc | high | live, monthly-quarterly |
 | power_plants (alt) | Esri fedmaps copy | `services2.arcgis.com/FiaPA4ga0iQKduv3/.../Power_Plants_in_the_US/FeatureServer/0` | Total_MW, Install_MW | high | live |
 | power_plants (alt) | EIA bulk shapefile | `eia.gov/maps/map_data/PowerPlants_US_EIA.zip` | same | medium | live |
-| generators (not yet wired) | EIA-860M monthly generator XLSX | `eia.gov/electricity/data/eia860m/xls/<month>_generator<YYYY>.xlsx` | Nameplate Capacity (MW), Technology, Status, Operating Year; join Plant ID = Plant_Code | medium | live (needs an xlsx reader: roadmap) |
+| generators | EIA-860M monthly generator XLSX (stdlib xlsx reader; month auto-resolved) | `eia.gov/electricity/data/eia860m/xls/<month>_generator<YYYY>.xlsx` | Nameplate Capacity (MW), Net Summer Capacity (MW), Technology, Status, Operating Year; Plant ID = Plant_Code | medium | live, monthly |
 | nuclear_reactors | FEMA / NRC reactor status | `gis.fema.gov/arcgis/rest/services/Partner/Nuclear_Plant_Power_Reactor_Status/FeatureServer/0` | power (% daily), epz10m, epz50m | high | live, daily |
 | transmission_lines | HIFLD archive (Esri Federal User Community) | `services2.arcgis.com/FiaPA4ga0iQKduv3/.../US_Electric_Power_Transmission_Lines/FeatureServer/0` | VOLTAGE (kV, -999999 = unknown), VOLT_CLASS, OWNER, STATUS, INFERRED | high | frozen 2024-09-30 |
 | transmission_lines (alt) | NASA NCCS HIFLD mirror | `maps.nccs.nasa.gov/mapping/rest/services/hifld_open/energy/FeatureServer/21` | same | medium | frozen |
@@ -92,8 +92,8 @@ endpoints, and backs off on 429/504. For a whole country or the planet use the
 | building_footprints | OSM via Overpass (county scale) | - | - | high | live |
 
 Not wired yet (roadmap): USGS stream gauges (NWIS RDB / OGC API), EPA ECHO
-SDWIS systems (attributes only), EIA-860M generator XLSX, NLD pump stations,
-WRI Global Power Plant Database (CC BY, 2021 vintage) for non-US plants.
+SDWIS systems (attributes only), NLD pump stations, WRI Global Power Plant
+Database (CC BY, 2021 vintage) for non-US plants.
 
 ## State tiers
 

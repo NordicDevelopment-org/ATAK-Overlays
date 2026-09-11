@@ -275,6 +275,11 @@ def fetch_elements(selectors, elements, ctx: Context, spec: dict) -> Tuple[List[
                            "a bbox, or the osm_pbf driver with a planet extract")
     else:
         tiles = tile_bbox(ctx.bbox, float(spec.get("tile_deg", 1.0)))
+        max_tiles = int(spec.get("max_tiles", ctx.options.get("max_tiles", 200)))
+        if len(tiles) > max_tiles:
+            raise RuntimeError(
+                f"AOI needs {len(tiles)} Overpass tiles (> max_tiles={max_tiles}); use a smaller AOI, "
+                f"--aoi country:XX, a larger tile_deg, or the osm_pbf driver with a Geofabrik extract")
         if len(tiles) > 1:
             notes.append(f"{len(tiles)} bbox tiles")
         for (w, s, e, n) in tiles:
