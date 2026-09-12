@@ -52,6 +52,9 @@ def main():
             url = url.format(**SAMPLE_VARS)
         except (KeyError, IndexError):
             pass
+        if "{month}" in url or "{year}" in url:
+            from overlaybuilder.drivers.file import _month_candidates
+            url = next(iter(_month_candidates(url)))     # newest monthly release
         arcgis = s["driver"] == "arcgis"
         if arcgis and s.get("layer_id") is not None:
             url = url.rstrip("/") + f"/{s['layer_id']}"

@@ -96,6 +96,20 @@ def compare_pair(a: LayerResult, b: LayerResult, radius_m: float = DEFAULT_RADIU
     return {"a": a, "b": b, "matched": matched, "only_a": only_a, "only_b": only_b}
 
 
+LINE_TYPES = {"LineString", "MultiLineString"}
+
+
+def is_line_layer(res: LayerResult, threshold: float = 0.5) -> bool:
+    """True when most features are lines. Proximity matching compares
+    representative points, which is meaningless for long linear features - two
+    unrelated transmission lines can share a midpoint and the same line mapped
+    by two sources rarely does."""
+    geoms = [f.geometry.get("type") for f in res.features if f.geometry]
+    if not geoms:
+        return False
+    return sum(1 for t in geoms if t in LINE_TYPES) / len(geoms) > threshold
+
+
 def reconcile_layers(results: List[LayerResult], specs: Dict[str, dict]) -> dict:
     by_entity: Dict[str, List[LayerResult]] = {}
     for r in results:
@@ -103,13 +117,18 @@ def reconcile_layers(results: List[LayerResult], specs: Dict[str, dict]) -> dict
         ent = sp.get("entity")
         if ent:
             by_entity.setdefault(ent, []).append(r)
-    pairs = []
+    pairs, skipped = [], []
     for ent, rs in by_entity.items():
         for i in range(len(rs)):
             for j in range(i + 1, len(rs)):
-                sp = specs.get(getattr(rs[i], "doc_key", rs[i].logical)) or {}
-                pairs.append((ent, compare_pair(rs[i], rs[j], float(sp.get("match_radius_m", DEFAULT_RADIUS_M)))))
-    return {"pairs": pairs}
+                a, b = rs[i], rs[j]
+                sp = specs.get(getattr(a, "doc_key", a.logical)) or {}
+                if sp.get("reconcile") is False or is_line_layer(a) or is_line_layer(b):
+                    skipped.append((ent, a.provenance.source_name, b.provenance.source_name,
+                                    "linear features: proximity matching would be meaningless"))
+                    continue
+                pairs.append((ent, compare_pair(a, b, float(sp.get("match_radius_m", DEFAULT_RADIUS_M)))))
+    return {"pairs": pairs, "skipped": skipped}
 
 
 def _nm(f):
@@ -122,6 +141,8 @@ def write_report(path: str, rec: dict, ctx) -> None:
              "Features of the same entity type from two sources, matched by proximity. "
              "Deltas >5% on capacity/voltage/height/beds are listed. Neither source is "
              "assumed correct; use this to spot stale or mis-tagged records.", ""]
+    for ent, a_name, b_name, why in rec.get("skipped", []):
+        lines += [f"## {ent}: {a_name}  vs  {b_name}", "", f"Not compared - {why}.", ""]
     for ent, pr in rec["pairs"]:
         a, b = pr["a"], pr["b"]
         lines += [f"## {ent}: {a.provenance.source_name}  vs  {b.provenance.source_name}", "",

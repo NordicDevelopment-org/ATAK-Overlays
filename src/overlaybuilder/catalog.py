@@ -27,6 +27,10 @@ import yaml
 from .aoi import Aoi
 
 TIERS = ("global", "national", "state", "county")
+AOI_KINDS = {"county", "state", "region", "us", "country", "bbox", "world"}
+# Most specific first: a county parcel layer and EIA's national plant layer
+# should own the plain document name, with the global OSM view alongside it.
+TIER_RANK = {"county": 0, "state": 1, "national": 2, "global": 3}
 
 
 def _load_sources(path: str, tier: str) -> List[dict]:
@@ -135,7 +139,7 @@ def resolve_sources(catalog_dir: str, aoi: Aoi, only_layers: Optional[List[str]]
             if not any(sec.startswith(x.lower().replace(" ", "_")) for x in sectors):
                 continue
         out.append(s)
-    out.sort(key=lambda s: (int(s.get("priority", 50)), TIERS.index(s["_tier"])))
+    out.sort(key=lambda s: (int(s.get("priority", 50)), TIER_RANK[s["_tier"]]))
     return out
 
 
@@ -185,6 +189,17 @@ def validate(catalog_dir: str) -> List[str]:
             problems.append(f"{where}: arcgis needs layer_id or layer_match")
         if s["driver"] in ("overpass", "osm_pbf") and not (s.get("tags") or s.get("tag")):
             problems.append(f"{where}: {s['driver']} needs tags: [...]")
+        if s["driver"] == "overpass" and s.get("elements"):
+            from .drivers.overpass import ELEMENT_TYPES
+            if str(s["elements"]).strip().lower() not in ELEMENT_TYPES:
+                problems.append(f"{where}: elements: {s['elements']!r} is not an Overpass element type")
+        for k in s.get("aoi_kinds") or []:
+            if k not in AOI_KINDS:
+                problems.append(f"{where}: aoi_kinds has '{k}'; valid: {sorted(AOI_KINDS)}")
+        cov = str(s.get("coverage", ""))
+        base = cov.split(":", 1)[0]
+        if cov and base not in ("world", "us", "state", "county", "country", "region"):
+            problems.append(f"{where}: coverage '{cov}' is not understood")
         if s["_tier"] != "national" or s["driver"] not in ("census_tiger", "overpass"):
             if not s.get("license"):
                 problems.append(f"{where}: missing license")

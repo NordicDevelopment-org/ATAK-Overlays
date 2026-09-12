@@ -55,7 +55,7 @@ sources:
   - layer: transmission_lines
     entity: transmission_line
     tags: ["power=line", "power=cable"]
-    elements: w
+    elements: way
     geometry: line
     group_by: [voltage_kv]
     name: "{name} {voltage_kv}"
@@ -73,7 +73,7 @@ sources:
 
   - layer: power_towers
     tags: ["power=tower"]
-    elements: n
+    elements: node
     hidden: true
     aoi_kinds: [county, bbox]            # too dense above county scale
     fields:

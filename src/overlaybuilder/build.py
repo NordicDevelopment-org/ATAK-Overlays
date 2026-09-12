@@ -274,7 +274,7 @@ def run_build(ctx: Context, sources: List[dict], out_dir: str,
     if do_reconcile and results:
         try:
             rec = reconcile.reconcile_layers(results, specs)
-            if rec["pairs"]:
+            if rec["pairs"] or rec.get("skipped"):
                 reconcile.write_report(os.path.join(out_dir, "reconcile.md"), rec, ctx)
                 written.append(os.path.join(out_dir, "reconcile.md"))
         except Exception as e:  # noqa: BLE001

@@ -22,8 +22,8 @@ sources:
     hidden: true
 
   - layer: railways
-    tags: ["railway=rail;usage~^(main|branch|industrial)$", "railway=rail;service!=yard"]
-    elements: w
+    tags: ["railway=rail;usage~^(main|branch|industrial)$", "railway=rail;railway:traffic_mode"]
+    elements: way
     geometry: line
     group_by: [usage]
     aoi_kinds: [county, bbox]

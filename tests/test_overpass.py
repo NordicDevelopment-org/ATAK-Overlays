@@ -1,4 +1,5 @@
 import json
+import re
 
 import pytest
 
@@ -110,3 +111,39 @@ def test_country_query_has_area_prelude_and_bbox():
     q, _ = build_query(["power=plant"], "nwr", "(area.a)(45.0,-93.0,46.0,-92.0)", 90, "geom", _country_prelude("CA"))
     assert q.startswith('[out:json][timeout:90];area["ISO3166-1"="CA"]["admin_level"="2"]->.a;(')
     assert 'nwr["power"="plant"](area.a)(45.0,-93.0,46.0,-92.0);' in q
+
+
+def test_element_types_are_normalized_and_validated():
+    from overlaybuilder.drivers.overpass import normalize_elements
+    assert normalize_elements("n") == "node" and normalize_elements("w") == "way"
+    assert normalize_elements("r") == "rel" and normalize_elements("relation") == "rel"
+    for keep in ("nwr", "nw", "wr", "nr"):
+        assert normalize_elements(keep) == keep
+    assert normalize_elements(None) == "nwr"
+    with pytest.raises(RuntimeError, match="not an Overpass element type"):
+        normalize_elements("q")
+    q, _ = build_query(["power=line"], "w", "(1,2,3,4)", 90)
+    assert q.startswith('[out:json][timeout:90];(way["power"="line"]')   # not `w[...]`, which is invalid
+
+
+def test_shipped_catalog_queries_are_valid_overpass():
+    import glob
+
+    import yaml
+
+    from overlaybuilder.drivers.overpass import normalize_elements
+    checked = 0
+    for path in glob.glob("catalog/**/*.yaml", recursive=True):
+        doc = yaml.safe_load(open(path)) or {}
+        defaults = doc.get("defaults") or {}
+        for src in doc.get("sources") or []:
+            spec = dict(defaults)
+            spec.update(src)
+            if spec.get("driver") != "overpass":
+                continue
+            q, _ = build_query(spec.get("tags") or [spec.get("tag", "")],
+                               normalize_elements(spec.get("elements", "nwr")), "(1,2,3,4)", 60)
+            assert q.startswith("[out:json]") and q.endswith(";")
+            assert not re.search(r"\((?:n|w|r)\[", q), f"{path}: invalid element type in {q[:80]}"
+            checked += 1
+    assert checked > 30

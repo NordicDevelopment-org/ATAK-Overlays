@@ -8,7 +8,7 @@ sources:
   - layer: pipelines
     entity: pipeline
     tags: ["man_made=pipeline"]
-    elements: w
+    elements: way
     geometry: line
     group_by: [substance]
     name: "{name} {substance}"

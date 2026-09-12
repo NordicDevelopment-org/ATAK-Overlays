@@ -102,7 +102,7 @@ class Aoi:
         if self.kind == "region":
             return f"us/region_{self.id.lower()}"
         if self.kind == "us":
-            return "us"
+            return "us" if self.id == "US" else self.id.lower()      # us vs conus must not collide
         if self.kind == "country":
             return self.id.lower()
         if self.kind == "bbox":

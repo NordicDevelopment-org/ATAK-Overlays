@@ -218,10 +218,31 @@ def element_to_geometry(el: dict, mode: str = "auto"):
 
 
 # ---- query -----------------------------------------------------------------
+# Overpass QL element types. Short forms are accepted in the catalog and
+# normalised here: `n`, `w`, `r` on their own are NOT valid Overpass syntax and
+# make the whole query fail.
+ELEMENT_TYPES = {
+    "n": "node", "node": "node", "nodes": "node",
+    "w": "way", "way": "way", "ways": "way",
+    "r": "rel", "rel": "rel", "relation": "rel", "relations": "rel",
+    "nw": "nw", "nr": "nr", "wr": "wr", "nwr": "nwr", "derived": "derived",
+}
+
+
+def normalize_elements(elements: str) -> str:
+    e = str(elements or "nwr").strip().lower()
+    if e not in ELEMENT_TYPES:
+        raise RuntimeError(
+            f"'{elements}' is not an Overpass element type; use one of "
+            f"{sorted(set(ELEMENT_TYPES.values()))} (or the short forms n/w/r)")
+    return ELEMENT_TYPES[e]
+
+
 def build_query(selectors: List[str], elements: str, scope: str, timeout: int,
                 out: str = "geom", prelude: str = "") -> Tuple[str, list]:
     numeric_all = []
     union = []
+    elements = normalize_elements(elements)
     for sel in selectors:
         ql, numeric = _parse_selector(sel)
         numeric_all.extend(numeric)

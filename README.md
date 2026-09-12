@@ -22,6 +22,9 @@ and where it came from.
 git clone https://github.com/NordicDevelopment-org/ATAK-Overlays
 cd ATAK-Overlays
 pip install -e .                      # pyshp, pyproj, PyYAML; no GDAL
+                                      # the catalog lives in the repo, not the wheel:
+                                      # run from the checkout, or pass --catalog /path
+                                      # (or set OVERLAYBUILDER_CATALOG)
 
 overlaybuilder build --aoi county:27025           # Chisago County, MN - everything
 overlaybuilder build --aoi state:MN --sectors energy water --jobs 6
@@ -35,7 +38,9 @@ Output lands in `overlays/<aoi>/` (e.g. `overlays/us/mn/27025_chisago/`):
 
 ```
 power_plants.kmz            EIA plants, folders by fuel, "Name (1,146.4 MW)"
-power_plants__osm.kmz       OSM plants, same layer from a second source
+power_plants__osm.kmz       OSM plants, same layer from a second source (the most
+                            specific tier - county, then state, national, global -
+                            owns the plain name; others get a provider suffix)
 substations.kmz             folders by type, styled by max kV
 transmission_lines.kmz      folders "345 kV (12)", line width by class
 pipelines.kmz  dams.kmz  wastewater_treatment.kmz  comm_towers.kmz  hospitals.kmz ...
@@ -113,7 +118,8 @@ overlaybuilder list-drivers | list-regions | list-counties
 
 `--aoi` accepts `county:FIPS`, `state:XX`, `region:NAME` (see
 `catalog/regions.yaml`: upper-midwest, mn-neighbors, fema-region-5, miso-north, ...),
-`us`, `conus`, `country:XX`, `bbox:W,S,E,N`, `world`. Legacy
+`us`, `conus`, `country:XX`, `bbox:W,S,E,N`. (`world` needs `osm_pbf` extracts;
+the Overpass API cannot serve a planet-wide query.) Legacy
 `--fips 27025` / `--state MN --county Chisago` still work.
 
 ## Scaling path
@@ -124,7 +130,8 @@ overlaybuilder list-drivers | list-regions | list-counties
 | Minnesota / Wisconsin / Iowa | `--aoi state:MN` etc. - state tiers for MnGeo, WI PSC/DNR, Iowa DNR | ready; add more state portal layers in `catalog/states/<abbr>/` |
 | Surrounding states / regions | `--aoi region:mn-neighbors` (MN WI IA ND SD) | ready |
 | United States | `--aoi us --layers ...` (national tier: EIA, NID, EPA, FCC, BTS) | ready for national layers; OSM layers are skipped at `us` scale - switch them to `osm_pbf` with a US extract |
-| World | `--aoi country:XX` (OSM via Overpass area) or `osm_pbf` with Geofabrik extracts | ready for OSM; add `catalog/national/<cc>/` for other countries' open data |
+| World | `--aoi country:XX` (OSM via Overpass area, tiled) | ready; add `catalog/national/<cc>/` for other countries' open data |
+| Planet | switch the global sources to `osm_pbf` with a Geofabrik/planet extract | `--aoi world` is refused by Overpass and says so |
 
 Prebuilt packs: push a tag like `pack-county-27025` or `pack-state-MN` and the
 release workflow attaches the zip to a GitHub Release.

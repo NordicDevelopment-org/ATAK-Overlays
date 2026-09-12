@@ -41,7 +41,8 @@ sources:
     represent: point
 
   - layer: eoc
-    tags: ["emergency=disaster_response", "office=government;government=emergency", "emergency_service"]
+    tags: ["emergency=disaster_response", "office=government;government=emergency",
+           "office=emergency_management", "amenity=emergency_service;emergency_service=eoc"]
     elements: nwr
     represent: point
     notes: "OSM tagging for EOCs is sparse; prefer state/county sources"

@@ -16,6 +16,7 @@
 Legacy (still works): overlaybuilder --fips 27025 / --state MN --county Chisago
 """
 import argparse
+import glob
 import json
 import os
 import sys
@@ -27,12 +28,34 @@ from .drivers import Context, configure_http, known_drivers
 from .http import set_max_per_host
 
 
-def _catalog_dir(arg):
-    if arg:
-        return arg
+def _catalog_dir(arg, require=True):
+    """--catalog, else $OVERLAYBUILDER_CATALOG, else the repo's ./catalog.
+
+    The catalog is data, not code: a wheel installed outside a checkout has
+    none, and silently resolving zero sources looks like success. Fail loudly
+    instead."""
+    def _has_yaml(d):
+        return os.path.isdir(d) and bool(glob.glob(os.path.join(d, "**", "*.yaml"), recursive=True))
+
+    if arg:                       # an explicit path is authoritative: never fall back past it
+        if _has_yaml(arg):
+            return arg
+        raise SystemExit(f"--catalog {arg} is not a catalog directory (no .yaml files under it)")
+    cands = []
+    env = os.environ.get("OVERLAYBUILDER_CATALOG")
+    if env:
+        cands.append(env)
     here = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-    cand = os.path.join(here, "catalog")
-    return cand if os.path.isdir(cand) else "catalog"
+    cands += [os.path.join(here, "catalog"), os.path.join(os.getcwd(), "catalog")]
+    for c in cands:
+        if os.path.isdir(c) and glob.glob(os.path.join(c, "**", "*.yaml"), recursive=True):
+            return c
+    if not require:
+        return cands[0]
+    raise SystemExit(
+        "no source catalog found (looked in: " + ", ".join(cands) + ").\n"
+        "The catalog ships with the repository, not the wheel. Clone it and either run from the\n"
+        "checkout, pass --catalog /path/to/catalog, or set OVERLAYBUILDER_CATALOG.")
 
 
 def _add_common(ap):
@@ -85,7 +108,12 @@ def cmd_build(args):
                   http_cache=not args.no_http_cache, clip=not args.no_clip)
     sources = catalog.resolve_sources(cat, aoi, args.layers, args.sectors, args.exclude)
     if not sources:
-        print("[!] no sources matched. Check --layers/--sectors, or add a catalog entry.")
+        if aoi.kind == "world":
+            print("[!] --aoi world has no buildable sources: the Overpass API cannot serve a planet-wide\n"
+                  "    query. Build per country (--aoi country:XX), or switch the OSM sources to the\n"
+                  "    osm_pbf driver with a Geofabrik planet/continent extract (see docs/ADDING_A_SOURCE.md).")
+        else:
+            print("[!] no sources matched. Check --layers/--sectors, or add a catalog entry.")
         return 1
     print(f"[*] {len(sources)} source(s): " + ", ".join(s.get("id", s["layer"]) for s in sources))
     out_dir = args.out if args.flat else os.path.join(args.out, aoi.slug)
@@ -199,6 +227,9 @@ def cmd_validate(args):
     for p in problems:
         print("  !", p)
     print(f"{len(problems)} problem(s)")
+    if not srcs:
+        print("  ! the catalog is empty - a lint that finds nothing is not a pass")
+        return 1
     return 1 if problems else 0
 
 
@@ -278,7 +309,19 @@ def main(argv=None):
             for k, v in load_regions(os.path.join(cat, "regions.yaml")).items():
                 print(f"  {k:18} {' '.join(v)}")
         return 0
-    return args.fn(args)
+    try:
+        return args.fn(args)
+    except SystemExit:
+        raise
+    except KeyboardInterrupt:
+        print("\ninterrupted", file=sys.stderr)
+        return 130
+    except Exception as e:  # noqa: BLE001  a CLI should not show a traceback
+        if os.environ.get("OVERLAYBUILDER_DEBUG"):
+            raise
+        print(f"error: {e}", file=sys.stderr)
+        print("(set OVERLAYBUILDER_DEBUG=1 for the full traceback)", file=sys.stderr)
+        return 2
 
 
 if __name__ == "__main__":

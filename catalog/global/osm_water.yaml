@@ -39,7 +39,7 @@ sources:
 
   - layer: water_wells
     tags: ["man_made=water_well;pump=powered", "man_made=water_well;operator"]
-    elements: n
+    elements: node
     hidden: true
     aoi_kinds: [county, bbox]
 
@@ -52,6 +52,6 @@ sources:
 
   - layer: levees
     tags: ["man_made=dyke", "man_made=embankment;embankment=levee"]
-    elements: w
+    elements: way
     geometry: line
     hidden: true

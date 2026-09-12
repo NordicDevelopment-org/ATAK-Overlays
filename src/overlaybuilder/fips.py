@@ -52,14 +52,14 @@ def abbr_for_fp(fp: str) -> str:
     return _FP_TO_ABBR.get(fp, "")
 
 
-def _gazetteer(cache_dir: str) -> str:
+def _gazetteer(cache_dir: str, tries: int = 4) -> str:
     """The Census county file, downloaded once. Written atomically: a failed or
     truncated download must not leave an empty file that later reads as a
     successful lookup with no counties in it."""
     os.makedirs(cache_dir, exist_ok=True)
     path = os.path.join(cache_dir, "national_county2020.txt")
     if not os.path.exists(path) or os.path.getsize(path) < 1024:
-        body = http_get(_GAZETTEER, cache=False)
+        body = http_get(_GAZETTEER, cache=False, tries=tries, timeout=60)
         if len(body) < 1024 or b"|" not in body[:4096]:
             raise RuntimeError(f"the Census county file at {_GAZETTEER} did not look like the gazetteer")
         tmp = f"{path}.{os.getpid()}.tmp"
@@ -98,7 +98,7 @@ def resolve(state: str, county: Optional[str] = None,
             name = county
         else:
             try:
-                name = _lookup_name(sfp, cfp, cache_dir)
+                name = _lookup_name(sfp, cfp, cache_dir, tries=1)
             except Exception:  # noqa: BLE001
                 # the county NAME is cosmetic (labels and the output folder);
                 # never let a gazetteer download stop a build that has a FIPS
@@ -126,8 +126,8 @@ def resolve(state: str, county: Optional[str] = None,
     raise KeyError(f"county '{county}' not found in state {abbr}")
 
 
-def _lookup_name(sfp: str, cfp: str, cache_dir: str) -> str:
-    for line in _gazetteer(cache_dir).splitlines()[1:]:
+def _lookup_name(sfp: str, cfp: str, cache_dir: str, tries: int = 4) -> str:
+    for line in _gazetteer(cache_dir, tries=tries).splitlines()[1:]:
         parts = line.split("|")
         if len(parts) < 5:
             continue
