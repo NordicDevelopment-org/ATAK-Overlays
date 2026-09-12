@@ -101,3 +101,24 @@ def test_state_aoi_prefers_state_boundary(tmp_path):
     m = run_build(ctx, srcs, str(tmp_path), ["kmz"], False, do_reconcile=False, log=lambda *a: None)
     assert m["layers"][0]["layer"] == "state_boundary"
     assert ctx.boundary is not None
+
+
+def test_boundary_failure_refuses_unclipped_county_pack(tmp_path):
+    @driver("_fake_boom_boundary")
+    def _fb(logical, spec, ctx):
+        if logical == "county_boundary":
+            raise RuntimeError("tiger down")
+        return LayerResult(logical, [], Provenance("F", "u", "l", "d", "x"))
+
+    srcs = [{"layer": "county_boundary", "driver": "_fake_boom_boundary"},
+            {"layer": "power_plants", "driver": "_fake_boom_boundary"}]
+    ctx = Context(aoi=parse_aoi("county:27025", county_name="Chisago"))
+    try:
+        run_build(ctx, srcs, str(tmp_path), ["kmz"], False, do_reconcile=False, log=lambda *a: None)
+    except RuntimeError as e:
+        assert "--no-clip" in str(e)
+    else:
+        raise AssertionError("expected refusal")
+    ctx2 = Context(aoi=parse_aoi("county:27025", county_name="Chisago"), clip=False)
+    m = run_build(ctx2, srcs, str(tmp_path), ["kmz"], False, do_reconcile=False, log=lambda *a: None)
+    assert m["layers"][0]["status"].startswith("ERROR") and m["layers"][1]["status"] == "ok"

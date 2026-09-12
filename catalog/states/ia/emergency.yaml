@@ -1,0 +1,41 @@
+# Iowa - state tier, emergency management (Iowa HSEMD public service).
+defaults:
+  sector: Emergency & Health
+  driver: arcgis
+  spatial: bbox
+  url: https://eoc.iowa.gov/arcgis/rest/services/Public/EmergencyManagement/MapServer
+  provider: ia-hsemd
+  license: "State of Iowa public ArcGIS service; no explicit license text - verify"
+  source_url: https://eoc.iowa.gov/arcgis/rest/services/Public/EmergencyManagement/MapServer
+  confidence: medium
+sources:
+  - layer: fire_stations
+    id: fire_stations@ia-hsemd
+    entity: fire_station
+    layer_match: "^FireStations$"
+    fields:
+      name: {from: [Name, NAME]}
+    source_name: "Iowa HSEMD - Fire Stations"
+  - layer: hospitals
+    id: hospitals@ia-hsemd
+    entity: hospital
+    layer_match: "^Hospital$"
+    fields:
+      name: {from: [Name, NAME]}
+    source_name: "Iowa HSEMD - Hospitals"
+  - layer: shelters
+    id: shelters@ia-hsemd
+    layer_match: "^Shelter$"
+    hidden: true
+    fields:
+      name: {from: [Name, NAME]}
+    source_name: "Iowa HSEMD - Shelters"
+  - layer: schools
+    id: schools@ia-hsemd
+    sector: Government
+    layer_match: "^School$"
+    hidden: true
+    aoi_kinds: [county, state, bbox]
+    fields:
+      name: {from: [Name, NAME]}
+    source_name: "Iowa HSEMD - Schools"

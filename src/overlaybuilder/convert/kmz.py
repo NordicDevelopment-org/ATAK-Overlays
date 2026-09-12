@@ -73,6 +73,7 @@ LAYER_STYLE: Dict[str, Tuple[str, str, int, str, bool, str]] = {
     "eoc":                 ("ff00ffff", "4000ffff", 2, "star",     False, "Emergency & Health"),
     "shelters":            ("ff00ff00", "4000ff00", 1, "square",   True,  "Emergency & Health"),
     "nursing_homes":       ("ff4040ff", "204040ff", 1, "circle",   True,  "Emergency & Health"),
+    "pharmacies":          ("ff4040ff", "204040ff", 1, "circle",   True,  "Emergency & Health"),
     "correctional":        ("ff808080", "40808080", 2, "square",   True,  "Government"),
     "government":          ("ff808080", "40808080", 1, "square",   True,  "Government"),
     "schools":             ("ff00ff00", "2000ff00", 1, "circle",   True,  "Government"),
@@ -82,6 +83,7 @@ LAYER_STYLE: Dict[str, Tuple[str, str, int, str, bool, str]] = {
     "railways":            ("ff404040", "00000000", 2, "circle",   False, "Transportation"),
     "rail_facilities":     ("ff404040", "40404040", 1, "square",   True,  "Transportation"),
     "bridges":             ("ffc0c0c0", "40c0c0c0", 1, "diamond",  True,  "Transportation"),
+    "rail_crossings":      ("ff404040", "40404040", 1, "plus",     True,  "Transportation"),
     "ports":               ("ffff8040", "40ff8040", 2, "square",   False, "Transportation"),
     "industrial":          ("ff606060", "30606060", 1, "circle",   True,  "Industrial"),
     # --- base map

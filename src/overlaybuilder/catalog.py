@@ -42,6 +42,9 @@ def _load_sources(path: str, tier: str) -> List[dict]:
                                        "county": "county"}[tier])
         merged["_tier"] = tier
         merged["_file"] = os.path.relpath(path)
+        if merged["driver"] == "overpass" and not merged.get("aoi_kinds"):
+            # Overpass cannot serve a whole nation; those AOIs use osm_pbf extracts instead
+            merged["aoi_kinds"] = ["county", "state", "region", "country", "bbox"]
         merged.setdefault("id", f"{merged['layer']}@{os.path.splitext(os.path.basename(path))[0]}")
         out.append(merged)
     return out
@@ -97,7 +100,8 @@ def _applies(s: dict, aoi: Aoi) -> bool:
         return aoi.country == cov.split(":", 1)[1].upper()
     if cov == "state" or cov.startswith("state:"):
         want = cov.split(":", 1)[1].upper() if ":" in cov else None
-        return aoi.kind in ("county", "state", "region") and (want is None or want in aoi.state_abbrs)
+        return bool(aoi.state_abbrs) and aoi.kind in ("county", "state", "region", "bbox") and \
+            (want is None or want in aoi.state_abbrs)
     if cov == "county":
         return aoi.kind == "county"
     return True
@@ -112,7 +116,7 @@ def resolve_sources(catalog_dir: str, aoi: Aoi, only_layers: Optional[List[str]]
         srcs += national_sources(catalog_dir, "US")
     elif aoi.country:
         srcs += national_sources(catalog_dir, aoi.country)
-    for ab in (aoi.state_abbrs if aoi.kind in ("county", "state", "region") else []):
+    for ab in (aoi.state_abbrs if aoi.kind in ("county", "state", "region", "bbox") else []):
         srcs += state_sources(catalog_dir, ab)
     if aoi.kind == "county" and aoi.fips5:
         srcs += county_sources(catalog_dir, aoi.fips5)

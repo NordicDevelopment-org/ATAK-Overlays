@@ -1,0 +1,45 @@
+# Wisconsin - state tier, health and EMS (WI DHS open GIS).
+defaults:
+  sector: Emergency & Health
+  driver: arcgis
+  spatial: bbox
+  license: "Wisconsin DHS Open Spatial Data - public"
+sources:
+  - layer: hospitals
+    id: hospitals@wi-dhs
+    provider: wi-dhs
+    entity: hospital
+    url: https://dhsgis.wi.gov/server/rest/services/DHS_GIS/Facilities/MapServer
+    layer_match: "^Hospital$"
+    fields:
+      name: {from: [NAME, FACILITY_NAME]}
+      source_id: {from: [FACILITY_INTERNAL_ID]}
+      county: {from: [COUNTY]}
+    source_name: "Wisconsin DHS Facilities - Hospitals"
+    source_url: https://data.dhsgis.wi.gov/
+    notes: "Bed counts in the separate 'Wisconsin Hospitals Extended Attributes' CSV (join FACILITY_INTERNAL_ID); trauma levels in 'Wisconsin Trauma Centers'"
+    confidence: high
+  - layer: nursing_homes
+    id: nursing_homes@wi-dhs
+    provider: wi-dhs
+    url: https://dhsgis.wi.gov/server/rest/services/DHS_GIS/Facilities/MapServer
+    layer_match: "^Nursing Home$"
+    hidden: true
+    fields:
+      name: {from: [NAME, FACILITY_NAME]}
+      source_id: {from: [FACILITY_INTERNAL_ID]}
+    source_name: "Wisconsin DHS Facilities - Nursing Homes"
+    source_url: https://data.dhsgis.wi.gov/
+    confidence: high
+  - layer: ems
+    id: ems@wi-dhs
+    provider: wi-dhs
+    url: https://dhsgis.wi.gov/server/rest/services/DHS_RAFT/Emergency_Management_Resources/MapServer
+    layer_id: 0
+    fields:
+      name: {from: [NAME]}
+      type: {from: [LEVEL, LICENSE_LEVEL]}
+    source_name: "Wisconsin licensed EMS services (WI DHS)"
+    source_url: https://dhsgis.wi.gov/server/rest/services/DHS_RAFT/Emergency_Management_Resources/MapServer/0
+    notes: "Points are licensing addresses, not necessarily station locations"
+    confidence: medium

@@ -68,3 +68,16 @@ def test_style_rules_and_fields_parse():
     tl = next(s for s in srcs if s["layer"] == "transmission_lines")
     assert tl["style_rules"][0]["when"].startswith("voltage_kv")
     assert tl["fields"]["voltage_kv"]["from"] == ["voltage@V"]
+
+
+def test_bbox_inside_mn_gets_state_and_national_tiers():
+    srcs = catalog.resolve_sources(CATALOG, parse_aoi("bbox:-93.2,45.3,-92.6,45.8"))
+    tiers = {s["_tier"] for s in srcs}
+    assert {"global", "national", "state"} <= tiers and "county" not in tiers
+
+
+def test_us_aoi_skips_overpass_sources():
+    srcs = catalog.resolve_sources(CATALOG, parse_aoi("us"))
+    assert srcs and all(s["driver"] != "overpass" for s in srcs)
+    srcs = catalog.resolve_sources(CATALOG, parse_aoi("region:mn-neighbors"))
+    assert any(s["driver"] == "overpass" for s in srcs)

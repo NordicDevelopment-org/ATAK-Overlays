@@ -69,3 +69,30 @@ def test_tile_bbox():
     tiles = tile_bbox((0, 0, 2.5, 1.5), 1.0)
     assert len(tiles) == 6
     assert tiles[-1] == (2.0, 1.0, 2.5, 1.5)
+
+
+def test_alaska_bbox_does_not_span_dateline_and_us_covers_territories():
+    from overlaybuilder.aoi import US_BBOX
+    assert STATE_BBOX["AK"][2] < 0
+    assert US_BBOX[0] < -179 and US_BBOX[2] < -60 and US_BBOX[1] < -14   # American Samoa included
+
+
+def test_bbox_aoi_infers_us_states():
+    b = parse_aoi("bbox:-93.2,45.3,-92.6,45.8")
+    assert b.country == "US" and "MN" in b.state_abbrs
+    assert parse_aoi("bbox:10,50,11,51").country == ""   # Europe: no US tier
+
+
+def test_geometry_touches_crossing_and_containment():
+    from overlaybuilder.aoi import BoundaryIndex, segments_intersect
+    idx = BoundaryIndex(SQ)
+    crossing = {"type": "LineString", "coordinates": [[-5, 5], [15, 5]]}     # no vertex inside
+    assert not geometry_touches(crossing, SQ, (0, 0, 10, 10))                  # vertex-only test misses it
+    assert geometry_touches(crossing, SQ, (0, 0, 10, 10), idx)                 # edge index catches it
+    container = {"type": "Polygon", "coordinates": [[[-1, -1], [11, -1], [11, 11], [-1, 11], [-1, -1]]]}
+    assert geometry_touches(container, SQ, (0, 0, 10, 10), idx)
+    far = {"type": "LineString", "coordinates": [[-5, -5], [-1, -1]]}
+    assert not geometry_touches(far, SQ, (0, 0, 10, 10), idx)
+    inside_hole = {"type": "Point", "coordinates": [5, 5]}
+    assert not geometry_touches(inside_hole, SQ, (0, 0, 10, 10), idx)
+    assert segments_intersect((0, 0), (2, 2), (0, 2), (2, 0)) and not segments_intersect((0, 0), (1, 1), (2, 2), (3, 3))

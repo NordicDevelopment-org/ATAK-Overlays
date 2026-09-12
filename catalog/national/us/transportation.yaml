@@ -1,10 +1,10 @@
-# US national tier - TRANSPORTATION (FAA, USDOT/BTS National Transportation Atlas
-# Database on geo.dot.gov). Service names follow the NTAD hosted pattern; the
-# rail/pipeline services on this host were confirmed live in 2026 - confirm the
-# others with `probe` on first use.
+# US national tier - TRANSPORTATION (FAA ADIP; USDOT/BTS National Transportation
+# Atlas Database). NTAD hosts each layer twice: AGOL hosted views at
+# services.arcgis.com/xOi1kZaI0eWDREZv/.../NTAD_<Name>/FeatureServer/0 (preferred)
+# and Enterprise copies at geo.dot.gov/server/rest/services/Hosted/<Name>_DS/FeatureServer/0.
 defaults:
   sector: Transportation
-  license: "Public domain (US Government work)"
+  license: "Public domain (US Government work; NTAD: unrestricted public use)"
   spatial: bbox
   driver: arcgis
 sources:
@@ -12,60 +12,115 @@ sources:
     id: airports@faa
     provider: faa
     entity: airport
-    url: https://services6.arcgis.com/ssFJjBXIUyZDrSYZ/arcgis/rest/services/Airports/FeatureServer
+    url: https://services6.arcgis.com/ssFJjBXIUyZDrSYZ/arcgis/rest/services/US_Airport/FeatureServer
     layer_id: 0
+    where_by_aoi:
+      state: "STATE = '{state_abbr}'"
+      region: "STATE IN ({states_sql})"
     group_by: [type]
     name: "{source_id} {name}"
     fields:
-      name: {from: [NAME, Name]}
-      source_id: {from: [IDENT, ICAO_ID, Ident]}
-      type: {from: [TYPE_CODE, TYPE, Type]}
-      elevation_ft: {from: [ELEVATION, ELEV]}
-      owner: {from: [OWNER_TYPE, OWNER]}
-    source_name: "FAA Aeronautical Information Services - Airports (ADIP)"
+      name: {from: [NAME]}
+      source_id: {from: [IDENT, ICAO_ID]}
+      type: {from: [TYPE_CODE]}             # AD airport, HP heliport, SP seaplane base, GL gliderport ...
+      status: {from: [OPERSTATUS]}
+      elevation_ft: {from: [ELEVATION]}
+      city: {from: [SERVCITY]}
+    source_name: "FAA Aeronautical Data Delivery Service - Airports (ADIP)"
     source_url: https://adds-faa.opendata.arcgis.com/
-    notes: "Includes heliports, seaplane bases, gliderports; TYPE_CODE distinguishes. Runway lengths are in the separate FAA Runways layer"
-    confidence: medium
+    notes: "Heliports are in the same layer (TYPE_CODE = HP). Longest runway lives in the FAA Runways layer (roadmap join)"
+    confidence: high
+    alternates:
+      - {driver: arcgis, url: "https://services.arcgis.com/xOi1kZaI0eWDREZv/arcgis/rest/services/NTAD_Aviation_Facilities/FeatureServer", layer_id: 0, note: "NTAD aviation facilities with ENPLANEMENTS, FAC_TYPE, OWNER_TYPE"}
 
   - layer: railways
     id: railways@ntad
     provider: bts
-    url: https://geo.dot.gov/server/rest/services/Hosted/North_American_Rail_Network_Lines/FeatureServer
+    url: https://services.arcgis.com/xOi1kZaI0eWDREZv/arcgis/rest/services/NTAD_North_American_Rail_Network_Lines/FeatureServer
     layer_id: 0
+    where: "NET IN ('M','I')"                # main + industrial; drops yards/sidings/abandoned
+    where_by_aoi:
+      state: "STATEAB = '{state_abbr}' AND NET IN ('M','I')"
+      region: "STATEAB IN ({states_sql}) AND NET IN ('M','I')"
     group_by: [owner]
     name: "{owner} {type}"
     fields:
-      owner: {from: [RROWNER1, rrowner1]}
-      operator: {from: [TRKRGHTS1, trkrghts1]}
-      tracks: {from: [TRACKS, tracks]}
-      type: {from: [NET, net, SUBDIV, subdiv]}
-      status: {from: [STATUS, status]}
+      owner: {from: [RROWNER1]}
+      operator: {from: [TRKRGHTS1]}
+      tracks: {from: [TRACKS]}
+      type: {from: [SUBDIV]}
+      status: {from: [STATUS]}
+      length_ft: {from: ["MILES@mi"]}
     source_name: "USDOT BTS NTAD - North American Rail Network Lines (FRA)"
+    source_url: https://geodata.bts.gov/datasets/usdot::north-american-rail-network-lines
+    notes: "NET: M main, I industrial, Y yard, S siding, A abandoned. Passenger-rail and Class I views exist as siblings"
+    confidence: high
+    alternates:
+      - {driver: arcgis, url: "https://geo.dot.gov/server/rest/services/Hosted/North_American_Rail_Network_Lines_DS/FeatureServer", layer_id: 0}
+
+  - layer: rail_facilities
+    id: rail_facilities@ntad-yards
+    provider: bts-yards
+    url: https://services.arcgis.com/xOi1kZaI0eWDREZv/arcgis/rest/services/NTAD_Rail_Yards/FeatureServer
+    layer_id: 0
+    where_by_aoi:
+      state: "STATEAB = '{state_abbr}'"
+      region: "STATEAB IN ({states_sql})"
+    title: "rail_facilities (yards)"
+    hidden: true
+    name: "{name} yard"
+    fields:
+      name: {from: [YARDNAME]}
+      owner: {from: [RROWNER1]}
+      length_ft: {from: ["MILES@mi"]}
+    source_name: "USDOT BTS NTAD - Rail Yards"
     source_url: https://geodata.bts.gov/
-    notes: "NET: M=main, I=industrial, Y=yard, S=siding, A=abandoned; TRACKS = number of main tracks"
+    notes: "Yard track polylines aggregated by YARDNAME"
     confidence: medium
 
   - layer: rail_facilities
     id: rail_facilities@ntad-amtrak
-    provider: bts
-    url: https://geo.dot.gov/server/rest/services/Hosted/Amtrak_Stations/FeatureServer
+    provider: bts-amtrak
+    url: https://services.arcgis.com/xOi1kZaI0eWDREZv/arcgis/rest/services/NTAD_Amtrak_Stations/FeatureServer
     layer_id: 0
-    hidden: true
+    where: "STNTYPE = 'RAIL'"
+    where_by_aoi:
+      state: "STATE = '{state_abbr}' AND STNTYPE = 'RAIL'"
+      region: "STATE IN ({states_sql}) AND STNTYPE = 'RAIL'"
+    title: "rail_facilities (Amtrak stations)"
     fields:
-      name: {from: [STNNAME, stnname, NAME]}
-      source_id: {from: [STNCODE, stncode]}
+      name: {from: [STNNAME]}
+      source_id: {from: [STNCODE]}
+      type: {from: [STNTYPE]}
+      address: {from: [ADDRESS1]}
     source_name: "USDOT BTS NTAD - Amtrak Stations"
     source_url: https://geodata.bts.gov/
+    confidence: high
+
+  - layer: rail_crossings
+    id: rail_crossings@ntad
+    provider: bts
+    url: https://services.arcgis.com/xOi1kZaI0eWDREZv/arcgis/rest/services/NTAD_Railroad_Grade_Crossings/FeatureServer
+    layer_id: 0
+    aoi_kinds: [county, bbox]               # ~210k points nationally
+    hidden: true
+    fields:
+      source_id: {from: [CROSSING, CrossingID]}
+      owner: {from: [RAILROAD, Railroad]}
+      type: {from: [POSXING, PosXing, TYPEXING]}
+      name: {from: [STREET, Street]}
+    source_name: "USDOT BTS NTAD - Railroad Grade Crossings (FRA inventory)"
+    source_url: https://geodata.bts.gov/
+    notes: "Summer 2026 NTAD release changed field names to descriptors; fields are matched loosely and the raw table always shows"
     confidence: medium
 
   - layer: bridges
     id: bridges@nbi
     provider: fhwa
-    url: https://geo.dot.gov/server/rest/services/Hosted/National_Bridge_Inventory/FeatureServer
+    url: https://services.arcgis.com/xOi1kZaI0eWDREZv/arcgis/rest/services/NTAD_National_Bridge_Inventory/FeatureServer
     layer_id: 0
     hidden: true
-    aoi_kinds: [county, bbox]               # ~620k structures nationally; county scale only
-    name: "{name}"
+    aoi_kinds: [county, bbox]               # ~620k structures nationally
     fields:
       name: {from: [FACILITY_CARRIED_007, facility_carried_007, FACILITY_CARRIED]}
       source_id: {from: [STRUCTURE_NUMBER_008, structure_number_008, STRUCTURE_NUMBER]}
@@ -76,17 +131,36 @@ sources:
       type: {from: [STRUCTURE_KIND_043A, structure_kind_043a]}
     source_name: "FHWA National Bridge Inventory (USDOT BTS NTAD)"
     source_url: https://www.fhwa.dot.gov/bridge/nbi.cfm
-    notes: "NBI item numbers suffix the field names (e.g. YEAR_BUILT_027); ADT = average daily traffic"
+    notes: "NBI item numbers suffix the field names (e.g. YEAR_BUILT_027); ADT = average daily traffic. Service name follows the NTAD_<Name> pattern - confirm with probe"
     confidence: medium
+    alternates:
+      - {driver: arcgis, url: "https://geo.dot.gov/server/rest/services/Hosted/National_Bridge_Inventory_DS/FeatureServer", layer_id: 0}
 
   - layer: ports
     id: ports@ntad
     provider: bts
-    url: https://geo.dot.gov/server/rest/services/Hosted/Principal_Ports/FeatureServer
+    url: https://services.arcgis.com/xOi1kZaI0eWDREZv/arcgis/rest/services/NTAD_Principal_Ports/FeatureServer
     layer_id: 0
     fields:
       name: {from: [PORT_NAME, port_name, NAME]}
       type: {from: [TYPE, type]}
     source_name: "USDOT BTS NTAD - Principal Ports"
     source_url: https://geodata.bts.gov/
+    notes: "Service name follows the NTAD_<Name> pattern - confirm with probe"
     confidence: medium
+    alternates:
+      - {driver: arcgis, url: "https://geo.dot.gov/server/rest/services/Hosted/Principal_Ports_DS/FeatureServer", layer_id: 0}
+
+  - layer: rail_facilities
+    id: rail_facilities@ntad-intermodal
+    provider: bts-intermodal
+    url: https://geo.dot.gov/server/rest/services/Hosted/Intermodal_Freight_Facilities_Rail_TOFC_COFC_DS/FeatureServer
+    layer_id: 0
+    title: "rail_facilities (intermodal)"
+    hidden: true
+    fields:
+      name: {from: [PORT, NAME, FACILITY]}
+      owner: {from: [RAILROAD]}
+    source_name: "USDOT BTS NTAD - Intermodal Freight Facilities (Rail TOFC/COFC)"
+    source_url: https://geodata.bts.gov/
+    confidence: low

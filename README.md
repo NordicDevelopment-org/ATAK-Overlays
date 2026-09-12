@@ -113,10 +113,10 @@ overlaybuilder list-drivers | list-regions | list-counties
 
 | target | how | status |
 |---|---|---|
-| Chisago County, MN | `--aoi county:27025` - global + national + MN + county tiers (77 sources) | ready |
+| Chisago County, MN | `--aoi county:27025` - global + national + MN + county tiers (~100 sources) | ready |
 | Minnesota / Wisconsin / Iowa | `--aoi state:MN` etc. - state tiers for MnGeo, WI PSC/DNR, Iowa DNR | ready; add more state portal layers in `catalog/states/<abbr>/` |
 | Surrounding states / regions | `--aoi region:mn-neighbors` (MN WI IA ND SD) | ready |
-| United States | `--aoi us --layers ...` (national tier: EIA, NID, EPA, FCC, BTS) | ready for national layers; Overpass layers tile the bbox (slow) - prefer `osm_pbf` with a US extract |
+| United States | `--aoi us --layers ...` (national tier: EIA, NID, EPA, FCC, BTS) | ready for national layers; OSM layers are skipped at `us` scale - switch them to `osm_pbf` with a US extract |
 | World | `--aoi country:XX` (OSM via Overpass area) or `osm_pbf` with Geofabrik extracts | ready for OSM; add `catalog/national/<cc>/` for other countries' open data |
 
 Prebuilt packs: push a tag like `pack-county-27025` or `pack-state-MN` and the

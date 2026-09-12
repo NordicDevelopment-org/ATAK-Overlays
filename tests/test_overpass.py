@@ -92,3 +92,21 @@ def test_world_refused():
         assert "osm_pbf" in str(e)
     else:
         raise AssertionError("expected refusal")
+
+
+def test_metre_suffix_is_not_mega():
+    assert _osm_number("30 m") == 30 and _osm_number("1.5 MW") == 1.5e6
+
+
+def test_unstitchable_multipolygon_falls_back_to_centroid():
+    rel = {"type": "relation", "id": 11, "tags": {"type": "multipolygon", "power": "plant"},
+           "members": [{"type": "way", "role": "outer", "geometry": [{"lon": 0, "lat": 0}, {"lon": 2, "lat": 0}]}]}
+    g = element_to_geometry(rel)
+    assert g["type"] == "Point" and g["coordinates"] == [1.0, 0.0]
+
+
+def test_country_query_has_area_prelude_and_bbox():
+    from overlaybuilder.drivers.overpass import _country_prelude
+    q, _ = build_query(["power=plant"], "nwr", "(area.a)(45.0,-93.0,46.0,-92.0)", 90, "geom", _country_prelude("CA"))
+    assert q.startswith('[out:json][timeout:90];area["ISO3166-1"="CA"]["admin_level"="2"]->.a;(')
+    assert 'nwr["power"="plant"](area.a)(45.0,-93.0,46.0,-92.0);' in q

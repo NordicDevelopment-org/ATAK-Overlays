@@ -23,6 +23,7 @@ class Context:
     http_cache: bool = True          # cache GET bodies on disk (TIGER zips, bulk CSVs)
     bbox: Optional[tuple] = None     # refined envelope (set from boundary layer)
     boundary: Optional[dict] = None  # GeoJSON polygon used for clipping
+    boundary_index: Any = None       # aoi.BoundaryIndex built from `boundary`
     clip: bool = True
     options: Dict[str, Any] = field(default_factory=dict)  # free-form CLI passthrough
 

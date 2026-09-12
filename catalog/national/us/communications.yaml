@@ -1,8 +1,9 @@
 # US national tier - COMMUNICATIONS.
 # HIFLD's cellular / microwave / broadcast tower layers were retired with HIFLD
-# Open (Aug 2025). The FCC Antenna Structure Registration database is the
-# authoritative public source for registered structures (generally > 200 ft AGL
-# or near airports); OSM (global tier) adds smaller towers and world coverage.
+# Open (Aug 2025). Live authoritative sources are the raw FCC databases the
+# HIFLD layers were built from: ASR (registered structures) and ULS (licensed
+# sites). Frozen re-hosts of the HIFLD extracts remain useful for their
+# per-service breakdown. OSM (global tier) adds smaller towers and world coverage.
 defaults:
   sector: Communications
 sources:
@@ -31,8 +32,73 @@ sources:
     style_rules:
       - {when: "height_ft >= 1000", color: "ffff00ff", icon: triangle, width: 3}
       - {when: "height_ft >= 400",  color: "ffff40ff", icon: triangle, width: 2}
-    source_name: "FCC Antenna Structure Registration (ASR) - registered structures"
+    source_name: "FCC Antenna Structure Registration (ASR) - registered structures (weekly)"
     source_url: https://www.fcc.gov/wireless/systems/antenna-structure-registration-asr-system
     license: "Public domain (US FCC)"
-    notes: "Weekly full database (~120 MB, cached). Column layout per FCC ASR public-access definitions; override with `layout:` if the FCC re-orders RA/CO/EN. Not every cell site is registered - OSM fills in"
+    notes: "Weekly full database (~120 MB, cached). Column layout per FCC ASR public-access definitions; override with `layout:` if the FCC re-orders RA/CO/EN. Only structures >200 ft AGL or near airports must register - OSM fills in small sites"
+    confidence: high
+
+  - layer: comm_towers
+    id: comm_towers@fedmaps-cellular
+    provider: cellular
+    driver: arcgis
+    url: https://services2.arcgis.com/FiaPA4ga0iQKduv3/arcgis/rest/services/Cellular_Towers_in_the_United_States/FeatureServer
+    layer_id: 0
+    spatial: bbox
+    where_by_aoi:
+      state: "LOCSTATE = '{state_abbr}'"
+      region: "LOCSTATE IN ({states_sql})"
+    title: "comm_towers (cellular licences)"
+    hidden: true
+    name: "{owner} {source_id}"
+    fields:
+      owner: {from: [LICENSEE, Licensee]}
+      source_id: {from: [CALLSIGN, Callsign]}
+      structure_type: {from: [STRUCTYPE, structype]}
+      height_ft: {from: ["ALLSTRUC@m", "allstruc@m", "STRUCHEIGHT@m"]}
+      city: {from: [LOCCITY, loccity]}
+      county: {from: [LOCCOUNTY, loccounty]}
+    source_name: "Cellular Towers in the United States (HIFLD-derived FCC ULS 'CL' extract; Esri Federal User Community)"
+    source_url: https://services2.arcgis.com/FiaPA4ga0iQKduv3/arcgis/rest/services/Cellular_Towers_in_the_United_States/FeatureServer/0
+    license: "Public domain source (FCC/DHS); hosted copy under Esri ArcGIS Online terms"
+    notes: "Frozen ULS extract; field casing varies by mirror. For currency rebuild from FCC ULS l_cell.zip (roadmap)"
+    confidence: medium
+
+  - layer: comm_towers
+    id: comm_towers@hifld-microwave
+    provider: microwave
+    driver: arcgis
+    url: https://maps.nccs.nasa.gov/mapping/rest/services/hifld_open/communications/FeatureServer
+    layer_match: "^microwave_service_towers$"
+    spatial: bbox
+    where_by_aoi:
+      state: "locstate = '{state_abbr}'"
+    title: "comm_towers (microwave sites)"
+    hidden: true
+    aoi_kinds: [county, state, bbox]
+    fields:
+      owner: {from: [Licensee, licensee, LICENSEE]}
+      source_id: {from: [Callsign, callsign, CALLSIGN]}
+      structure_type: {from: [structype]}
+      height_ft: {from: ["allstruc@m", "supstruc@m"]}
+    source_name: "HIFLD Microwave Service Towers (2019 HIFLD Open snapshot, NASA NCCS re-host)"
+    source_url: https://maps.nccs.nasa.gov/mapping/rest/services/hifld_open/communications/FeatureServer
+    license: "Public domain (US Government work) - unofficial re-host; frozen"
+    notes: "Known ids on this service: 0 am_transmission_towers, 3 cellular_towers, 7 land_mobile_private_transmission_towers, 8 microwave_service_towers"
+    confidence: medium
+
+  - layer: psap
+    id: psap@hifld-nasa
+    provider: hifld
+    driver: arcgis
+    url: https://maps.nccs.nasa.gov/mapping/rest/services/hifld_open/emergency_services/FeatureServer
+    layer_match: "psap"
+    spatial: bbox
+    hidden: true
+    fields:
+      name: {from: [NAME, PSAP_NAME, psap_name]}
+    source_name: "PSAP 911 Service Area Boundaries (primary PSAPs; HIFLD final snapshot, NASA NCCS re-host)"
+    source_url: https://maps.nccs.nasa.gov/mapping/rest/services/hifld_open/emergency_services/FeatureServer
+    license: "Public domain (US Government work) - unofficial re-host; frozen"
+    notes: "Service-area polygons, not facility points (PSAP buildings are not published). FCC Master PSAP Registry is tabular only"
     confidence: medium

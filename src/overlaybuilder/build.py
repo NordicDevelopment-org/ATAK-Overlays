@@ -13,7 +13,7 @@ from dataclasses import asdict
 from typing import Dict, List, Optional
 
 from . import convert, normalize, reconcile
-from .aoi import bbox_of_geometry, geometry_touches
+from .aoi import BoundaryIndex, bbox_of_geometry, geometry_touches
 from .drivers import Context, get_driver
 from .model import LayerResult
 
@@ -43,7 +43,7 @@ def clip_layer(res: LayerResult, ctx: Context) -> int:
         return 0
     keep = []
     for f in res.features:
-        if f.geometry and geometry_touches(f.geometry, ctx.boundary, ctx.bbox):
+        if f.geometry and geometry_touches(f.geometry, ctx.boundary, ctx.bbox, ctx.boundary_index):
             keep.append(f)
     dropped = len(res.features) - len(keep)
     res.features = keep
@@ -93,11 +93,19 @@ def run_build(ctx: Context, sources: List[dict], out_dir: str,
     rows: List[dict] = []
     written: List[str] = []
 
+    boundary_expected = any(s["layer"] in BOUNDARY_LAYERS for s in order)
+
     # ---- phase 1: fetch + normalize + clip ---------------------------------
     for spec in order:
         logical = spec["layer"]
         sid = spec.get("id", logical)
         t0 = time.time()
+        if (logical not in BOUNDARY_LAYERS and boundary_expected and ctx.boundary is None
+                and ctx.clip and ctx.aoi.kind in ("county", "state", "region")):
+            raise RuntimeError(
+                f"the boundary layer for {ctx.aoi.describe()} failed, so features cannot be clipped; "
+                "refusing to write a pack from the state envelope. Fix the boundary source "
+                "(TIGER download) or re-run with --no-clip to accept envelope-scoped output")
         try:
             log(f"[>] {sid}  ({spec['driver']})")
             res = get_driver(spec["driver"])(logical, spec, ctx)
@@ -119,6 +127,7 @@ def run_build(ctx: Context, sources: List[dict], out_dir: str,
             bb = bbox_of_geometry(ctx.boundary) if ctx.boundary else None
             if bb:
                 ctx.bbox = bb
+                ctx.boundary_index = BoundaryIndex(ctx.boundary)
                 log(f"[*] boundary set from {logical}: bbox={tuple(round(x, 4) for x in bb)}")
 
         # a layer key can come from several sources (EIA + OSM): keep both documents

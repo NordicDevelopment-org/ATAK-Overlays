@@ -81,19 +81,40 @@ endpoints, and backs off on 429/504. For a whole country or the planet use the
 | levees, leveed_areas | USACE National Levee Database | `geospatial.sec.usace.army.mil/dls/rest/services/NLD/Public/FeatureServer/15,16` | SYSTEM_NAME | medium | live |
 | wastewater_treatment | EPA FRS / ICIS-NPDES | `geodata.epa.gov/arcgis/rest/services/OEI/FRS_Wastewater/MapServer/1` | CWP_TOTAL_DESIGN_FLOW_NMBR (MGD), CWP_FACILITY_TYPE_INDICATOR | high | live |
 | water_service_areas | EPA CWS Service Area Boundaries | `services.arcgis.com/cJ9YHowT8TU7DUyn/.../Water_System_Boundaries/FeatureServer/0` | Population Served Count | medium | live |
-| comm_towers | FCC Antenna Structure Registration | `data.fcc.gov/download/pub/uls/complete/r_tower.zip` | height AGL/AMSL (m), structure type, owner, status | medium | live, weekly |
-| hospitals, fire_stations, police, ems, eoc (off) | HIFLD via NASA mirror (placeholders) | `maps.nccs.nasa.gov/mapping/rest/services/hifld_open/...` | BEDS, TRAUMA, HELIPAD | low | frozen; confirm path |
-| airports | FAA AIS Airports | `services6.arcgis.com/ssFJjBXIUyZDrSYZ/.../Airports/FeatureServer/0` | TYPE_CODE, ELEVATION | medium | live |
-| railways | BTS NTAD North American Rail Network | `geo.dot.gov/.../Hosted/North_American_Rail_Network_Lines/FeatureServer/0` | RROWNER1, TRACKS, NET | medium | live |
-| rail_facilities | BTS NTAD Amtrak Stations | `geo.dot.gov/.../Hosted/Amtrak_Stations/FeatureServer/0` | - | medium | live |
-| bridges | FHWA NBI via NTAD | `geo.dot.gov/.../Hosted/National_Bridge_Inventory/FeatureServer/0` | YEAR_BUILT_027, ADT_029, condition | medium | live |
-| ports | BTS NTAD Principal Ports | `geo.dot.gov/.../Hosted/Principal_Ports/FeatureServer/0` | - | medium | live |
+| comm_towers | FCC Antenna Structure Registration (weekly) | `data.fcc.gov/download/pub/uls/complete/r_tower.zip` | height AGL/AMSL (m), structure type, owner, status | high | live, weekly |
+| comm_towers (cellular) | HIFLD-derived FCC ULS extract, Esri Federal User Community | `services2.arcgis.com/FiaPA4ga0iQKduv3/.../Cellular_Towers_in_the_United_States/FeatureServer/0` | LICENSEE, CALLSIGN, ALLSTRUC (m) | medium | frozen |
+| comm_towers (microwave) | HIFLD 2019 snapshot, NASA NCCS re-host | `maps.nccs.nasa.gov/mapping/rest/services/hifld_open/communications/FeatureServer` (microwave_service_towers) | allstruc, supstruc (m) | medium | frozen |
+| psap | HIFLD PSAP 911 service-area polygons, NASA re-host | `.../hifld_open/emergency_services/FeatureServer` (psap) | - | medium | frozen |
+| hospitals | HIFLD final snapshot, NASA NCCS re-host | `maps.nccs.nasa.gov/mapping/rest/services/hifld_open/public_health/FeatureServer` (hospitals, id 0) | BEDS, TRAUMA, HELIPAD, TTL_STAFF, OWNER | high | frozen |
+| hospitals | USGS National Map Structures (live successor) | `carto.nationalmap.gov/arcgis/rest/services/structures/MapServer` (Hospitals/Medical Centers, id 49) | - | high | live |
+| nursing_homes, urgent_care, pharmacies (off) | HIFLD snapshot, NASA re-host | `.../hifld_open/public_health/FeatureServer` ids 1, 4, 2 | beds, tot_res, tot_staff | high/medium | frozen |
+| fire_stations | HIFLD snapshot, NASA re-host | `.../hifld_open/emergency_services/FeatureServer` (fire_stations, id 4) | FDID, EMERGTEL | high | frozen |
+| fire_stations | USGS National Map Structures | `carto.nationalmap.gov/.../structures/MapServer` (Fire Stations/EMS Stations, id 16) | - | high | live |
+| ems | HIFLD snapshot, NASA re-host | `.../hifld_open/emergency_services/FeatureServer` (ems_stations, id 2) | level_, specialty | high | frozen |
+| police | HIFLD Local Law Enforcement, NASA re-host | `.../hifld_open/law_enforcement/FeatureServer/1` | TYPE, POPULATION | high | frozen |
+| police | USGS National Map Structures | `carto.nationalmap.gov/.../structures/MapServer` (Police Stations, id 18) | - | high | live |
+| correctional | HIFLD Prison Boundaries, NASA re-host | `.../hifld_open/law_enforcement/FeatureServer` (prison_boundaries) | CAPACITY, POPULATION, SECURELVL | medium | frozen |
+| eoc | FEMA State EOCs | `gis.fema.gov/arcgis/rest/services/FEMA/STATE_EOC/FeatureServer/0` | - | high | live |
+| eoc (local) | HIFLD Local EOCs, NASA re-host | `.../hifld_open/emergency_services/FeatureServer` (local_emergency_ops_centers) | - | low | frozen, no successor |
+| shelters | FEMA National Shelter System facilities | `gis.fema.gov/arcgis/rest/services/NSS/NSS_flex_facilities/FeatureServer` | EVACUATION_CAPACITY, POST_IMPACT_CAPACITY | medium | live |
+| schools | NCES EDGE public schools 2023-24 | `nces.ed.gov/opengis/rest/services/K12_School_Locations/EDGE_GEOCODE_PUBLICSCH_2324/MapServer/0` | - | high | live |
+| schools (colleges) | NCES EDGE postsecondary (IPEDS) | `services1.arcgis.com/Ua5sjt3LWTPigjyD/.../Postsecondary_School_Locations_Current/FeatureServer/0` | - | high | live |
+| airports | FAA ADDS Airports | `services6.arcgis.com/ssFJjBXIUyZDrSYZ/.../US_Airport/FeatureServer/0` | TYPE_CODE, ELEVATION, OPERSTATUS | high | live |
+| railways | BTS NTAD North American Rail Network Lines | `services.arcgis.com/xOi1kZaI0eWDREZv/.../NTAD_North_American_Rail_Network_Lines/FeatureServer/0` | RROWNER1, TRACKS, NET, MILES | high | live (Apr 2026) |
+| rail_facilities | NTAD Rail Yards, Amtrak Stations, Intermodal (TOFC/COFC) | `.../NTAD_Rail_Yards/0`, `.../NTAD_Amtrak_Stations/0`, `geo.dot.gov/.../Intermodal_Freight_Facilities_Rail_TOFC_COFC_DS/0` | MILES, STNTYPE | medium-high | live |
+| rail_crossings | NTAD Railroad Grade Crossings (FRA) | `.../NTAD_Railroad_Grade_Crossings/FeatureServer/0` | POSXING, TYPEXING | medium | live (schema changed summer 2026) |
+| bridges | FHWA NBI via NTAD | `.../NTAD_National_Bridge_Inventory/FeatureServer/0` (name pattern; alt geo.dot.gov `_DS`) | YEAR_BUILT_027, ADT_029, condition | medium | live |
+| ports | BTS NTAD Principal Ports | `.../NTAD_Principal_Ports/FeatureServer/0` (name pattern; alt geo.dot.gov `_DS`) | - | medium | live |
 | roads, county/state/city boundaries | Census TIGER/Line | `www2.census.gov/geo/tiger/TIGER2024/...` | RTTYP, MTFCC | high | live, annual |
 | building_footprints | OSM via Overpass (county scale) | - | - | high | live |
 
 Not wired yet (roadmap): USGS stream gauges (NWIS RDB / OGC API), EPA ECHO
 SDWIS systems (attributes only), NLD pump stations, WRI Global Power Plant
-Database (CC BY, 2021 vintage) for non-US plants.
+Database (CC BY, 2021 vintage) for non-US plants, FCC ULS licence dumps
+(l_cell / l_micro / l_LMpriv) and the FCC LMS broadcast dump (need pipe-
+delimited multi-table parsers like `fcc_asr`), CMS nursing-home / hospital
+files (bed counts, coordinates for SNFs), USFA fire department registry
+(addresses only).
 
 ## State tiers
 
@@ -105,6 +126,10 @@ Database (CC BY, 2021 vintage) for non-US plants.
 | WI | service_territories | WI PSC Electric Service Territories (3 layers) | `maps.psc.wi.gov/server/rest/services/Electric/PSC_ElectricServiceTerritories/MapServer/0-2` | high |
 | WI | dams | WI DNR Repository of Dams | `dnrmaps.wi.gov/arcgis2/rest/services/WT_DAM/WT_Dam_WTM_Ext/MapServer` | medium |
 | IA | wastewater_treatment | Iowa DNR NPDES facilities | `programs.iowadnr.gov/geospatial/rest/services/OneStop/QueryEnvFacs/MapServer/12` | medium |
+| IA | fire_stations, hospitals, shelters, schools | Iowa HSEMD EmergencyManagement service | `eoc.iowa.gov/arcgis/rest/services/Public/EmergencyManagement/MapServer` (FireStations, Hospital, Shelter, School) | medium |
+| WI | hospitals, nursing_homes | WI DHS Facilities | `dhsgis.wi.gov/server/rest/services/DHS_GIS/Facilities/MapServer` (Hospital 5, Nursing Home 4) | high |
+| WI | ems | WI DHS licensed EMS services | `dhsgis.wi.gov/server/rest/services/DHS_RAFT/Emergency_Management_Resources/MapServer/0` | medium |
+| MN | fire_stations, police, hospitals (off) | U-Spatial / MnGeo datasets - resolve service URL from gis.data.mn.gov | see `catalog/states/mn/emergency.yaml` | low |
 | IA | service_territories (off) | Iowa Utilities Commission boundaries | resolve from geodata.iowa.gov hub item | low |
 
 MnGeo Commons pattern for adding more MN layers:

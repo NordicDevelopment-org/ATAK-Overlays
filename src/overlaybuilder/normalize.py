@@ -60,6 +60,10 @@ CANONICAL: Dict[str, Tuple[str, str, str]] = {
     "purpose":          ("Purpose", "", "{}"),
     "flow_mgd":         ("Design flow", "MGD", "{:,.2f}"),
     "population_served": ("Population served", "", "{:,.0f}"),
+    "capacity_persons": ("Capacity", "persons", "{:,.0f}"),
+    "population":       ("Population", "", "{:,.0f}"),
+    "staff":            ("Staff", "", "{:,.0f}"),
+    "security_level":   ("Security level", "", "{}"),
     "beds":             ("Beds", "", "{:,.0f}"),
     "trauma":           ("Trauma", "", "{}"),
     "helipad":          ("Helipad", "", "{}"),
@@ -131,7 +135,11 @@ DEFAULT_FROM: Dict[str, List[str]] = {
     "purpose": ["Primary Purpose", "PURPOSES", "Purposes", "PURPOSE"],
     "flow_mgd": ["Design_Flow_MGD", "DESIGN_FLOW", "Design Flow (MGD)", "FLOW_MGD", "Existing Total Flow (MGD)",
                  "AVG_FLOW_MGD"],
-    "population_served": ["POP_SERVED", "Population Served", "PopServed", "POPULATION"],
+    "population_served": ["POP_SERVED", "Population Served", "PopServed", "Population Served Count"],
+    "capacity_persons": ["EVACUATION_CAPACITY", "POST_IMPACT_CAPACITY", "CAPACITY", "Capacity", "capacity"],
+    "population": ["POPULATION", "Population", "population", "tot_res", "TOT_RES", "ENROLLMENT"],
+    "staff": ["TTL_STAFF", "tot_staff", "TOT_STAFF", "STAFF"],
+    "security_level": ["SECURELVL", "SECURITY_LEVEL", "SecureLvl"],
     "beds": ["BEDS", "Beds", "beds", "TOTAL_BEDS", "Total_Beds", "NUM_BEDS"],
     "trauma": ["TRAUMA", "Trauma", "TRAUMA_LEVEL"],
     "helipad": ["HELIPAD", "Helipad"],
@@ -168,7 +176,7 @@ _UNIT_TO_CANON = {
     ("diameter_in", "mm"): 1 / 25.4, ("diameter_in", "in"): 1.0,
     ("capacity_bpd", "Mbpd"): 1000.0, ("capacity_bpd", "bpd"): 1.0,
 }
-NUMERIC_KEYS = {k for k, (_, u, f) in CANONICAL.items() if ":" in f and f != "{}"} | {"generators", "circuits", "lines", "tracks", "beds", "year_built"}
+NUMERIC_KEYS = {k for k, (_, u, f) in CANONICAL.items() if ":" in f and f != "{}"} | {"generators", "circuits", "lines", "tracks", "beds", "year_built", "capacity_persons", "population", "staff"}
 _SUFFIX_MULT = {"": 1.0, "w": 1.0, "kw": 1e3, "mw": 1e6, "gw": 1e9, "v": 1.0, "kv": 1e3, "mv": 1e6,
                 "wh": 1.0, "kwh": 1e3, "mwh": 1e6, "gwh": 1e9, "m": 1.0, "ft": 1.0, "hz": 1.0}
 
@@ -259,7 +267,7 @@ def _convert(key: str, raw: Any, unit: Optional[str]) -> Any:
             return None
         mult = _UNIT_TO_CANON.get((key, unit), 1.0) if unit else 1.0
         val = num * mult
-        if key in ("generators", "circuits", "lines", "tracks", "beds", "year_built"):
+        if key in ("generators", "circuits", "lines", "tracks", "beds", "year_built", "capacity_persons", "population", "staff"):
             return int(round(val))
         return round(val, 4)
     s = str(raw).strip()
@@ -347,9 +355,16 @@ HEADLINES: Dict[str, List[str]] = {
     "water_towers": ["type", "height_ft", "operator"],
     "comm_towers": ["height_ft", "structure_type", "type", "owner", "operator", "source_id"],
     "data_centers": ["operator", "type", "address"],
-    "hospitals": ["beds", "trauma", "helipad", "emergency", "type", "owner", "phone", "address"],
+    "hospitals": ["beds", "trauma", "helipad", "emergency", "staff", "type", "owner", "status", "phone", "address"],
+    "nursing_homes": ["beds", "population", "staff", "type", "owner", "phone", "address"],
+    "shelters": ["capacity_persons", "type", "status", "address"],
+    "correctional": ["capacity_persons", "population", "security_level", "type", "status", "owner"],
+    "schools": ["type", "population", "address", "phone"],
+    "pharmacies": ["type", "address", "phone"],
+    "psap": ["name", "county", "state"],
+    "rail_crossings": ["type", "owner", "source_id"],
     "fire_stations": ["type", "operator", "address", "phone"],
-    "police": ["type", "operator", "address", "phone"],
+    "police": ["type", "population", "operator", "address", "phone"],
     "ems": ["type", "operator", "address", "phone"],
     "eoc": ["type", "operator", "address", "phone"],
     "airports": ["type", "runway_ft", "elevation_ft", "owner", "source_id"],

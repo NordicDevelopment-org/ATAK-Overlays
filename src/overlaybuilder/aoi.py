@@ -33,7 +33,7 @@ BBox = Tuple[float, float, float, float]  # west, south, east, north (WGS84)
 # clipping uses the real TIGER boundary once fetched. Values from the Census
 # cartographic boundary files, rounded outward.
 STATE_BBOX: Dict[str, BBox] = {
-    "AL": (-88.48, 30.14, -84.89, 35.01), "AK": (-179.24, 51.18, 179.78, 71.44),
+    "AL": (-88.48, 30.14, -84.89, 35.01), "AK": (-179.24, 51.18, -129.98, 71.44),  # western hemisphere only (Aleutians past the dateline dropped)
     "AZ": (-114.82, 31.33, -109.04, 37.01), "AR": (-94.62, 33.00, -89.64, 36.50),
     "CA": (-124.42, 32.53, -114.13, 42.01), "CO": (-109.06, 36.99, -102.04, 41.01),
     "CT": (-73.73, 40.98, -71.79, 42.06), "DE": (-75.79, 38.45, -75.05, 39.84),
@@ -62,7 +62,9 @@ STATE_BBOX: Dict[str, BBox] = {
     "VI": (-65.09, 17.67, -64.56, 18.42), "GU": (144.62, 13.23, 144.96, 13.66),
     "AS": (-171.09, -14.55, -168.14, -11.05), "MP": (144.89, 14.11, 146.07, 20.56),
 }
-US_BBOX: BBox = (-179.24, 17.67, 179.78, 71.44)     # includes AK/HI/territories
+_US_ENV = [b for k, b in STATE_BBOX.items() if k not in ("GU", "MP")]   # Pacific territories east of the dateline get their own builds
+US_BBOX: BBox = (min(b[0] for b in _US_ENV), min(b[1] for b in _US_ENV),
+                 max(b[2] for b in _US_ENV), max(b[3] for b in _US_ENV))      # 50 states + DC + PR/VI/AS
 CONUS_BBOX: BBox = (-124.85, 24.40, -66.95, 49.39)
 
 
@@ -207,7 +209,11 @@ def parse_aoi(spec: str, cache_dir: str = ".cache", county_name: Optional[str] =
         w, so, e, n = parts
         if not (w < e and so < n):
             raise ValueError("bbox must satisfy W<E and S<N")
-        return Aoi("bbox", val, f"bbox {val}", country="", bbox=(w, so, e, n))
+        # infer US states the box touches so national + state tiers apply
+        touched = [ab for ab, (bw, bs, be, bn) in STATE_BBOX.items()
+                   if not (e < bw or w > be or n < bs or so > bn)]
+        return Aoi("bbox", val, f"bbox {val}", country="US" if touched else "",
+                   bbox=(w, so, e, n), state_abbrs=sorted(touched))
     if re.fullmatch(r"\d{5}", s):          # bare FIPS
         return parse_aoi(f"county:{s}", cache_dir, county_name, regions_path)
     if s.upper() in STATE_BBOX:           # bare state abbr
@@ -283,10 +289,86 @@ def _sample_points(geom: dict):
                 yield p
 
 
-def geometry_touches(geom: dict, boundary: dict, bbox: Optional[BBox] = None) -> bool:
-    """True if any vertex of geom falls inside boundary (cheap intersects test;
-    a line crossing a county with no vertex inside is the accepted miss).
-    Points use exact PIP. bbox short-circuits."""
+def _segments(geom: dict):
+    t = geom.get("type")
+    c = geom.get("coordinates")
+    if t == "LineString":
+        yield from zip(c, c[1:])
+    elif t == "MultiLineString":
+        for line in c:
+            yield from zip(line, line[1:])
+    elif t == "Polygon":
+        for ring in c:
+            yield from zip(ring, ring[1:])
+    elif t == "MultiPolygon":
+        for poly in c:
+            for ring in poly:
+                yield from zip(ring, ring[1:])
+
+
+def _orient(a, b, c) -> float:
+    return (b[0] - a[0]) * (c[1] - a[1]) - (b[1] - a[1]) * (c[0] - a[0])
+
+
+def segments_intersect(p1, p2, q1, q2) -> bool:
+    """Proper or touching intersection of segments p1p2 and q1q2."""
+    d1, d2 = _orient(q1, q2, p1), _orient(q1, q2, p2)
+    d3, d4 = _orient(p1, p2, q1), _orient(p1, p2, q2)
+    if ((d1 > 0) != (d2 > 0)) and ((d3 > 0) != (d4 > 0)) and d1 != 0 and d2 != 0 and d3 != 0 and d4 != 0:
+        return True
+
+    def on_seg(a, b, c):
+        return (min(a[0], b[0]) <= c[0] <= max(a[0], b[0]) and min(a[1], b[1]) <= c[1] <= max(a[1], b[1]))
+    return ((d1 == 0 and on_seg(q1, q2, p1)) or (d2 == 0 and on_seg(q1, q2, p2)) or
+            (d3 == 0 and on_seg(p1, p2, q1)) or (d4 == 0 and on_seg(p1, p2, q2)))
+
+
+class BoundaryIndex:
+    """Grid index over the edges of a boundary Polygon/MultiPolygon so line and
+    polygon features that CROSS the AOI without a vertex inside are still kept."""
+
+    def __init__(self, boundary: dict, cell: Optional[float] = None):
+        self.boundary = boundary
+        bb = bbox_of_geometry(boundary) or (0, 0, 1, 1)
+        self.bbox = bb
+        self.cell = cell or max(0.02, max(bb[2] - bb[0], bb[3] - bb[1]) / 200.0)
+        self.grid: Dict[Tuple[int, int], List[Tuple[list, list]]] = {}
+        self.first_vertex = None
+        for a, b in _segments(boundary):
+            if self.first_vertex is None:
+                self.first_vertex = a
+            for key in self._cells(a, b):
+                self.grid.setdefault(key, []).append((a, b))
+
+    def _cells(self, a, b):
+        c = self.cell
+        x0, x1 = sorted((a[0], b[0]))
+        y0, y1 = sorted((a[1], b[1]))
+        for i in range(int(x0 // c), int(x1 // c) + 1):
+            for j in range(int(y0 // c), int(y1 // c) + 1):
+                yield (i, j)
+
+    def segment_crosses(self, a, b) -> bool:
+        seen = set()
+        for key in self._cells(a, b):
+            for edge in self.grid.get(key, ()):
+                eid = id(edge)
+                if eid in seen:
+                    continue
+                seen.add(eid)
+                if segments_intersect(a, b, edge[0], edge[1]):
+                    return True
+        return False
+
+    def crosses(self, geom: dict) -> bool:
+        return any(self.segment_crosses(a, b) for a, b in _segments(geom))
+
+
+def geometry_touches(geom: dict, boundary: dict, bbox: Optional[BBox] = None,
+                     index: Optional["BoundaryIndex"] = None) -> bool:
+    """Intersects test against the AOI: any vertex inside the boundary, OR any
+    segment crossing a boundary edge (needs `index`), OR the feature polygon
+    containing the boundary. Points use exact point-in-polygon. bbox short-circuits."""
     if not geom:
         return False
     if bbox:
@@ -298,6 +380,15 @@ def geometry_touches(geom: dict, boundary: dict, bbox: Optional[BBox] = None) ->
     for p in _sample_points(geom):
         if point_in_geometry(p[0], p[1], boundary):
             return True
+    if geom.get("type") == "Point":
+        return False
+    if index is not None:
+        if index.crosses(geom):
+            return True
+        if geom.get("type") in ("Polygon", "MultiPolygon") and index.first_vertex is not None:
+            fv = index.first_vertex
+            if point_in_geometry(fv[0], fv[1], geom):
+                return True
     return False
 
 

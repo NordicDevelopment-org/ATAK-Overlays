@@ -95,8 +95,8 @@ def _osm_number(v) -> Optional[float]:
         if not m:
             continue
         num, unit = float(m.group(1)), m.group(2)
-        mult = {"k": 1e3, "kv": 1e3, "kw": 1e3, "m": 1e6, "mw": 1e6, "mv": 1e6,
-                "g": 1e9, "gw": 1e9}.get(unit, 1.0)
+        mult = {"k": 1e3, "kv": 1e3, "kw": 1e3, "mw": 1e6, "mv": 1e6, "mwh": 1e6,
+                "g": 1e9, "gw": 1e9, "m": 1.0, "ft": 0.3048}.get(unit, 1.0)   # 'm' = metres, not mega
         vals.append(num * mult)
     return max(vals) if vals else None
 
@@ -177,6 +177,12 @@ def _relation_geometry(el: dict, tags: dict, mode: str):
                 polys.append([o] + i_rings)   # holes assigned to every outer: acceptable approx
             return {"type": "MultiPolygon", "coordinates": polys} if len(polys) > 1 \
                 else {"type": "Polygon", "coordinates": polys[0]}
+        if tags.get("type") == "multipolygon":
+            # unstitchable (partial download / broken relation): fall back to the centroid
+            pts = [p for w in outers + inners for p in w]
+            if pts:
+                return {"type": "Point", "coordinates": [sum(p[0] for p in pts) / len(pts),
+                                                          sum(p[1] for p in pts) / len(pts)]}
     allines = outers + inners + lines
     if allines:
         return {"type": "MultiLineString", "coordinates": allines} if len(allines) > 1 \
@@ -213,15 +219,30 @@ def element_to_geometry(el: dict, mode: str = "auto"):
 
 # ---- query -----------------------------------------------------------------
 def build_query(selectors: List[str], elements: str, scope: str, timeout: int,
-                out: str = "geom") -> Tuple[str, list]:
+                out: str = "geom", prelude: str = "") -> Tuple[str, list]:
     numeric_all = []
     union = []
     for sel in selectors:
         ql, numeric = _parse_selector(sel)
         numeric_all.extend(numeric)
         union.append(f"{elements}{ql}{scope};")
-    q = f"[out:json][timeout:{timeout}];({''.join(union)});out {out} qt;"
+    q = f"[out:json][timeout:{timeout}];{prelude}({''.join(union)});out {out} qt;"
     return q, numeric_all
+
+
+def _country_prelude(cc: str) -> str:
+    return f'area["ISO3166-1"="{cc}"]["admin_level"="2"]->.a;'
+
+
+def country_bounds(cc: str, endpoints: List[str], timeout: int, min_iv: float):
+    """(west, south, east, north) of the country's admin_level=2 relation, or None."""
+    q = f'[out:json][timeout:{timeout}];rel["ISO3166-1"="{cc}"]["admin_level"="2"];out bb;'
+    js = _run(q, endpoints, timeout, min_iv)
+    for el in js.get("elements", []):
+        b = el.get("bounds")
+        if b:
+            return (b["minlon"], b["minlat"], b["maxlon"], b["maxlat"])
+    return None
 
 
 def _run(q: str, endpoints: List[str], timeout: int, min_interval: float) -> dict:
@@ -229,7 +250,7 @@ def _run(q: str, endpoints: List[str], timeout: int, min_interval: float) -> dic
     for ep in endpoints:
         for attempt in range(3):
             try:
-                raw = http_get(ep, data=("data=" + _urlq(q)).encode("utf-8"),
+                raw = http_get(ep, data=("data=" + _urlq(q)).encode("utf-8"), tries=1,
                                timeout=timeout + 30, cache=False, min_interval=min_interval,
                                headers={"Content-Type": "application/x-www-form-urlencoded"})
                 js = json.loads(raw)
@@ -261,21 +282,32 @@ def fetch_elements(selectors, elements, ctx: Context, spec: dict) -> Tuple[List[
     seen: Dict[Tuple[str, int], dict] = {}
     numeric = []
     notes = []
-    if ctx.aoi.kind == "country" and ctx.aoi.country and not ctx.bbox:
-        scope = "(area.a)"
-        q, numeric = build_query(selectors, elements, scope, timeout, out)
-        q = q.replace("[out:json]", "[out:json]", 1)
-        q = (f"[out:json][timeout:{timeout}];"
-             f'area["ISO3166-1"="{ctx.aoi.country}"]["admin_level"="2"]->.a;'
-             + q.split(";", 1)[1])
-        for el in _run(q, endpoints, timeout, min_iv).get("elements", []):
-            seen[(el["type"], el["id"])] = el
+    max_tiles = int(spec.get("max_tiles", ctx.options.get("max_tiles", 200)))
+    if ctx.aoi.kind == "country" and ctx.aoi.country:
+        cc = ctx.aoi.country
+        if not ctx.bbox:
+            bb = country_bounds(cc, endpoints, 60, min_iv)
+            if not bb:
+                raise RuntimeError(f"no OSM admin_level=2 relation with ISO3166-1={cc}; check the country code")
+            ctx.bbox = bb
+            notes.append(f"country bounds from OSM: {tuple(round(x, 3) for x in bb)}")
+        tiles = tile_bbox(ctx.bbox, float(spec.get("tile_deg", 1.0)))
+        if len(tiles) > max_tiles:
+            raise RuntimeError(
+                f"country {cc} needs {len(tiles)} Overpass tiles (> max_tiles={max_tiles}); use the osm_pbf "
+                f"driver with a Geofabrik extract, a larger tile_deg, or raise max_tiles")
+        if len(tiles) > 1:
+            notes.append(f"{len(tiles)} bbox tiles within the country area")
+        for (w, s, e, n) in tiles:
+            scope = f"(area.a)({s:.6f},{w:.6f},{n:.6f},{e:.6f})"
+            q, numeric = build_query(selectors, elements, scope, timeout, out, _country_prelude(cc))
+            for el in _run(q, endpoints, timeout, min_iv).get("elements", []):
+                seen[(el["type"], el["id"])] = el
     elif ctx.aoi.kind == "world" or not ctx.bbox:
         raise RuntimeError("overpass refuses a world/unbounded AOI; use --aoi country:XX, "
                            "a bbox, or the osm_pbf driver with a planet extract")
     else:
         tiles = tile_bbox(ctx.bbox, float(spec.get("tile_deg", 1.0)))
-        max_tiles = int(spec.get("max_tiles", ctx.options.get("max_tiles", 200)))
         if len(tiles) > max_tiles:
             raise RuntimeError(
                 f"AOI needs {len(tiles)} Overpass tiles (> max_tiles={max_tiles}); use a smaller AOI, "
