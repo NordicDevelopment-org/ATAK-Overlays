@@ -113,19 +113,38 @@ def _esc(s):
     return str(s).replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
 
 
+def _xy(c):
+    """A usable (x, y) pair, or None. Sources ship nulls, strings and short tuples."""
+    if not c or len(c) < 2:
+        return None
+    try:
+        x, y = float(c[0]), float(c[1])
+    except (TypeError, ValueError):
+        return None
+    if x != x or y != y or x in (float("inf"), float("-inf")) or y in (float("inf"), float("-inf")):
+        return None
+    return x, y
+
+
 def _coords(seq, prec):
-    return " ".join(f"{c[0]:.{prec}f},{c[1]:.{prec}f},0" for c in seq if len(c) >= 2)
+    pts = [p for p in (_xy(c) for c in seq or ()) if p]
+    return " ".join(f"{x:.{prec}f},{y:.{prec}f},0" for x, y in pts)
 
 
 def _poly(rings, prec):
     if not rings:
         return ""
+    outer = _coords(rings[0], prec)
+    if not outer:
+        return ""
     out = ["<Polygon><tessellate>1</tessellate>",
-           f"<outerBoundaryIs><LinearRing><coordinates>{_coords(rings[0], prec)}"
+           f"<outerBoundaryIs><LinearRing><coordinates>{outer}"
            "</coordinates></LinearRing></outerBoundaryIs>"]
     for inner in rings[1:]:
-        out.append(f"<innerBoundaryIs><LinearRing><coordinates>{_coords(inner, prec)}"
-                   "</coordinates></LinearRing></innerBoundaryIs>")
+        ring = _coords(inner, prec)
+        if ring:
+            out.append(f"<innerBoundaryIs><LinearRing><coordinates>{ring}"
+                       "</coordinates></LinearRing></innerBoundaryIs>")
     out.append("</Polygon>")
     return "".join(out)
 
@@ -140,20 +159,29 @@ def _geom(g, prec=6):
     if c is None:
         return ""
     if t == "Point":
-        return f"<Point><coordinates>{c[0]:.{prec}f},{c[1]:.{prec}f},0</coordinates></Point>"
+        p = _xy(c)
+        return f"<Point><coordinates>{p[0]:.{prec}f},{p[1]:.{prec}f},0</coordinates></Point>" if p else ""
     if t == "MultiPoint":
-        return "<MultiGeometry>" + "".join(
-            f"<Point><coordinates>{p[0]:.{prec}f},{p[1]:.{prec}f},0</coordinates></Point>" for p in c) + "</MultiGeometry>"
+        pts = [p for p in (_xy(q) for q in c) if p]
+        return ("<MultiGeometry>" + "".join(
+            f"<Point><coordinates>{x:.{prec}f},{y:.{prec}f},0</coordinates></Point>" for x, y in pts)
+            + "</MultiGeometry>") if pts else ""
     if t == "LineString":
-        return f"<LineString><tessellate>1</tessellate><coordinates>{_coords(c, prec)}</coordinates></LineString>"
+        line = _coords(c, prec)
+        return (f"<LineString><tessellate>1</tessellate><coordinates>{line}"
+                "</coordinates></LineString>") if line.count(",") >= 3 else ""
     if t == "MultiLineString":
-        return "<MultiGeometry>" + "".join(
-            f"<LineString><tessellate>1</tessellate><coordinates>{_coords(l, prec)}</coordinates></LineString>"
-            for l in c) + "</MultiGeometry>"
+        parts = [_coords(l, prec) for l in c]
+        parts = [p for p in parts if p.count(",") >= 3]
+        return ("<MultiGeometry>" + "".join(
+            f"<LineString><tessellate>1</tessellate><coordinates>{p}</coordinates></LineString>"
+            for p in parts) + "</MultiGeometry>") if parts else ""
     if t == "Polygon":
         return _poly(c, prec)
     if t == "MultiPolygon":
-        return "<MultiGeometry>" + "".join(_poly(p, prec) for p in c) + "</MultiGeometry>"
+        parts = [_poly(p, prec) for p in c]
+        parts = [p for p in parts if p]
+        return ("<MultiGeometry>" + "".join(parts) + "</MultiGeometry>") if parts else ""
     return ""
 
 
@@ -191,11 +219,11 @@ def _rules(spec: Optional[dict]):
     return list((spec or {}).get("style_rules") or [])
 
 
-def _style_id_for(layer_key: str, props: dict, rules) -> str:
+def _style_id_for(style_key: str, props: dict, rules) -> str:
     for i, r in enumerate(rules):
         if _eval_cond(props, r.get("when", "")):
-            return f"{layer_key}_r{i}"
-    return layer_key
+            return f"{style_key}_r{i}"
+    return style_key
 
 
 def _style_block(style_id: str, color: str, fill: str, width: int, icon: str, label_scale: float = 0.8) -> str:
@@ -208,12 +236,16 @@ def _style_block(style_id: str, color: str, fill: str, width: int, icon: str, la
             '</Style>')
 
 
-def styles_and_icons(layer_key: str, spec: Optional[dict]) -> Tuple[str, Dict[str, bytes]]:
+def styles_and_icons(layer_key: str, spec: Optional[dict],
+                     style_key: Optional[str] = None) -> Tuple[str, Dict[str, bytes]]:
+    """style_key defaults to the layer key; a combined pack passes the document
+    key instead so two sources of the same layer keep their own style rules."""
+    style_key = style_key or layer_key
     color, fill, width, icon, _, _ = style_for(layer_key, spec)
-    blocks = [_style_block(layer_key, color, fill, width, icon)]
-    icons = {f"icons/{layer_key}.png": make_icon(icon, kml_color_to_rgb(color))}
+    blocks = [_style_block(style_key, color, fill, width, icon)]
+    icons = {f"icons/{style_key}.png": make_icon(icon, kml_color_to_rgb(color))}
     for i, r in enumerate(_rules(spec)):
-        sid = f"{layer_key}_r{i}"
+        sid = f"{style_key}_r{i}"
         c, f, w, ic = r.get("color", color), r.get("fill", fill), int(r.get("width", width)), r.get("icon", icon)
         blocks.append(_style_block(sid, c, f, w, ic))
         icons[f"icons/{sid}.png"] = make_icon(ic, kml_color_to_rgb(c))
@@ -253,16 +285,18 @@ def _extended(props: dict) -> str:
     return f"<ExtendedData>{''.join(rows)}</ExtendedData>" if rows else ""
 
 
-def _placemark(ft: Feature, layer_key: str, spec: Optional[dict], rules, prec: int, prov=None) -> str:
+def _placemark(ft: Feature, layer_key: str, spec: Optional[dict], rules, prec: int, prov=None,
+               style_key: Optional[str] = None) -> str:
     g = _geom(ft.geometry, prec)
     if not g:
         return ""
     props = ft.properties or {}
-    sid = _style_id_for(layer_key, props, rules)
+    sid = _style_id_for(style_key or layer_key, props, rules)
     name = feature_name(props, spec, layer_key)
-    return (f"<Placemark><name>{_esc(name)}</name><styleUrl>#{sid}</styleUrl>"
+    # KML 2.2 element sequence: name, visibility, description, styleUrl, ExtendedData, geometry
+    return (f"<Placemark><name>{_esc(name)}</name>"
             f"<description>{_description(props, layer_key, prov)}</description>"
-            f"{_extended(props)}{g}</Placemark>")
+            f"<styleUrl>#{sid}</styleUrl>{_extended(props)}{g}</Placemark>")
 
 
 def _prop(props, field):
@@ -305,15 +339,16 @@ def _bucketize(features: List[Feature], group_by: Optional[List[str]]):
     return None, OrderedDict([(None, features)])
 
 
-def _folder(label, features, layer_key, spec, rules, visible, prec, prov=None):
-    inner = "".join(_placemark(f, layer_key, spec, rules, prec, prov) for f in features)
+def _folder(label, features, layer_key, spec, rules, visible, prec, prov=None, style_key=None):
+    inner = "".join(_placemark(f, layer_key, spec, rules, prec, prov, style_key) for f in features)
     if not inner:
         return ""
     vis = "" if visible else "<visibility>0</visibility>"
     cnt = inner.count("<Placemark>")
     if label is None:
         return inner
-    return f"<Folder><name>{_esc(label)} ({cnt})</name><open>0</open>{vis}{inner}</Folder>"
+    # KML 2.2 sequence: name, visibility, open, then features
+    return f"<Folder><name>{_esc(label)} ({cnt})</name>{vis}<open>0</open>{inner}</Folder>"
 
 
 def _prov_cdata(p) -> str:
@@ -335,39 +370,48 @@ def layer_kml(result: LayerResult, spec: Optional[dict] = None, precision: int =
                    for lbl, fs in buckets.items())
     doc_vis = "" if visible else "<visibility>0</visibility>"
     name = title or (spec or {}).get("title") or lk
+    # KML 2.2 sequence: name, visibility, open, description, styles, features
     kml = ('<?xml version="1.0" encoding="UTF-8"?>'
            '<kml xmlns="http://www.opengis.net/kml/2.2"><Document>'
-           f"<name>{_esc(name)}</name><description>{_prov_cdata(result.provenance)}</description>"
-           f"<open>0</open>{doc_vis}{styles}{body}</Document></kml>")
+           f"<name>{_esc(name)}</name>{doc_vis}<open>0</open>"
+           f"<description>{_prov_cdata(result.provenance)}</description>"
+           f"{styles}{body}</Document></kml>")
     return kml, icons
 
 
 def combined_kml(results: List[LayerResult], specs: Optional[Dict[str, dict]] = None,
                  precision: int = 6, title: str = "Overlays") -> Tuple[str, Dict[str, bytes]]:
-    """One Document: Folder per sector > Folder per layer > bucket folders."""
+    """One Document: Folder per sector > Folder per source document > bucket folders.
+
+    `specs` is keyed by each result's `doc_key` (falling back to its layer key), so
+    two sources of the same layer - EIA and OSM power plants, rail yards and Amtrak
+    stations - keep their own titles, visibility, name templates and style rules.
+    """
     specs = specs or {}
     styles, icons = [], {}
     by_sector: "OrderedDict[str, List[str]]" = OrderedDict()
-    seen = set()
+    seen_style = set()
     for r in results:
-        spec = specs.get(r.logical)
         lk = r.logical
+        doc_key = getattr(r, "doc_key", lk)
+        spec = specs.get(doc_key, specs.get(lk))
         _, _, _, _, hidden, sector = style_for(lk, spec)
-        if lk not in seen:
-            s, ic = styles_and_icons(lk, spec)
-            styles.append(s)
+        style_key = doc_key
+        if style_key not in seen_style:
+            blocks, ic = styles_and_icons(lk, spec, style_key)
+            styles.append(blocks)
             icons.update(ic)
-            seen.add(lk)
+            seen_style.add(style_key)
         rules = _rules(spec)
         _, buckets = _bucketize(r.features, r.group_by)
-        sub = "".join(_folder(lbl, fs, lk, spec, rules, not hidden, precision, r.provenance)
+        sub = "".join(_folder(lbl, fs, lk, spec, rules, not hidden, precision, r.provenance, style_key)
                       for lbl, fs in buckets.items())
         if not sub:
             continue
         vis = "" if not hidden else "<visibility>0</visibility>"
-        name = (spec or {}).get("title") or lk
+        name = (spec or {}).get("title") or doc_key
         by_sector.setdefault(sector, []).append(
-            f"<Folder><name>{_esc(name)} ({sub.count('<Placemark>')})</name><open>0</open>{vis}"
+            f"<Folder><name>{_esc(name)} ({sub.count('<Placemark>')})</name>{vis}<open>0</open>"
             f"<description>{_prov_cdata(r.provenance)}</description>{sub}</Folder>")
     folders = "".join(f"<Folder><name>{_esc(sec)}</name><open>0</open>{''.join(fs)}</Folder>"
                       for sec, fs in by_sector.items())

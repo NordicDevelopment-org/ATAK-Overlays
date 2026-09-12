@@ -119,7 +119,7 @@ DEFAULT_FROM: Dict[str, List[str]] = {
              "FAC_TYPE", "Facility_Type", "NAICS_DESC", "healthcare", "emergency", "Dam Type", "DAM_TYPE",
              "Primary Dam Type", "pipeline", "usage", "railway", "aeroway", "telecom", "landuse"],
     "substance": ["substance", "SUBSTANCE", "COMMODITY", "Commodity", "content", "Product", "PRODUCT"],
-    "diameter_in": ["DIAMETER", "Diameter", "diameter@mm", "DIAM_IN", "Pipe_Diameter"],
+    "diameter_in": ["DIAMETER", "Diameter", "!diameter@mm", "DIAM_IN", "Pipe_Diameter"],
     "pressure": ["pressure", "PRESSURE", "MAOP"],
     "capacity_bpd": ["Cap_Bpd", "CAP_BPD", "Capacity_BPD", "Barrels_per_Day", "AD_Mbpd@Mbpd", "Total_Cap_BPD",
                      "Crude_Cap", "BBLS_DAY", "Cap_BPCD", "Working_Storage_Cap_BBL"],
@@ -129,7 +129,7 @@ DEFAULT_FROM: Dict[str, List[str]] = {
     "storage_acre_ft": ["Max Storage (Acre-Ft)", "MAX_STOR", "Max_Storage", "NID Storage (Acre-Ft)", "NID_STOR",
                         "Normal Storage (Acre-Ft)"],
     "height_ft": ["Dam Height (Ft)", "DAM_HEIGHT", "NID Height (Ft)", "NID_HEIGHT", "HEIGHT_FT", "OVERALL_HGT",
-                  "Height", "STRUC_HGT", "height@m", "ELEV_HGT"],
+                  "Height", "STRUC_HGT", "!height@m", "ELEV_HGT"],
     "hazard_class": ["Hazard Potential Classification", "HAZARD", "Hazard", "HAZARD_CLASS", "NID Hazard"],
     "condition": ["Condition Assessment", "CONDITION", "Condition", "COND_ASSESS", "LOWEST_RATING"],
     "year_built": ["Year Completed", "YEAR_COMPL", "YEAR_BUILT", "Year_Built", "start_date", "Operating Year",
@@ -147,8 +147,8 @@ DEFAULT_FROM: Dict[str, List[str]] = {
     "helipad": ["HELIPAD", "Helipad"],
     "emergency": ["emergency", "EMERGENCY", "ER"],
     "tracks": ["TRACKS", "Tracks", "tracks"],
-    "runway_ft": ["MAX_RWY_LENGTH", "Longest_Runway", "RUNWAY_LEN", "LONGEST_RUNWAY", "length@m"],
-    "elevation_ft": ["ELEVATION", "ELEV", "Elevation", "ele@m", "GROUND_ELEV"],
+    "runway_ft": ["MAX_RWY_LENGTH", "Longest_Runway", "RUNWAY_LEN", "LONGEST_RUNWAY", "!length@m"],
+    "elevation_ft": ["ELEVATION", "ELEV", "Elevation", "!ele@m", "GROUND_ELEV"],
     "structure_type": ["STRUCTURE_TYPE", "Structure_Type", "STRUC_TYPE", "tower:construction", "TOWER_TYPE"],
     "address": ["ADDRESS", "Address", "addr:full", "STREET", "Street_Address", "FULLADDR", "ADDR"],
     "city": ["CITY", "City", "addr:city", "MUNICIPALITY", "CTU_NAME"],
@@ -162,7 +162,7 @@ DEFAULT_FROM: Dict[str, List[str]] = {
     "website": ["WEBSITE", "Website", "website", "URL", "contact:website"],
     "start_date": ["start_date", "Operating Year", "YEAR_COMPL", "Year Completed", "ONLINE_DATE"],
     "adt": ["ADT", "ADT_029", "AADT", "Average Daily Traffic"],
-    "length_ft": ["STRUCTURE_LEN_MT@m", "Structure_Length", "LENGTH_FT", "Length"],
+    "length_ft": ["STRUCTURE_LEN_MT@m", "Structure_Length", "LENGTH_FT"],
 }
 
 # Unit -> multiplier to reach the canonical unit of the key.
@@ -176,6 +176,8 @@ _UNIT_TO_CANON = {
     ("runway_ft", "m"): 3.28084, ("runway_ft", "ft"): 1.0,
     ("elevation_ft", "m"): 3.28084, ("elevation_ft", "ft"): 1.0,
     ("length_ft", "m"): 3.28084, ("length_ft", "ft"): 1.0,
+    ("length_ft", "mi"): 5280.0, ("length_ft", "km"): 3280.84, ("length_ft", "nmi"): 6076.12,
+    ("height_ft", "km"): 3280.84, ("runway_ft", "mi"): 5280.0, ("elevation_ft", "km"): 3280.84,
     ("diameter_in", "mm"): 1 / 25.4, ("diameter_in", "in"): 1.0,
     ("capacity_bpd", "Mbpd"): 1000.0, ("capacity_bpd", "bpd"): 1.0,
 }
@@ -238,22 +240,43 @@ def _get_loose(props: dict, field: str):
     return None
 
 
-DEFAULT_NULLS = {"-999999", "-99999", "-9999", "-999", "NOT AVAILABLE", "UNKNOWN", "N/A", "NA", "NULL", "NONE"}
+DEFAULT_NULLS = {"NOT AVAILABLE", "NOT APPLICABLE", "UNKNOWN", "N/A", "NA", "NULL", "NONE", "-"}
+# Sentinels governments use for "no value" in numeric columns (HIFLD, NBI, FAA).
+# Compared numerically so -999, -999.0 and "-999" are all caught.
+NULL_NUMBERS = {-999.0, -9999.0, -99999.0, -999999.0, -9999999.0, -1e30}
 
 
 def _is_null(raw: Any, extra) -> bool:
     s = str(raw).strip().upper()
     if s in DEFAULT_NULLS:
         return True
+    try:
+        f = float(s.replace(",", ""))
+    except (TypeError, ValueError):
+        f = None
+    if f is not None and f in NULL_NUMBERS:
+        return True
     for n in extra or ():
         if s == str(n).strip().upper():
             return True
         try:
-            if float(s) == float(n):
+            if f is not None and f == float(n):
                 return True
         except (TypeError, ValueError):
             pass
     return False
+
+
+def _split_candidate(f: str) -> Tuple[str, Optional[str], bool]:
+    """`FIELD`, `FIELD@unit`, or `!FIELD@unit` (leading ! = exact spelling only,
+    for lowercase OSM tags like `length@m` that would otherwise capture a
+    source's unrelated `LENGTH` column)."""
+    exact_only = f.startswith("!")
+    f = f[1:] if exact_only else f
+    if "@" in f:
+        n, u = f.split("@", 1)
+        return n, u, exact_only
+    return f, None, exact_only
 
 
 def _candidates(key: str, spec_fields: dict) -> List[Tuple[str, Optional[str]]]:
@@ -265,19 +288,25 @@ def _candidates(key: str, spec_fields: dict) -> List[Tuple[str, Optional[str]]]:
         if isinstance(frm, str):
             frm = [frm]
         for f in frm:
-            if "@" in f:
-                n, u = f.split("@", 1)
-                out.append((n, u))
-            else:
-                out.append((f, unit))
+            n, u, exact = _split_candidate(f)
+            out.append((n, u if u is not None else unit, exact))
     if not cfg or (isinstance(cfg, dict) and cfg.get("defaults", True)):
         for f in DEFAULT_FROM.get(key, []):
-            if "@" in f:
-                n, u = f.split("@", 1)
-                out.append((n, u))
-            else:
-                out.append((f, None))
+            n, u, exact = _split_candidate(f)
+            out.append((n, u, exact))
     return out
+
+
+class UnknownUnit(ValueError):
+    """A catalog mapping declared `FIELD@unit` for a unit with no conversion."""
+
+
+def known_unit(key: str, unit: Optional[str]) -> bool:
+    """True when `FIELD@unit` for this canonical key has a defined conversion."""
+    if not unit:
+        return True
+    canonical = CANONICAL.get(key, ("", "", ""))[1]
+    return (key, unit) in _UNIT_TO_CANON or unit == canonical
 
 
 def _convert(key: str, raw: Any, unit: Optional[str]) -> Any:
@@ -285,6 +314,10 @@ def _convert(key: str, raw: Any, unit: Optional[str]) -> Any:
         num = parse_number(raw, unit)
         if num is None:
             return None
+        if unit and not known_unit(key, unit):
+            # silently treating "3.2 miles" as 3.2 feet is the worst outcome
+            raise UnknownUnit(f"no conversion from '{unit}' to {key} "
+                              f"({CANONICAL.get(key, ('', '?'))[1]}); add it to _UNIT_TO_CANON")
         mult = _UNIT_TO_CANON.get((key, unit), 1.0) if unit else 1.0
         val = num * mult
         if key in ("generators", "circuits", "lines", "tracks", "beds", "year_built", "capacity_persons", "population", "staff"):
@@ -311,12 +344,17 @@ def normalize_props(props: dict, spec: Optional[dict] = None) -> Dict[str, Any]:
         found = False
         # exact spelling first (OSM keys are lowercase and collide with nothing),
         # then case-insensitive, then ignoring punctuation ("Dam Name" ~ DAM_NAME)
-        for getter in (lambda p, f: p.get(f), _get_ci, _get_loose):
-            for field, unit in cands:
+        for strictness, getter in enumerate((lambda p, f: p.get(f), _get_ci, _get_loose)):
+            for field, unit, exact_only in cands:
+                if exact_only and strictness > 0:
+                    continue                      # lowercase OSM tag: exact spelling only
                 raw = getter(props, field)
                 if raw in (None, "") or _is_null(raw, nulls):
                     continue
-                val = _convert(key, raw, unit)
+                try:
+                    val = _convert(key, raw, unit)
+                except UnknownUnit:
+                    raise
                 if val is not None:
                     out[key] = val
                     found = True
@@ -407,26 +445,72 @@ def headline(props: dict, layer_key: str) -> List[Tuple[str, str]]:
     return rows
 
 
+_PLACEHOLDER = re.compile(r"\{([A-Za-z_][A-Za-z0-9_]*)\}")
+_SEPARATOR = re.compile(r"^(\s*[,;|]\s*|\s+[-/]\s+)$")
+_GROUPS = re.compile(r"(\([^()]*\)|\[[^\[\]]*\])")
+
+
+def _render_run(text: str, values: dict) -> str:
+    """Substitute a template run, dropping any comma/dash-delimited piece whose
+    placeholder resolved to nothing - so "{name} ({beds} beds)" with no bed count
+    yields "St Marys", never "St Marys ( beds)"."""
+    pieces = re.split(r"(\s*[,;|]\s*|\s+[-/]\s+)", text)
+    out: List[str] = []
+    skip_next_sep = False
+    for piece in pieces:
+        if piece == "":
+            continue
+        if _SEPARATOR.match(piece):
+            if skip_next_sep or not out:       # dangling separator from a dropped piece
+                skip_next_sep = False
+                continue
+            out.append(piece)
+            continue
+        names = _PLACEHOLDER.findall(piece)
+        if names and any(str(values.get(n, "")).strip() == "" for n in names):
+            if out and _SEPARATOR.match(out[-1]):
+                out.pop()                      # drop the separator that introduced it
+            else:
+                skip_next_sep = True           # ...or the one that follows it
+            continue
+        skip_next_sep = False
+        out.append(_PLACEHOLDER.sub(lambda m: str(values.get(m.group(1), "")), piece))
+    while out and _SEPARATOR.match(out[-1]):
+        out.pop()
+    return "".join(out)
+
+
+def render_name_template(tmpl: str, values: dict) -> str:
+    """Render a `name:` template. Bracketed groups vanish entirely when nothing
+    inside them has a value."""
+    parts = []
+    for chunk in _GROUPS.split(tmpl):
+        if not chunk:
+            continue
+        if _GROUPS.fullmatch(chunk):
+            inner = _render_run(chunk[1:-1], values)
+            if re.search(r"[A-Za-z0-9]", inner):
+                parts.append(chunk[0] + inner + chunk[-1])
+        else:
+            parts.append(_render_run(chunk, values))
+    return re.sub(r"\s{2,}", " ", "".join(parts)).strip(" -|,;/")
+
+
 def feature_name(props: dict, spec: Optional[dict] = None, layer_key: str = "") -> str:
     tmpl = (spec or {}).get("name")
+    lead = re.match(r"\s*\{([A-Za-z_][A-Za-z0-9_]*)\}", tmpl or "")
+    if lead and str((props or {}).get(lead.group(1), "")).strip() == "":
+        tmpl = None          # the headline field is missing: use the fallback name instead
     if tmpl:
-        class _D(dict):
-            def __missing__(self, k):
-                return ""
-        d = _D()
-        for k, v in props.items():
-            d[k] = fmt_value(k, v) if k in CANONICAL and k != "name" else v
-        lead = re.match(r"\s*\{([A-Za-z_][A-Za-z0-9_]*)\}", tmpl)
-        if not (lead and not d.get(lead.group(1))):     # skip the template if it leads with a blank
-            try:
-                s = tmpl.format_map(d)
-                s = re.sub(r"\(\s*[,;]?\s*\)|\[\s*\]", "", s)   # drop empty parens/brackets
-                s = re.sub(r"\(\s*,\s*", "(", s)                   # "(, High)" -> "(High)"
-                s = re.sub(r"\s{2,}", " ", s).strip(" -|,;")
-                if s:
-                    return s
-            except Exception:
-                pass
+        values = {}
+        for k, v in (props or {}).items():
+            values[k] = fmt_value(k, v) if k in CANONICAL and k != "name" else ("" if v is None else v)
+        try:
+            rendered = render_name_template(tmpl, values)
+        except Exception:  # noqa: BLE001  a bad template must never break a build
+            rendered = ""
+        if rendered:
+            return rendered
     nm = props.get("name")
     if nm in (None, ""):
         for cand in DEFAULT_FROM["name"]:          # un-normalized features: scan raw names

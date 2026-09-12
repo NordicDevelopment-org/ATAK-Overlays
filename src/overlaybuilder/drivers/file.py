@@ -26,6 +26,8 @@ import re
 import tempfile
 import zipfile
 
+from typing import Optional
+
 from ..model import Feature, LayerResult, Provenance
 from ._csv import read_delimited
 from ._gpkg import read_gpkg
@@ -34,14 +36,31 @@ from ._xlsx import read_xlsx
 from .base import Context, HttpStatusError, driver, http_get, today
 
 
-def _guess(url: str) -> str:
+def _guess(url: str) -> Optional[str]:
     u = url.lower().split("?")[0]
     for ext, fmt in ((".zip", "shp"), (".geojson", "geojson"), (".json", "geojson"),
                      (".gpkg", "gpkg"), (".csv", "csv"), (".txt", "csv"), (".dat", "csv"),
                      (".xlsx", "xlsx"), (".xlsm", "xlsx")):
         if u.endswith(ext):
             return fmt
-    return "shp"
+    return None          # extensionless (Hub download APIs): sniff the bytes instead
+
+
+def sniff(raw: bytes) -> Optional[str]:
+    """Identify a payload from its first bytes. Hub/download endpoints carry the
+    format in a query string, not an extension, and a 200-with-HTML error page
+    must not be handed to the zip reader."""
+    head = raw[:64]
+    if head[:2] == b"PK":
+        return "shp"                              # zip: shapefile or gpkg inside
+    if head[:15] == b"SQLite format 3":
+        return "gpkg"
+    lead = head.lstrip()[:1]
+    if lead in (b"{", b"["):
+        return "geojson"
+    if head.lstrip()[:9].lower() in (b"<!doctype", b"<html>") or head.lstrip()[:5].lower() == b"<html":
+        return "html"                             # an error page, not data
+    return None
 
 
 def _make_keep(spec: dict, ctx: Context):
@@ -99,6 +118,18 @@ def fetch(logical: str, spec: dict, ctx: Context) -> LayerResult:
     if fmt == "auto":
         fmt = _guess(url)
     raw, url = _load_bytes(url)
+    sniffed = sniff(raw)
+    if sniffed == "html":
+        raise RuntimeError(f"{url} returned an HTML page, not data (moved or an error page); "
+                           "check the URL or use one of this source's alternates")
+    if fmt is None:
+        fmt = sniffed
+        if fmt is None:
+            raise RuntimeError(f"cannot tell what format {url} is; set `format:` on the source")
+    elif sniffed and sniffed != fmt and not (fmt == "csv" and sniffed is None):
+        # trust the bytes over the declared/guessed format, but say so
+        if {fmt, sniffed} != {"shp", "gpkg"}:
+            fmt = sniffed
     keep = _make_keep(spec, ctx)
 
     if spec.get("zip_member"):

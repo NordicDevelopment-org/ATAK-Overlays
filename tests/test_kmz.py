@@ -106,3 +106,46 @@ def test_kmz_roundtrip(tmp_path):
     z = zipfile.ZipFile(str(p))
     assert set(z.namelist()) == {"doc.kml", "icons/roads.png"}
     minidom.parseString(z.read("doc.kml"))
+
+
+def test_degenerate_geometry_never_crashes_the_writer():
+    from overlaybuilder.convert.kmz import _geom
+    for g in ({"type": "Point", "coordinates": ()}, {"type": "Point", "coordinates": [None, None]},
+              {"type": "Point", "coordinates": ["NaN", "NaN"]}, {"type": "LineString", "coordinates": [[0, 0]]},
+              {"type": "Polygon", "coordinates": [[]]}, {"type": "MultiPolygon", "coordinates": [[[]]]},
+              {"type": "MultiPoint", "coordinates": []}, {"type": "LineString", "coordinates": []}):
+        assert _geom(g, 6) == ""
+    f = [Feature({"type": "Point", "coordinates": ()}, {"NAME": "null shape"}),
+         Feature({"type": "Point", "coordinates": [-92.9, 45.5]}, {"NAME": "real"})]
+    kml, _ = layer_kml(LayerResult("gas_processing", f, _prov()))
+    minidom.parseString(kml)
+    assert kml.count("<Placemark>") == 1
+
+
+def test_kml_element_order_matches_the_schema_sequence():
+    kml, _ = layer_kml(_parcels())
+    doc = kml[kml.index("<Document>"):]
+    order = [doc.index(t) for t in ("<name>", "<visibility>", "<open>", "<description>")]
+    assert order == sorted(order)
+    pm = kml[kml.index("<Placemark>"):kml.index("</Placemark>")]
+    assert pm.index("<name>") < pm.index("<description>") < pm.index("<styleUrl>") < pm.index("<ExtendedData>")
+    fol = kml[kml.index("<Folder>"):]
+    assert fol.index("<name>") < fol.index("<visibility>") < fol.index("<open>")
+
+
+def test_combined_keeps_each_source_specs_separate():
+    a = _lines()
+    b = _lines()
+    a.doc_key, b.doc_key = "transmission_lines", "transmission_lines__osm"
+    specs = {"transmission_lines": dict(RULES, title="lines (HIFLD)"),
+             "transmission_lines__osm": {"title": "lines (OSM)", "hidden": True,
+                                         "style": {"color": "ff00ff00", "width": 9}}}
+    kml, icons = combined_kml([a, b], specs)
+    minidom.parseString(kml)
+    assert "lines (HIFLD)" in kml and "lines (OSM)" in kml
+    assert "#transmission_lines_r0" in kml            # rules apply to the first document only
+    assert "transmission_lines__osm_r0" not in kml
+    assert '<Style id="transmission_lines__osm">' in kml and "<width>9</width>" in kml
+    assert "icons/transmission_lines__osm.png" in icons
+    osm_folder = kml[kml.index("lines (OSM)"):]
+    assert osm_folder.index("<visibility>0</visibility>") < osm_folder.index("<open>")

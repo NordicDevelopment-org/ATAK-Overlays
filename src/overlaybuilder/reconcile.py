@@ -52,6 +52,13 @@ def _near(grid, rp, cell=0.02):
                 yield item
 
 
+def _stamp(feature, note: str) -> None:
+    """Append a cross-check note. With three or more sources for one entity each
+    pair must add its own verdict, not overwrite the previous one."""
+    prev = (feature.properties or {}).get("xcheck")
+    feature.properties["xcheck"] = f"{prev}; {note}" if prev else note
+
+
 def compare_pair(a: LayerResult, b: LayerResult, radius_m: float = DEFAULT_RADIUS_M) -> dict:
     pa, pb = _points(a), _points(b)
     gb = _grid(pb)
@@ -67,7 +74,7 @@ def compare_pair(a: LayerResult, b: LayerResult, radius_m: float = DEFAULT_RADIU
                 best, bd = (rq, fb), d
         if best is None:
             only_a.append(fa)
-            fa.properties["xcheck"] = f"unmatched in {b.provenance.source_name}"
+            _stamp(fa, f"unmatched in {b.provenance.source_name}")
             continue
         used_b.add(id(best[1]))
         fb = best[1]
@@ -80,12 +87,12 @@ def compare_pair(a: LayerResult, b: LayerResult, radius_m: float = DEFAULT_RADIU
                     diffs.append((k, va, vb, pct))
         note = "agree" if not diffs else "; ".join(
             f"{k} Δ {pct:.0f}% ({fmt_value(k, va)} vs {fmt_value(k, vb)})" for k, va, vb, pct in diffs)
-        fa.properties["xcheck"] = f"{note} [{b.provenance.source_name}, {bd:.0f} m]"
-        fb.properties["xcheck"] = f"{note} [{a.provenance.source_name}, {bd:.0f} m]"
+        _stamp(fa, f"{note} [{b.provenance.source_name}, {bd:.0f} m]")
+        _stamp(fb, f"{note} [{a.provenance.source_name}, {bd:.0f} m]")
         matched.append((fa, fb, bd, diffs))
     only_b = [fb for rq, fb in pb if id(fb) not in used_b]
     for fb in only_b:
-        fb.properties["xcheck"] = f"unmatched in {a.provenance.source_name}"
+        _stamp(fb, f"unmatched in {a.provenance.source_name}")
     return {"a": a, "b": b, "matched": matched, "only_a": only_a, "only_b": only_b}
 
 

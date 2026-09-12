@@ -21,6 +21,7 @@ Other spec fields: url, layer_id, layer_match, group_by, source_name,
 source_url, license, notes, entity, fields (see normalize.py).
 """
 import json
+import math
 import os
 import re
 from typing import Optional
@@ -29,19 +30,73 @@ from ..model import Feature, LayerResult, Provenance
 from .base import Context, HttpStatusError, driver, get_json, http_get, today
 
 
+def _num(v):
+    """Esri writes nulls as the string 'NaN'; anything non-finite is no coordinate."""
+    try:
+        f = float(v)
+    except (TypeError, ValueError):
+        return None
+    return f if math.isfinite(f) else None
+
+
+def _pt(p):
+    if not p or len(p) < 2:
+        return None
+    x, y = _num(p[0]), _num(p[1])
+    return None if x is None or y is None else [x, y]
+
+
+def _clean(seq, minimum=2):
+    out = [q for q in (_pt(p) for p in seq or ()) if q is not None]
+    return out if len(out) >= minimum else None
+
+
+def _signed_area(ring) -> float:
+    """Shoelace. Esri: clockwise (negative here) = outer ring, counter-clockwise = hole."""
+    a = 0.0
+    for (x1, y1), (x2, y2) in zip(ring, ring[1:] + ring[:1]):
+        a += x1 * y2 - x2 * y1
+    return a / 2.0
+
+
+def _rings_to_polygons(rings):
+    """Esri ships every ring of a multipart polygon in one flat list. Classify by
+    winding so holes stay holes instead of becoming filled islands."""
+    polys = []
+    for raw in rings or ():
+        ring = _clean(raw, 4)
+        if ring is None:
+            continue
+        if ring[0] != ring[-1]:
+            ring = ring + [ring[0]]
+        if _signed_area(ring) < 0 or not polys:      # outer (or a leading hole with no parent)
+            polys.append([ring])
+        else:
+            polys[-1].append(ring)                   # hole of the most recent outer ring
+    return polys
+
+
 def _esri_to_geojson(g, gtype):
-    if g is None:
+    if not g:
         return None
     if "x" in g and "y" in g:
-        return {"type": "Point", "coordinates": [g["x"], g["y"]]}
+        p = _pt([g["x"], g["y"]])
+        return {"type": "Point", "coordinates": p} if p else None
     if "points" in g:
-        return {"type": "MultiPoint", "coordinates": g["points"]}
+        pts = _clean(g["points"], 1)
+        return {"type": "MultiPoint", "coordinates": pts} if pts else None
     if "paths" in g:
-        paths = g["paths"]
+        paths = [p for p in (_clean(pp) for pp in g["paths"]) if p]
+        if not paths:
+            return None
         return ({"type": "LineString", "coordinates": paths[0]} if len(paths) == 1
                 else {"type": "MultiLineString", "coordinates": paths})
     if "rings" in g:
-        return {"type": "MultiPolygon", "coordinates": [[r] for r in g["rings"]]}
+        polys = _rings_to_polygons(g["rings"])
+        if not polys:
+            return None
+        return ({"type": "Polygon", "coordinates": polys[0]} if len(polys) == 1
+                else {"type": "MultiPolygon", "coordinates": polys})
     return None
 
 
@@ -106,7 +161,10 @@ def fetch(logical: str, spec: dict, ctx: Context) -> LayerResult:
         pass
     max_rc = int(info.get("maxRecordCount") or 2000)
     page = max(1, min(int(spec.get("page", 2000)), max_rc))
-    supports_pag = bool((info.get("advancedQueryCapabilities") or {}).get("supportsPagination", True))
+    adv = info.get("advancedQueryCapabilities")
+    # No advancedQueryCapabilities block means an older server: assume it ignores
+    # resultOffset and page by OBJECTID instead of silently repeating page 1.
+    supports_pag = bool(adv.get("supportsPagination", True)) if isinstance(adv, dict) else False
     oid_field = info.get("objectIdField") or "OBJECTID"
     gtype = info.get("geometryType", "")
 
@@ -130,9 +188,13 @@ def fetch(logical: str, spec: dict, ctx: Context) -> LayerResult:
         nonlocal use_geojson
         if use_geojson:
             p = dict(params, f="geojson")
-            raw = http_get(base, p, cache=False, min_interval=min_iv)
             try:
+                raw = http_get(base, p, cache=False, min_interval=min_iv)
                 js = json.loads(raw)
+            except HttpStatusError as e:
+                if e.code not in (400, 404, 406, 501):
+                    raise
+                js = {"error": f"HTTP {e.code} for f=geojson"}   # server lacks the format
             except json.JSONDecodeError:
                 js = {"error": "not json"}
             if "error" not in js:
@@ -152,9 +214,17 @@ def fetch(logical: str, spec: dict, ctx: Context) -> LayerResult:
         return out, bool(js.get("exceededTransferLimit"))
 
     if supports_pag:
-        offset = 0
+        offset, guard = 0, None
         while True:
             batch, more = _pull(dict(common, resultOffset=offset, resultRecordCount=page))
+            if batch:
+                # a server that ignores resultOffset hands back page 1 forever
+                mark = json.dumps(batch[0].properties, sort_keys=True, default=str)[:400]
+                if mark == guard:
+                    raise RuntimeError(
+                        f"layer {layer_id} ignores resultOffset (page {offset} repeated page 1); "
+                        "set `page:` above the record count or use a source with OBJECTID paging")
+                guard = mark
             feats.extend(batch)
             offset += len(batch)
             if not batch or (len(batch) < page and not more) or (total is not None and offset >= total):

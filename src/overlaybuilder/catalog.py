@@ -19,6 +19,7 @@ documents, and the reconcile step compares them.
 """
 import glob
 import os
+import re
 from typing import Dict, List, Optional
 
 import yaml
@@ -192,4 +193,47 @@ def validate(catalog_dir: str) -> List[str]:
         for r in s.get("style_rules") or []:
             if "when" not in r:
                 problems.append(f"{where}: style rule without 'when'")
+        problems.extend(_field_problems(s, where))
+        for alt in s.get("alternates") or []:
+            if not isinstance(alt, dict):
+                problems.append(f"{where}: alternates entries must be mappings")
+            elif not (alt.get("url") or alt.get("note")):
+                problems.append(f"{where}: alternate without a url")
     return problems
+
+
+def _field_problems(s: dict, where: str) -> List[str]:
+    """Catch mappings the engine would silently ignore: canonical keys that do
+    not exist, units with no conversion, and style rules keyed on a field this
+    source never maps."""
+    from .normalize import CANONICAL, DEFAULT_FROM, _split_candidate, known_unit
+    out = []
+    fields = s.get("fields") or {}
+    if not isinstance(fields, dict):
+        return [f"{where}: `fields:` must be a mapping"]
+    for key, cfg in fields.items():
+        if key not in CANONICAL:
+            out.append(f"{where}: fields.{key} is not a canonical field "
+                       f"(see normalize.CANONICAL) - it would be ignored")
+            continue
+        if cfg is False or (isinstance(cfg, dict) and "const" in cfg):
+            continue
+        if not isinstance(cfg, dict):
+            continue
+        frm = cfg.get("from") or []
+        if isinstance(frm, str):
+            frm = [frm]
+        if not frm:
+            out.append(f"{where}: fields.{key} has no `from:` candidates")
+        for cand in frm:
+            _, unit, _ = _split_candidate(cand)
+            if unit and not known_unit(key, unit):
+                out.append(f"{where}: fields.{key} declares unit '{unit}' with no conversion "
+                           f"to {CANONICAL[key][1] or 'the canonical unit'}")
+    mapped = set(fields) | {k for k in CANONICAL if DEFAULT_FROM.get(k)}
+    for r in s.get("style_rules") or []:
+        cond = str(r.get("when", ""))
+        m = re.match(r"\s*([A-Za-z_][A-Za-z0-9_]*)", cond)
+        if m and m.group(1) in CANONICAL and m.group(1) not in mapped:
+            out.append(f"{where}: style rule on '{m.group(1)}', which this source never maps")
+    return out

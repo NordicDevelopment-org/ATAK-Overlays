@@ -293,15 +293,16 @@ def run_build(ctx: Context, sources: List[dict], out_dir: str,
                 if r.get("doc") == doc_key:
                     r["placemarks"] = n
         if "geojson" in formats:
-            convert.write_geojson(stem + ".geojson", res)
+            _, no_geom = convert.write_geojson(stem + ".geojson", res)
             written.append(stem + ".geojson")
+            if no_geom:
+                for r in rows:
+                    if r.get("doc") == doc_key:
+                        r["dropped_without_geometry"] = no_geom
 
     if combined and results and "kmz" in formats:
         p = os.path.join(out_dir, "ALL.kmz")
-        spec_by_logical: Dict[str, dict] = {}
-        for k, s in specs.items():
-            spec_by_logical.setdefault(s["layer"], s)
-        kml, icons = convert.combined_kml(results, spec_by_logical, precision,
+        kml, icons = convert.combined_kml(results, specs, precision,
                                           title=f"Critical Infrastructure - {ctx.aoi.describe()}")
         convert.write_kmz(p, kml, icons)
         written.append(p)

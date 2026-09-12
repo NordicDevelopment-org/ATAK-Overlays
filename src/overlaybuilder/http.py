@@ -64,6 +64,20 @@ def _cache_path(url: str) -> Optional[str]:
     return os.path.join(d, h)
 
 
+_BINARY_EXT = (".zip", ".gpkg", ".xlsx", ".xlsm", ".pbf", ".gz", ".shp")
+
+
+def _cacheable(url: str, body: bytes) -> bool:
+    """Never persist an HTML error page under a data URL: some servers answer a
+    dead download with HTTP 200 and a "page not found" page, and a cached copy
+    would break every later build until the cache is cleared by hand."""
+    if not body:
+        return False
+    if url.lower().split("?")[0].endswith(_BINARY_EXT) and body.lstrip()[:1] == b"<":
+        return False
+    return True
+
+
 def _host(url: str) -> str:
     return url.split("//", 1)[-1].split("/", 1)[0]
 
@@ -103,7 +117,7 @@ def http_get(url: str, params: Optional[dict] = None, tries: int = 4, timeout: i
             req = Request(url, headers=hdrs, data=data)
             with urlopen(req, timeout=timeout, context=_SSL) as r:
                 body = r.read()
-            if cp:
+            if cp and _cacheable(url, body):
                 tmp = f"{cp}.{os.getpid()}.{threading.get_ident()}.tmp"
                 with open(tmp, "wb") as fh:
                     fh.write(body)

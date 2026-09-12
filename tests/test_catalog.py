@@ -81,3 +81,28 @@ def test_us_aoi_skips_overpass_sources():
     assert srcs and all(s["driver"] != "overpass" for s in srcs)
     srcs = catalog.resolve_sources(CATALOG, parse_aoi("region:mn-neighbors"))
     assert any(s["driver"] == "overpass" for s in srcs)
+
+
+def test_validate_rejects_unknown_canonical_keys_and_units(tmp_path):
+    bad = tmp_path / "catalog" / "global"
+    bad.mkdir(parents=True)
+    (bad / "x.yaml").write_text(
+        "sources:\n"
+        "  - layer: power_plants\n"
+        "    driver: overpass\n"
+        "    tags: ['power=plant']\n"
+        "    license: test\n"
+        "    fields:\n"
+        "      megawatts: {from: [MW]}\n"          # not a canonical key
+        "      length_ft: {from: ['MILES@furlongs']}\n"   # no conversion
+        "      capacity_mw: {from: []}\n"          # no candidates
+    )
+    problems = catalog.validate(str(tmp_path / "catalog"))
+    joined = " ".join(problems)
+    assert "megawatts" in joined and "not a canonical field" in joined
+    assert "furlongs" in joined and "no `from:`" in joined
+
+
+def test_validate_accepts_known_units():
+    # the shipped catalog maps MILES@mi, VOLTAGE@kV, height@m and so on
+    assert catalog.validate(CATALOG) == []

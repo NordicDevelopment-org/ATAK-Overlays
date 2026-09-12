@@ -175,3 +175,38 @@ def test_parallel_boundary_runs_before_the_rest(tmp_path):
     ctx = Context(aoi=parse_aoi("county:27025", county_name="Chisago"))
     run_build(ctx, srcs, str(tmp_path), ["kmz"], False, do_reconcile=False, jobs=4, log=lambda *a: None)
     assert order[0] == "county_boundary"
+
+
+def test_xcheck_accumulates_across_three_sources(tmp_path):
+    from overlaybuilder.reconcile import reconcile_layers
+    here = {"type": "Point", "coordinates": [-92.90, 45.50]}
+    far = {"type": "Point", "coordinates": [-92.00, 45.50]}
+    a = LayerResult("hospitals", [Feature(here, {"name": "A", "beds": 100})], Provenance("HIFLD", "u", "l", "d", "x"))
+    b = LayerResult("hospitals", [Feature(here, {"name": "B", "beds": 100})], Provenance("OSM", "u", "l", "d", "x"))
+    c = LayerResult("hospitals", [Feature(far, {"name": "C", "beds": 100})], Provenance("CMS", "u", "l", "d", "x"))
+    for r, k in ((a, "hospitals"), (b, "hospitals__osm"), (c, "hospitals__cms")):
+        r.doc_key = k
+    specs = {"hospitals": {"entity": "hospital"}, "hospitals__osm": {"entity": "hospital"},
+             "hospitals__cms": {"entity": "hospital"}}
+    reconcile_layers([a, b, c], specs)
+    note = a.features[0].properties["xcheck"]
+    assert "agree" in note and "OSM" in note          # the match with OSM survives...
+    assert "unmatched in CMS" in note                 # ...alongside the CMS miss
+
+
+def test_geojson_reports_features_without_geometry(tmp_path):
+    import json as _json
+
+    @driver("_nogeom")
+    def _ng(logical, spec, ctx):
+        return LayerResult(logical, [Feature({"type": "Point", "coordinates": [-92.9, 45.5]}, {"N": 1}),
+                                     Feature(None, {"N": 2}),
+                                     Feature({"type": "Point", "coordinates": ()}, {"N": 3})],
+                           Provenance("s", "u", "l", "d", "_nogeom"))
+
+    ctx = Context(aoi=parse_aoi("state:MN"), clip=False)
+    m = run_build(ctx, [{"layer": "gas_processing", "driver": "_nogeom", "id": "g"}], str(tmp_path),
+                  ["kmz", "geojson"], False, do_reconcile=False, log=lambda *a: None)
+    assert m["layers"][0]["dropped_without_geometry"] == 2
+    fc = _json.load(open(tmp_path / "gas_processing.geojson"))
+    assert len(fc["features"]) == 1 and fc["metadata"]["dropped_without_geometry"] == 2

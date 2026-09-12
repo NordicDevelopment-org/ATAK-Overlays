@@ -5,6 +5,7 @@ GDAL-free. Source CRS is read from the .prj when possible, else defaults to
 EPSG:4269 (NAD83), which is what Census TIGER ships.
 """
 import io
+import re
 import zipfile
 from typing import Callable, List, Optional
 
@@ -29,12 +30,27 @@ def _require():
         raise RuntimeError("pyproj is required for reprojection: pip install pyproj")
 
 
-def _epsg_from_prj(prj_text: str) -> int:
-    t = (prj_text or "").upper()
-    if "4326" in t or ("WGS" in t and "84" in t):
+def _crs_from_prj(prj_text: str):
+    """Return something pyproj can transform FROM: an EPSG code or the raw WKT.
+
+    A projected shapefile (county parcels in UTM or a State Plane foot system)
+    must never be guessed as geographic - its metre coordinates would be written
+    out as degrees and land the whole layer near Null Island.
+    """
+    t = (prj_text or "").strip()
+    up = t.upper()
+    if not t:
+        return 4269                       # TIGER and most US county data: NAD83 geographic
+    if "PROJCS" in up:
+        return t                          # hand the full WKT to pyproj
+    m = re.search(r'AUTHORITY\s*\[\s*"EPSG"\s*,\s*"?(\d+)"?\s*\]\s*\]\s*$', t, re.I)
+    if m:
+        return int(m.group(1))
+    if "4326" in up or ("WGS" in up and "84" in up):
         return 4326
-    # TIGER and most US county data are NAD83 geographic.
-    return 4269
+    if "GEOGCS" in up:
+        return 4269
+    return t                              # unknown shape of WKT: let pyproj decide
 
 
 def _reproject_coords(coords, tf):
@@ -58,9 +74,9 @@ def read_zipped_shapefile(zip_bytes: bytes,
     if not (shp and dbf):
         raise RuntimeError("zip does not contain a .shp + .dbf")
     prj_text = zf.read(prj).decode("utf-8", "replace") if prj else ""
-    src_epsg = _epsg_from_prj(prj_text)
-    tf = (Transformer.from_crs(src_epsg, 4326, always_xy=True)
-          if src_epsg != 4326 else None)
+    src_crs = _crs_from_prj(prj_text)
+    tf = (Transformer.from_crs(src_crs, 4326, always_xy=True)
+          if src_crs != 4326 else None)
 
     reader = shapefile.Reader(
         shp=io.BytesIO(zf.read(shp)),
