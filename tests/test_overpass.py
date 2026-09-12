@@ -147,3 +147,40 @@ def test_shipped_catalog_queries_are_valid_overpass():
             assert not re.search(r"\((?:n|w|r)\[", q), f"{path}: invalid element type in {q[:80]}"
             checked += 1
     assert checked > 30
+
+
+def test_case_insensitive_regex_uses_overpass_syntax_not_inline_flags():
+    """Overpass regexes are POSIX ERE: (?i) is a syntax error there, the
+    modifier is a trailing ,i on the filter."""
+    ql, _ = _parse_selector("man_made=storage_tank;content~(?i)^(ammonia|chlorine)$")
+    assert ql == '["man_made"="storage_tank"]["content"~"^(ammonia|chlorine)$",i]'
+    assert "(?i)" not in ql
+    ql2, _ = _parse_selector("man_made~^(mast|tower)$")
+    assert ql2 == '["man_made"~"^(mast|tower)$"]'          # no modifier when none asked for
+
+
+def test_no_shipped_query_contains_an_inline_regex_flag():
+    import glob
+
+    import yaml
+
+    from overlaybuilder.drivers.overpass import normalize_elements
+    for path in glob.glob("catalog/**/*.yaml", recursive=True):
+        doc = yaml.safe_load(open(path)) or {}
+        defaults = doc.get("defaults") or {}
+        for src in doc.get("sources") or []:
+            spec = dict(defaults)
+            spec.update(src)
+            if spec.get("driver") != "overpass":
+                continue
+            q, _ = build_query(spec.get("tags") or [spec.get("tag", "")],
+                               normalize_elements(spec.get("elements", "nwr")), "(1,2,3,4)", 60)
+            assert "(?i)" not in q, f"{path}: inline flag reaches Overpass in {q[:100]}"
+
+
+def test_osm_pbf_selector_honours_the_same_case_flag():
+    from overlaybuilder.drivers.osm_pbf import _selector_matchers, tags_match
+    m = _selector_matchers(["man_made=storage_tank;content~(?i)^ammonia$"])
+    assert tags_match({"man_made": "storage_tank", "content": "Ammonia"}, m)
+    assert tags_match({"man_made": "storage_tank", "content": "ammonia"}, m)
+    assert not tags_match({"man_made": "storage_tank", "content": "diesel"}, m)

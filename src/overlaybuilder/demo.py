@@ -114,10 +114,45 @@ def _towers() -> LayerResult:
     for i, xy in enumerate(_grid(9, lon0=-93.12, lat0=45.36, step=0.05)):
         h = [1204.0, 498.0, 312.0][i % 3]
         feats.append(Feature({"type": "Point", "coordinates": xy},
-                             {"structure_type": ["Guyed tower", "Lattice tower", "Monopole"][i % 3],
+                             {"name": f"SAMPLE Tower {i + 1:02d}",
+                              "structure_type": ["Guyed tower", "Lattice tower", "Monopole"][i % 3],
                               "height_agl_m": round(h * 0.3048, 1), "status": "Constructed",
                               "owner": "SAMPLE Broadcasting LLC", "registration_number": f"10{i:05d}"}))
     return LayerResult("comm_towers", feats, _prov("comm_towers"), group_by=["structure_type"])
+
+
+def _hazmat() -> LayerResult:
+    rows = [("SAMPLE Co-op Ammonia Tank", "ammonia"), ("SAMPLE Water Plant Chlorine", "chlorine"),
+            ("SAMPLE Propane Depot", "propane"), ("SAMPLE Fertiliser Store", "fertiliser")]
+    feats = []
+    for (name, content), xy in zip(rows, _grid(len(rows), lon0=-93.06, lat0=45.53)):
+        feats.append(Feature({"type": "Point", "coordinates": xy},
+                             {"name": name, "content": content, "man_made": "storage_tank",
+                              "operator": "SAMPLE Farmers Cooperative"}))
+    return LayerResult("hazmat_storage", feats, _prov("hazmat_storage"), group_by=["substance"])
+
+
+def _grain() -> LayerResult:
+    feats = []
+    for i, xy in enumerate(_grid(6, lon0=-92.98, lat0=45.58, step=0.03)):
+        feats.append(Feature({"type": "Point", "coordinates": xy},
+                             {"name": f"SAMPLE Elevator {i + 1}", "man_made": "silo",
+                              "content": "grain" if i % 2 else "corn",
+                              "operator": "SAMPLE Grain Co"}))
+    return LayerResult("grain_storage", feats, _prov("grain_storage"), group_by=["type", "substance"])
+
+
+def _mines() -> LayerResult:
+    rows = [("SAMPLE Sand & Gravel Pit", "sand", "quarry"), ("SAMPLE Aggregate Quarry", "limestone", "quarry")]
+    feats = []
+    for (name, res, kind), xy in zip(rows, _grid(len(rows), lon0=-92.80, lat0=45.72)):
+        x, y = xy
+        d = 0.008
+        feats.append(Feature({"type": "Polygon",
+                              "coordinates": [[[x, y], [x + d, y], [x + d, y + d], [x, y + d], [x, y]]]},
+                             {"name": name, "resource": res, "landuse": kind,
+                              "operator": "SAMPLE Aggregates Inc"}))
+    return LayerResult("mines", feats, _prov("mines"), group_by=["substance"])
 
 
 def _wastewater() -> LayerResult:
@@ -138,13 +173,13 @@ def _parcels() -> LayerResult:
         d = 0.004
         feats.append(Feature({"type": "Polygon",
                               "coordinates": [[[x, y], [x + d, y], [x + d, y + d], [x, y + d], [x, y]]]},
-                             {"PIN": f"99.{i:04d}.000", "CITY": ["Sampletown", "Demo Lake", "Testburg"][i % 3],
+                             {"PIN": f"SAMPLE 99.{i:04d}.000", "CITY": ["Sampletown", "Demo Lake", "Testburg"][i % 3],
                               "ACRES": round(1.2 + i * 0.1, 2)}))
     return LayerResult("parcels", feats, _prov("parcels"), group_by=["CITY"])
 
 
 BUILDERS = [_boundary, _plants, _substations, _lines, _pipelines, _dams,
-            _hospitals, _towers, _wastewater, _parcels]
+            _hospitals, _towers, _wastewater, _hazmat, _grain, _mines, _parcels]
 _BY_LAYER = {b().logical: b for b in BUILDERS}
 
 
@@ -179,7 +214,7 @@ def demo_specs_and_results():
                                  {"when": "hazard_class ~ ^significant", "color": "ff0080ff", "icon": "triangle", "width": 2}]},
         "hospitals": {"layer": "hospitals", "driver": "demo", "name": "{name} ({beds} beds)",
                       "style_rules": [{"when": "trauma ~ LEVEL", "color": "ff0000ff", "icon": "plus", "width": 3}]},
-        "comm_towers": {"layer": "comm_towers", "driver": "demo", "name": "{structure_type} {height_ft}",
+        "comm_towers": {"layer": "comm_towers", "driver": "demo", "name": "{name} ({structure_type} {height_ft})",
                         "fields": {"height_ft": {"from": ["height_agl_m@m"]}},
                         "style_rules": [{"when": "height_ft >= 1000", "color": "ffff00ff", "icon": "triangle", "width": 3},
                                         {"when": "height_ft >= 400", "color": "ffff40ff", "icon": "triangle", "width": 2}]},
@@ -189,6 +224,14 @@ def demo_specs_and_results():
                                  "fields": {"name": {"from": ["CWP_NAME"]},
                                             "flow_mgd": {"from": ["CWP_TOTAL_DESIGN_FLOW_NMBR"]},
                                             "source_id": {"from": ["NPDES_ID"]}}},
+        "hazmat_storage": {"layer": "hazmat_storage", "driver": "demo", "name": "{name} ({substance})",
+                           "fields": {"substance": {"from": ["content"]}},
+                           "style_rules": [{"when": "substance ~ (?i)ammonia", "color": "ff00a5ff", "icon": "ring", "width": 3},
+                                           {"when": "substance ~ (?i)(chlorine|acid)", "color": "ff0000ff", "icon": "ring", "width": 3}]},
+        "grain_storage": {"layer": "grain_storage", "driver": "demo", "name": "{name} ({substance})",
+                          "fields": {"substance": {"from": ["content"]}, "type": {"from": ["man_made"]}}},
+        "mines": {"layer": "mines", "driver": "demo", "name": "{name} ({substance})",
+                  "fields": {"substance": {"from": ["resource"]}, "type": {"from": ["landuse"]}}},
         "parcels": {"layer": "parcels", "driver": "demo"},
         "county_boundary": {"layer": "county_boundary", "driver": "demo"},
     }

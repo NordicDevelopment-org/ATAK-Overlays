@@ -59,6 +59,11 @@ the syntax and standard-library usage compatible with the oldest of those.
 - **Overpass element types** are `node`/`way`/`rel`/`nwr`/`nw`/`nr`/`wr`.
   Bare `n`, `w`, `r` are invalid QL; the driver normalises them, `validate`
   rejects anything else.
+- **Overpass regexes are POSIX ERE**, which has no inline flags. Write
+  `key~(?i)pattern` in the catalog and the driver emits Overpass's `,i`
+  modifier; never let `(?i)` reach the server.
+- **An alternate endpoint rewrites provenance.** A pack must never claim it
+  came from the primary URL when a mirror answered.
 - **The most specific tier owns the plain document name** (county, then state,
   national, global). EIA writes `power_plants.kmz`, OSM writes
   `power_plants__osm.kmz`.

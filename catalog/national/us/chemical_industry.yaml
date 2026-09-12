@@ -22,7 +22,7 @@ sources:
     sector: Chemical & Hazmat
     driver: arcgis
     url: https://geodata.epa.gov/arcgis/rest/services/OEI/FRS_INTERESTS/MapServer
-    layer_match: "(?i)toxic|tri"
+    layer_match: "(?i)toxics?.?release|^tri[ _-]"
     where_by_aoi:
       state: "STATE_CODE = '{state_abbr}'"
       region: "STATE_CODE IN ({states_sql})"
@@ -41,7 +41,7 @@ sources:
     sector: Chemical & Hazmat
     driver: arcgis
     url: https://geodata.epa.gov/arcgis/rest/services/OEI/FRS_INTERESTS/MapServer
-    layer_match: "(?i)risk.?management|rmp"
+    layer_match: "(?i)risk.?management|^rmp[ _-]|[ _-]rmp$"
     title: "chemical_plants (RMP facilities)"
     fields:
       name: {from: [PRIMARY_NAME, FAC_NAME]}
@@ -81,7 +81,7 @@ sources:
     sector: Agriculture & Food
     driver: arcgis
     url: https://www.usda.gov/
-    layer_match: "(?i)grain|elevator|warehouse"
+    layer_match: "(?i)grain.?(warehouse|elevator|storage)"
     source_name: "USDA licensed grain warehouses (placeholder - no confirmed GIS endpoint)"
     source_url: https://www.ams.usda.gov/services/warehouse-licensing
     notes: "USDA publishes licensed warehouse operators as a list, not a GIS service; no public endpoint was confirmed. Left here so contributors know it was looked for. OSM man_made=silo is the working source"

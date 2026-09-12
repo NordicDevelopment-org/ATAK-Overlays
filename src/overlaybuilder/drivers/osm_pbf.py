@@ -38,7 +38,9 @@ def _selector_matchers(selectors: List[str]):
                 continue
             if "~" in p and "=" not in p.split("~", 1)[0]:
                 k, rx = p.split("~", 1)
-                conds.append((k.strip(), "re", re.compile(rx.strip())))
+                rx = rx.strip()
+                flags = re.I if rx.startswith("(?i)") else 0
+                conds.append((k.strip(), "re", re.compile(rx[4:] if flags else rx, flags)))
             elif "!=" in p:
                 k, v = p.split("!=", 1)
                 conds.append((k.strip(), "ne", v.strip()))

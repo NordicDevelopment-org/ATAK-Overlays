@@ -44,10 +44,14 @@ sources:
 
   - layer: explosives_storage
     sector: Chemical & Hazmat
-    tags: ["man_made=storage_tank;content=explosive", "building=magazine", "landuse=industrial;industrial=explosive"]
+    tags: ["military=bunker;bunker_type~(?i)^(munition|explosive|ammunition)", "industrial=explosive",
+           "man_made=works;product~(?i)explosive|ammunition"]
     elements: nwr
     represent: point
     hidden: true
+    fields:
+      type: {from: [bunker_type, industrial, product]}
+    notes: "Ammunition and explosives storage as mapped in OSM. ATF-licensed magazines are not published; the layer is sparse by nature"
 
   # ---------------- agriculture & food ----------------
   - layer: grain_storage
@@ -57,11 +61,15 @@ sources:
            "man_made=works;product~(?i)^(grain|feed|flour)"]
     elements: nwr
     represent: point
-    group_by: [substance]
+    group_by: [type, substance]
+    name: "{operator} {type}"
+    hidden: true
+    aoi_kinds: [county, bbox]
     fields:
       substance: {from: [content, crop, product]}
       operator: {from: [operator, brand]}
-    notes: "Grain elevators, farm silos and co-op storage. `content`/`crop` are often absent on farm silos"
+      type: {from: [man_made, building, industrial]}
+    notes: "Grain elevators, farm silos and co-op storage. Farm silos are extremely dense in the Corn Belt, so this is county-scale and hidden on import; `content`/`crop` are usually absent, which is why it groups by type first"
 
   - layer: food_processing
     sector: Agriculture & Food
@@ -78,7 +86,7 @@ sources:
     sector: Agriculture & Food
     tags: ["landuse=farmyard;operator", "man_made=works;product~(?i)fertiliser|fertilizer",
            "shop=agrarian", "landuse=greenhouse_horticulture"]
-    elements: wr
+    elements: nwr
     represent: point
     hidden: true
     aoi_kinds: [county, bbox]

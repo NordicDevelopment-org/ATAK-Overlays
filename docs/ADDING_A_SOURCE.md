@@ -158,7 +158,10 @@ WGS84. GeoPackage reprojects from its SRS. No GDAL needed.
 ```
 
 Selector syntax: `key=value`, `key!=value`, `key~regex`, `key` (present),
-`key>=number` (client-side numeric, OSM suffixes understood). Country AOIs use
+`key>=number` (client-side numeric, OSM suffixes understood). Write a
+case-insensitive regex as `key~(?i)pattern`: Overpass itself uses POSIX
+regexes and rejects inline flags, so the driver translates it to Overpass's
+own `,i` modifier (and to `re.I` for the `osm_pbf` driver). Country AOIs use
 an Overpass area; `world` is refused - use `osm_pbf`.
 
 ## Driver: `osm_pbf` (OSM, offline extracts)

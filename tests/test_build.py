@@ -233,3 +233,40 @@ def test_pack_carries_an_attribution_file(tmp_path):
     assert "openstreetmap.org/copyright" in text and "Share-alike" in text
     assert "boom" in text and "did not build" in text          # failures are disclosed, not hidden
     assert "never inferred" in text
+
+
+def test_demo_pack_is_unmistakably_synthetic():
+    """A sample pack must never be confusable with real infrastructure."""
+    import re
+    import tempfile
+    import zipfile
+
+    from overlaybuilder.demo import PROV_NOTE, build_demo
+    d = tempfile.mkdtemp()
+    manifest = build_demo(d, log=lambda *a: None)
+    names = []
+    for f in os.listdir(d):
+        if not f.endswith(".kmz"):
+            continue
+        kml = zipfile.ZipFile(os.path.join(d, f)).read("doc.kml").decode()
+        names += [n for n in re.findall(r"<Placemark><name>([^<]*)</name>", kml) if n]
+        assert "SYNTHETIC" in kml.upper() or "synthetic" in kml       # provenance on every document
+    assert names
+    assert not [n for n in names if "SAMPLE" not in n], "a placemark name lacks the SAMPLE marker"
+    assert "SYNTHETIC" in PROV_NOTE.upper() and "SYNTHETIC" in manifest["warning"].upper()
+    assert "SYNTHETIC" in open(os.path.join(d, "README.txt")).read().upper()
+
+
+def test_demo_covers_every_sector_it_ships_styles_for():
+    import re
+    import tempfile
+    import zipfile
+
+    from overlaybuilder.demo import build_demo
+    d = tempfile.mkdtemp()
+    build_demo(d, log=lambda *a: None)
+    kml = zipfile.ZipFile(os.path.join(d, "DEMO_SAMPLE_ALL.kmz")).read("doc.kml").decode()
+    sectors = set(re.findall(r"<Folder><name>([A-Za-z &;-]+)</name><open>", kml))
+    for want in ("Energy - Electric", "Water", "Communications", "Chemical &amp; Hazmat",
+                 "Agriculture &amp; Food", "Mining"):
+        assert want in sectors, f"{want} missing from the demo pack"

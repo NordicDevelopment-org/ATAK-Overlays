@@ -71,7 +71,14 @@ def _parse_selector(sel: str) -> Tuple[str, List[Tuple[str, str, str]]]:
             continue
         if "~" in p and "=" not in p.split("~", 1)[0]:
             k, rx = p.split("~", 1)
-            ql.append(f'["{k.strip()}"~"{rx.strip()}"]')
+            rx = rx.strip()
+            # Overpass regexes are POSIX ERE: an inline "(?i)" flag is a syntax
+            # error there. Overpass spells case-insensitivity as a trailing ,i
+            # modifier, so translate rather than passing it through.
+            ci = ""
+            if rx.startswith("(?i)"):
+                rx, ci = rx[4:], ",i"
+            ql.append(f'["{k.strip()}"~"{rx}"{ci}]')
         elif "!=" in p:
             k, v = p.split("!=", 1)
             ql.append(f'["{k.strip()}"!="{v.strip()}"]')
