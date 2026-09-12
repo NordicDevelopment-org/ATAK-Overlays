@@ -22,6 +22,18 @@ CATALOG = os.path.join(ROOT, "catalog")
 SAMPLE_VARS = parse_aoi("state:MN").template_vars()
 
 
+def ping_monthly(url: str, arcgis: bool) -> str:
+    """EIA-style {month}/{year} feeds: the newest release may not be published
+    yet, so only report DEAD when no recent month resolves."""
+    from overlaybuilder.drivers.file import _month_candidates
+    last = ""
+    for cand in list(_month_candidates(url, months_back=3)):
+        last = ping(cand, arcgis)
+        if not last.startswith("DEAD"):
+            return last + f"  ({cand.rsplit('/', 1)[-1]})"
+    return last
+
+
 def ping(url: str, arcgis: bool) -> str:
     try:
         u = url + ("&" if "?" in url else "?") + "f=json" if arcgis else url
@@ -45,21 +57,32 @@ def ping(url: str, arcgis: bool) -> str:
 def main():
     bad = 0
     for s in catalog.all_sources(CATALOG):
+        where = f"{s['_file']:52} {s['layer']:22}"
+        if s.get("enabled", True) is False:
+            # documented but unverified candidates; `doctor --include-disabled` tests these
+            print(f"{where} {'SKIP disabled':28}")
+            continue
         url = s.get("url")
-        if not url:  # tiger/overpass build URLs dynamically; skip
+        if not url:  # tiger/overpass/fcc build URLs dynamically; skip
             continue
         try:
             url = url.format(**SAMPLE_VARS)
-        except (KeyError, IndexError):
-            pass
+        except (KeyError, IndexError) as e:
+            print(f"{where} {'SKIP unrenderable ' + str(e):28}")
+            continue
         if "{month}" in url or "{year}" in url:
-            from overlaybuilder.drivers.file import _month_candidates
-            url = next(iter(_month_candidates(url)))     # newest monthly release
+            status = ping_monthly(url, s["driver"] == "arcgis")
+            print(f"{where} {status:28} {url[:70]}")
+            bad += 1 if status.startswith("DEAD") else 0
+            continue
+        if "{" in url:                       # a placeholder we do not fill (e.g. an env secret)
+            print(f"{where} {'SKIP templated':28} {url[:70]}")
+            continue
         arcgis = s["driver"] == "arcgis"
         if arcgis and s.get("layer_id") is not None:
             url = url.rstrip("/") + f"/{s['layer_id']}"
         status = ping(url, arcgis)
-        print(f"{s['_file']:52} {s['layer']:22} {status:28} {url[:90]}")
+        print(f"{where} {status:28} {url[:90]}")
         if status.startswith("DEAD"):
             bad += 1
     print(f"\n{bad} dead source(s)")

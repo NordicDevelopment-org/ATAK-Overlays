@@ -152,20 +152,37 @@ def _missing_fields(spec: dict, available: List[str]) -> List[str]:
 def _file(spec: dict, ctx) -> Probe:
     url = ctx.render(spec["url"])
     if "{month}" in url or "{year}" in url:
+        # the newest monthly release may not be published yet; the driver walks
+        # back a year, so the probe must not call the feed dead on month one
         from .drivers.file import _month_candidates
-        url = next(iter(_month_candidates(url)))
+        last = Probe(DEAD, "no monthly release resolved", url=url)
+        for cand in list(_month_candidates(url, months_back=3)):
+            pr = _probe_download(cand)
+            if pr.ok:
+                return pr
+            last = pr
+        return last
+    return _probe_download(url)
+
+
+def _probe_download(url: str) -> Probe:
     if not url.startswith(("http://", "https://")):
         import os
         return Probe(OK if os.path.exists(url) else DEAD, f"local path {url}", url=url)
+    if "{" in url or "$" in url:
+        return Probe(SKIP, "URL still holds a placeholder (an env secret?); cannot probe", url=url)
     try:
-        http_get(url, tries=TRIES, timeout=TIMEOUT, cache=False, headers={"Range": "bytes=0-2047"})
-        return Probe(OK, "download reachable", url=url)
+        body = http_get(url, tries=TRIES, timeout=TIMEOUT, cache=False, headers={"Range": "bytes=0-2047"})
     except HttpStatusError as e:
         if e.code in (401, 403):
             return Probe(AUTH, f"HTTP {e.code} (login or API key required)", url=url)
         return Probe(DEAD, f"HTTP {e.code}", url=url)
     except Exception as e:  # noqa: BLE001
         return Probe(DEAD, f"unreachable: {str(e)[:120]}", url=url)
+    if body.lstrip()[:1] == b"<" and url.lower().split("?")[0].endswith(
+            (".zip", ".gpkg", ".xlsx", ".xlsm", ".csv")):
+        return Probe(DEAD, "server answered with an HTML page, not the data file", url=url)
+    return Probe(OK, "download reachable", url=url)
 
 
 def _overpass(spec: dict, ctx) -> Probe:

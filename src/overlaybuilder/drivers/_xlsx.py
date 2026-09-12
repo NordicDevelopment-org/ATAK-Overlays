@@ -55,8 +55,14 @@ def read_xlsx(raw: bytes, sheet: Optional[str] = None, header_row: int = 1) -> L
             shared.append("".join(t.text or "" for t in si.iter(f"{{{NS['m']}}}t")))
     path = _sheet_path(zf, sheet)
     root = ET.fromstring(zf.read(path))
-    rows: List[Dict[int, str]] = []
+    # Key rows by their real spreadsheet row number. Excel omits fully empty
+    # rows from the XML entirely, so list position is NOT the row number and a
+    # header_row counted from the visible sheet would land on a data row.
+    rows: Dict[int, Dict[int, str]] = {}
+    rn = 0
     for row in root.iter(f"{{{NS['m']}}}row"):
+        r_attr = row.get("r") or ""
+        rn = int(r_attr) if r_attr.isdigit() else rn + 1
         cells: Dict[int, str] = {}
         for c in row.findall("m:c", NS):
             ref = c.get("r", "")
@@ -70,13 +76,14 @@ def read_xlsx(raw: bytes, sheet: Optional[str] = None, header_row: int = 1) -> L
             else:
                 val = (v.text or "") if v is not None else ""
             cells[idx] = val.strip()
-        rows.append(cells)
-    if len(rows) < header_row:
+        rows[rn] = cells
+    header = rows.get(header_row)
+    if not header:
         return []
-    header = rows[header_row - 1]
     cols = {i: (name or f"col{i}") for i, name in header.items() if str(name).strip()}
     out: List[Dict[str, str]] = []
-    for cells in rows[header_row:]:
+    for n in sorted(k for k in rows if k > header_row):
+        cells = rows[n]
         if not any(cells.values()):
             continue
         out.append({name: cells.get(i, "") for i, name in cols.items()})

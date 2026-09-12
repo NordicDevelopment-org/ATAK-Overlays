@@ -86,3 +86,35 @@ def test_missing_fields_flags_unmapped_columns():
                        "fuel": {"const": "gas"}}}
     assert _missing_fields(spec, ["total_mw", "NAME"]) == ["voltage_kv"]
     assert _missing_fields(spec, []) == []           # unknown schema: do not cry wolf
+
+
+def test_probe_never_reports_a_placeholder_url_as_dead(monkeypatch):
+    from overlaybuilder import probe as P
+    from overlaybuilder.aoi import parse_aoi as _p
+    ctx = Context(aoi=_p("state:MN"))
+    pr = P._file({"url": "https://x/v1.geojson?api_key=${NREL_API_KEY}"}, ctx)
+    assert pr.status == P.SKIP and pr.ok
+
+
+def test_probe_rejects_an_html_body_served_for_a_zip(monkeypatch):
+    from overlaybuilder import probe as P
+    monkeypatch.setattr(P, "http_get", lambda *a, **k: b"<!DOCTYPE html><html>Not Found")
+    pr = P._probe_download("https://x/data.zip")
+    assert pr.status == P.DEAD and "HTML" in pr.detail
+    monkeypatch.setattr(P, "http_get", lambda *a, **k: b"PK\x03\x04")
+    assert P._probe_download("https://x/data.zip").status == P.OK
+
+
+def test_monthly_probe_walks_back_when_the_newest_release_is_missing(monkeypatch):
+    from overlaybuilder import probe as P
+    from overlaybuilder.aoi import parse_aoi as _p
+    tried = []
+
+    def fake(url, *a, **k):
+        tried.append(url)
+        if len(tried) < 3:
+            raise P.HttpStatusError(404, url)
+        return b"PK\x03\x04"
+    monkeypatch.setattr(P, "http_get", fake)
+    pr = P._file({"url": "https://x/{month}_generator{year}.xlsx"}, Context(aoi=_p("state:MN")))
+    assert pr.status == P.OK and len(tried) == 3
