@@ -1,0 +1,38 @@
+# Minnesota - state tier, emergency services and health.
+# MnGeo Geospatial Commons moved to gis.data.mn.gov (ArcGIS Hub) in 2025; the
+# service URLs below were not confirmed from the research environment. Resolve
+# each from the dataset page ("I want to use this" > API) or the legacy GDRS
+# download, set `url:` and flip `enabled: true`.
+defaults:
+  sector: Emergency & Health
+  driver: arcgis
+  spatial: bbox
+  enabled: false
+  license: "Minnesota Geospatial Commons - open, reference use"
+  confidence: low
+sources:
+  - layer: fire_stations
+    id: fire_stations@mn-uspatial
+    provider: mn
+    entity: fire_station
+    url: https://gis.data.mn.gov/datasets/UMN::minnesota-fire-stations-1/about
+    layer_match: "fire"
+    source_name: "Minnesota Fire Stations (U-Spatial / UMN, locally maintained, ~1,900)"
+    source_url: https://gisdata.mn.gov/dataset/struc-fire-stations-mn
+  - layer: police
+    id: police@mn-uspatial
+    provider: mn
+    entity: police
+    url: https://gisdata.mn.gov/dataset/struc-law-enforce-mn
+    layer_match: "law"
+    source_name: "Minnesota Law Enforcement Locations (U-Spatial / UMN, ~600)"
+    source_url: https://gisdata.mn.gov/dataset/struc-law-enforce-mn
+  - layer: hospitals
+    id: hospitals@mn-2020
+    provider: mn
+    entity: hospital
+    url: https://gisdata.mn.gov/dataset/health-facility-hospitals
+    layer_match: "hospital"
+    source_name: "Hospitals Serving Minnesota, 2020 (MnGeo)"
+    source_url: https://gisdata.mn.gov/dataset/health-facility-hospitals
+    notes: "2020 vintage, no bed counts; MDH HCCIS publishes bed counts as tables"

@@ -1,0 +1,336 @@
+# US national tier - EMERGENCY SERVICES, HEALTH, GOVERNMENT.
+#
+# Status (Sept 2026): HIFLD Open was decommissioned 26 Aug 2025; ~254 of its
+# layers (hospitals, fire, EMS, law enforcement, prisons, local EOCs, nursing
+# homes, urgent care, pharmacies) were discontinued, not migrated. Two kinds of
+# sources remain and BOTH are wired here so the reconcile report can compare:
+#   1. NASA NCCS re-host of the final HIFLD Open snapshot (rich attributes -
+#      beds, trauma, helipad, FDID - but FROZEN; check SOURCEDATE)
+#   2. Live federal successors: USGS National Map Structures (points, few
+#      attributes), FEMA (state EOCs, National Shelter System), NCES (schools)
+# OSM (global tier) is the third, community-maintained view.
+defaults:
+  sector: Emergency & Health
+  spatial: bbox
+  driver: arcgis
+  license: "Public domain (US Government work)"
+sources:
+  # ---------------- hospitals ----------------
+  - layer: hospitals
+    id: hospitals@hifld-nasa
+    provider: hifld
+    entity: hospital
+    url: https://maps.nccs.nasa.gov/mapping/rest/services/hifld_open/public_health/FeatureServer
+    layer_match: "^hospitals$"
+    where_by_aoi:
+      county: "COUNTYFIPS = '{fips5}'"
+      state: "STATE = '{state_abbr}'"
+      region: "STATE IN ({states_sql})"
+    group_by: [type]
+    name: "{name} ({beds} beds)"
+    fields:
+      name: {from: [NAME]}
+      beds: {from: [BEDS]}
+      trauma: {from: [TRAUMA]}
+      helipad: {from: [HELIPAD]}
+      staff: {from: [TTL_STAFF]}
+      type: {from: [TYPE]}
+      owner: {from: [OWNER]}
+      status: {from: [STATUS]}
+      phone: {from: [TELEPHONE]}
+      address: {from: [ADDRESS]}
+    style_rules:
+      - {when: "trauma ~ LEVEL I", color: "ff0000ff", icon: plus, width: 3}
+    source_name: "HIFLD Hospitals (final HIFLD Open snapshot, NASA NCCS re-host)"
+    source_url: https://maps.nccs.nasa.gov/mapping/rest/services/hifld_open/public_health/FeatureServer
+    license: "Public domain (US Government work) - unofficial re-host; frozen snapshot, check SOURCEDATE"
+    notes: "BEDS, TRAUMA, HELIPAD, TTL_STAFF, OWNER, NAICS_DESC in attributes. -999 = not available"
+    confidence: high
+    alternates:
+      - {driver: file, url: "https://source.coop/seerai/hifld", note: "SeerAI GeoParquet archive of the same snapshot, CC BY 4.0"}
+
+  - layer: hospitals
+    id: hospitals@usgs
+    provider: usgs
+    entity: hospital
+    url: https://carto.nationalmap.gov/arcgis/rest/services/structures/MapServer
+    layer_match: "^Hospitals/Medical Centers$"
+    where_by_aoi:
+      state: "STATE = '{state_abbr}'"
+      region: "STATE IN ({states_sql})"
+    fields:
+      name: {from: [NAME]}
+      address: {from: [ADDRESS]}
+      source_id: {from: [GNIS_ID]}
+      type: {from: [FCODE]}
+    source_name: "USGS National Map Structures - Hospitals/Medical Centers (live)"
+    source_url: https://www.usgs.gov/programs/national-geospatial-program/national-structures-dataset
+    notes: "Maintained federal successor for facility points; no bed/trauma attributes (see HIFLD snapshot / CMS). Duplicate scale-dependent layer ids exist; matched by name"
+    confidence: high
+
+  - layer: nursing_homes
+    id: nursing_homes@hifld-nasa
+    provider: hifld
+    url: https://maps.nccs.nasa.gov/mapping/rest/services/hifld_open/public_health/FeatureServer
+    layer_match: "^nursing_homes$"
+    where_by_aoi:
+      county: "countyfips = '{fips5}'"
+      state: "state = '{state_abbr}'"
+    hidden: true
+    fields:
+      name: {from: [name, NAME]}
+      beds: {from: [beds, BEDS]}
+      population: {from: [tot_res]}
+      staff: {from: [tot_staff]}
+      type: {from: [type, TYPE]}
+      owner: {from: [ownership, OWNER]}
+      source_id: {from: [medicareid]}
+    source_name: "HIFLD Nursing Homes (final snapshot, NASA NCCS re-host)"
+    source_url: https://maps.nccs.nasa.gov/mapping/rest/services/hifld_open/public_health/FeatureServer
+    license: "Public domain (US Government work) - unofficial re-host; frozen"
+    notes: "Field names are lowercase on this mirror. CMS Nursing Home Provider Information (data.cms.gov, has lat/lon + certified beds) is the live successor - roadmap"
+    confidence: high
+
+  - layer: urgent_care
+    id: urgent_care@hifld-nasa
+    provider: hifld
+    url: https://maps.nccs.nasa.gov/mapping/rest/services/hifld_open/public_health/FeatureServer
+    layer_match: "^urgent_care"
+    where_by_aoi:
+      county: "COUNTYFIPS = '{fips5}'"
+      state: "STATE = '{state_abbr}'"
+    hidden: true
+    source_name: "HIFLD Urgent Care Facilities (final snapshot, NASA NCCS re-host)"
+    source_url: https://maps.nccs.nasa.gov/mapping/rest/services/hifld_open/public_health/FeatureServer
+    license: "Public domain (US Government work) - unofficial re-host; frozen"
+    confidence: medium
+
+  - layer: pharmacies
+    id: pharmacies@hifld-nasa
+    provider: hifld
+    enabled: false                          # ~65k points; enable for county packs if wanted
+    url: https://maps.nccs.nasa.gov/mapping/rest/services/hifld_open/public_health/FeatureServer
+    layer_match: "^pharmacies$"
+    where_by_aoi:
+      county: "COUNTYFIPS = '{fips5}'"
+      state: "STATE = '{state_abbr}'"
+    hidden: true
+    aoi_kinds: [county, bbox]
+    source_name: "HIFLD Pharmacies (final snapshot, NASA NCCS re-host)"
+    source_url: https://maps.nccs.nasa.gov/mapping/rest/services/hifld_open/public_health/FeatureServer
+    license: "Public domain (US Government work) - unofficial re-host; frozen"
+    confidence: medium
+
+  # ---------------- fire / EMS / police ----------------
+  - layer: fire_stations
+    id: fire_stations@hifld-nasa
+    provider: hifld
+    entity: fire_station
+    url: https://maps.nccs.nasa.gov/mapping/rest/services/hifld_open/emergency_services/FeatureServer
+    layer_match: "^fire_stations$"
+    where_by_aoi:
+      county: "FIPS = '{fips5}'"
+      state: "STATE = '{state_abbr}'"
+      region: "STATE IN ({states_sql})"
+    fields:
+      name: {from: [NAME]}
+      source_id: {from: [FDID]}
+      address: {from: [ADDRESS]}
+      phone: {from: [EMERGTEL]}
+    source_name: "HIFLD Fire Stations (final snapshot, NASA NCCS re-host)"
+    source_url: https://maps.nccs.nasa.gov/mapping/rest/services/hifld_open/emergency_services/FeatureServer
+    license: "Public domain (US Government work) - unofficial re-host; frozen"
+    confidence: high
+
+  - layer: fire_stations
+    id: fire_stations@usgs
+    provider: usgs
+    entity: fire_station
+    url: https://carto.nationalmap.gov/arcgis/rest/services/structures/MapServer
+    layer_match: "^Fire Stations/EMS Stations$"
+    where_by_aoi:
+      state: "STATE = '{state_abbr}'"
+      region: "STATE IN ({states_sql})"
+    fields:
+      name: {from: [NAME]}
+      address: {from: [ADDRESS]}
+      type: {from: [FCODE]}
+      source_id: {from: [GNIS_ID]}
+    source_name: "USGS National Map Structures - Fire Stations / EMS Stations (live)"
+    source_url: https://www.usgs.gov/programs/national-geospatial-program/national-structures-dataset
+    confidence: high
+
+  - layer: ems
+    id: ems@hifld-nasa
+    provider: hifld
+    url: https://maps.nccs.nasa.gov/mapping/rest/services/hifld_open/emergency_services/FeatureServer
+    layer_match: "^ems_stations$"
+    where_by_aoi:
+      county: "fips = '{fips5}'"
+      state: "state = '{state_abbr}'"
+    fields:
+      name: {from: [name, NAME]}
+      type: {from: [level_, specialty]}
+      owner: {from: [owner]}
+      source_id: {from: [fdid]}
+      phone: {from: [telephone]}
+    source_name: "HIFLD EMS Stations (final snapshot, NASA NCCS re-host)"
+    source_url: https://maps.nccs.nasa.gov/mapping/rest/services/hifld_open/emergency_services/FeatureServer
+    license: "Public domain (US Government work) - unofficial re-host; frozen"
+    notes: "Field names are lowercase on this mirror (level_ = licensure level)"
+    confidence: high
+
+  - layer: police
+    id: police@hifld-nasa
+    provider: hifld
+    entity: police
+    url: https://maps.nccs.nasa.gov/mapping/rest/services/hifld_open/law_enforcement/FeatureServer
+    layer_match: "^local_law_enforcement"
+    where_by_aoi:
+      county: "COUNTYFIPS = '{fips5}'"
+      state: "STATE = '{state_abbr}'"
+      region: "STATE IN ({states_sql})"
+    group_by: [type]
+    fields:
+      name: {from: [NAME]}
+      type: {from: [TYPE]}
+      population: {from: [POPULATION]}      # sworn officers / population served per source
+      status: {from: [STATUS]}
+      phone: {from: [TELEPHONE]}
+      address: {from: [ADDRESS]}
+    source_name: "HIFLD Local Law Enforcement Locations (final snapshot, NASA NCCS re-host)"
+    source_url: https://maps.nccs.nasa.gov/mapping/rest/services/hifld_open/law_enforcement/FeatureServer
+    license: "Public domain (US Government work; derived from DOJ BJS) - unofficial re-host; frozen"
+    confidence: high
+
+  - layer: police
+    id: police@usgs
+    provider: usgs
+    entity: police
+    url: https://carto.nationalmap.gov/arcgis/rest/services/structures/MapServer
+    layer_match: "^Police Stations$"
+    where_by_aoi:
+      state: "STATE = '{state_abbr}'"
+      region: "STATE IN ({states_sql})"
+    fields:
+      name: {from: [NAME]}
+      address: {from: [ADDRESS]}
+      type: {from: [FCODE]}
+    source_name: "USGS National Map Structures - Police Stations (live)"
+    source_url: https://www.usgs.gov/programs/national-geospatial-program/national-structures-dataset
+    confidence: high
+
+  - layer: correctional
+    id: correctional@hifld-nasa
+    provider: hifld
+    sector: Government
+    url: https://maps.nccs.nasa.gov/mapping/rest/services/hifld_open/law_enforcement/FeatureServer
+    layer_match: "^prison_boundaries$"
+    where_by_aoi:
+      state: "STATE = '{state_abbr}'"
+      region: "STATE IN ({states_sql})"
+    fields:
+      name: {from: [NAME]}
+      type: {from: [TYPE]}
+      capacity_persons: {from: [CAPACITY]}
+      population: {from: [POPULATION]}
+      security_level: {from: [SECURELVL]}
+      status: {from: [STATUS]}
+    source_name: "HIFLD Prison Boundaries (final snapshot, NASA NCCS re-host)"
+    source_url: https://maps.nccs.nasa.gov/mapping/rest/services/hifld_open/law_enforcement/FeatureServer
+    license: "Public domain (US Government work) - unofficial re-host; frozen"
+    confidence: medium
+
+  # ---------------- EOCs and shelters ----------------
+  - layer: eoc
+    id: eoc@fema-state
+    provider: fema
+    url: https://gis.fema.gov/arcgis/rest/services/FEMA/STATE_EOC/FeatureServer
+    layer_id: 0
+    name: "State EOC - {state}"
+    fields:
+      name: {from: [eoc_id, statename]}
+      state: {from: [statename]}
+      address: {from: [address1]}
+      phone: {from: [telephone]}
+    source_name: "FEMA State Emergency Operations Centers (live)"
+    source_url: https://gis.fema.gov/arcgis/rest/services/FEMA/STATE_EOC/FeatureServer/0
+    notes: "State-level EOCs only (~56 points nationally)"
+    confidence: high
+
+  - layer: eoc
+    id: eoc@hifld-nasa-local
+    provider: hifld-local
+    url: https://maps.nccs.nasa.gov/mapping/rest/services/hifld_open/emergency_services/FeatureServer
+    layer_match: "^local_emergency_ops"
+    where_by_aoi:
+      state: "STATE = '{state_abbr}'"
+      region: "STATE IN ({states_sql})"
+    title: "eoc (local, archived)"
+    fields:
+      name: {from: [NAME]}
+      address: {from: [ADDRESS]}
+      phone: {from: [TELEPHONE]}
+    source_name: "HIFLD Local Emergency Operations Centers (final snapshot, NASA NCCS re-host)"
+    source_url: https://maps.nccs.nasa.gov/mapping/rest/services/hifld_open/emergency_services/FeatureServer
+    license: "Public domain (US Government work) - unofficial re-host; frozen, no live successor"
+    confidence: low
+
+  - layer: shelters
+    id: shelters@fema-nss
+    provider: fema
+    url: https://gis.fema.gov/arcgis/rest/services/NSS/NSS_flex_facilities/FeatureServer
+    layer_match: "general population|^shelter"
+    aoi_kinds: [county, state, region, bbox]
+    hidden: true
+    name: "{name} ({capacity_persons})"
+    fields:
+      name: {from: [SHELTER_NAME, shelter_name, NAME]}
+      capacity_persons: {from: [EVACUATION_CAPACITY, POST_IMPACT_CAPACITY]}
+      type: {from: [FACILITY_USAGE_CODE, facility_usage_code]}
+    source_name: "FEMA National Shelter System - facilities (live)"
+    source_url: https://gis.fema.gov/arcgis/rest/services/NSS/NSS_flex_facilities/FeatureServer
+    notes: "Many sublayers by facility type; matched by name (general population shelters). EVACUATION_CAPACITY / POST_IMPACT_CAPACITY in persons. OpenShelters/0 lists only currently open shelters"
+    confidence: medium
+
+  # ---------------- schools (mass-care sites) ----------------
+  - layer: schools
+    id: schools@nces-public
+    provider: nces
+    sector: Government
+    url: https://nces.ed.gov/opengis/rest/services/K12_School_Locations/EDGE_GEOCODE_PUBLICSCH_2324/MapServer
+    layer_id: 0
+    where_by_aoi:
+      county: "CNTY = '{fips5}'"
+      state: "STATE = '{state_abbr}'"
+    aoi_kinds: [county, state, bbox]
+    hidden: true
+    fields:
+      name: {from: [NAME]}
+      source_id: {from: [NCESSCH]}
+      address: {from: [STREET]}
+      type: {const: "public school"}
+    source_name: "NCES EDGE Public School Locations 2023-24 (live)"
+    source_url: https://nces.ed.gov/programs/edge/Geographic/SchoolLocations
+    confidence: high
+
+  - layer: schools
+    id: schools@nces-postsecondary
+    provider: nces-college
+    sector: Government
+    url: https://services1.arcgis.com/Ua5sjt3LWTPigjyD/arcgis/rest/services/Postsecondary_School_Locations_Current/FeatureServer
+    layer_id: 0
+    where_by_aoi:
+      county: "CNTY = '{fips5}'"
+      state: "STATE = '{state_abbr}'"
+    aoi_kinds: [county, state, bbox]
+    hidden: true
+    title: "schools (colleges)"
+    fields:
+      name: {from: [INSTNM, NAME]}
+      source_id: {from: [UNITID]}
+      address: {from: [STREET]}
+      type: {const: "college / university"}
+    source_name: "NCES EDGE Postsecondary School Locations (IPEDS, live)"
+    source_url: https://nces.ed.gov/programs/edge/Geographic/PostsecondarySchoolLocations
+    confidence: high

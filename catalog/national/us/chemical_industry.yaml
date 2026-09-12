@@ -1,0 +1,87 @@
+# US national tier - CHEMICAL & HAZMAT, AGRICULTURE & FOOD, MINING.
+#
+# Every entry here is DISABLED and marked low confidence: the endpoints are
+# documented from EPA / MSHA / USDA publication patterns but were NOT verified
+# against a live server. Find out which ones work on your network with
+#
+#     overlaybuilder doctor --aoi state:MN --include-disabled
+#
+# then set `enabled: true` on the ones that answer (and fix the layer name or
+# `fields:` if doctor reports a schema warning). Until then the OSM global tier
+# carries these sectors.
+defaults:
+  enabled: false
+  confidence: low
+  spatial: bbox
+  license: "Public domain (US Government work)"
+sources:
+  - layer: chemical_plants
+    id: chemical_plants@epa-tri
+    provider: epa-tri
+    entity: chemical_plant
+    sector: Chemical & Hazmat
+    driver: arcgis
+    url: https://geodata.epa.gov/arcgis/rest/services/OEI/FRS_INTERESTS/MapServer
+    layer_match: "(?i)toxics?.?release|^tri[ _-]"
+    where_by_aoi:
+      state: "STATE_CODE = '{state_abbr}'"
+      region: "STATE_CODE IN ({states_sql})"
+    fields:
+      name: {from: [PRIMARY_NAME, FAC_NAME, CWP_NAME]}
+      source_id: {from: [REGISTRY_ID, TRI_FACILITY_ID]}
+      address: {from: [LOCATION_ADDRESS]}
+      county: {from: [COUNTY_NAME]}
+    source_name: "EPA Toxics Release Inventory facilities (Facility Registry Service)"
+    source_url: https://www.epa.gov/toxics-release-inventory-tri-program
+    notes: "The host and the FRS service family are confirmed (FRS_Wastewater works); this service name and the TRI layer within it are NOT. Bulk alternative: the TRI Basic Data Files by year at epa.gov/toxics-release-inventory-tri-program/tri-basic-data-files-calendar-years-1987-present (CSV with latitude/longitude)"
+
+  - layer: chemical_plants
+    id: chemical_plants@epa-rmp
+    provider: epa-rmp
+    sector: Chemical & Hazmat
+    driver: arcgis
+    url: https://geodata.epa.gov/arcgis/rest/services/OEI/FRS_INTERESTS/MapServer
+    layer_match: "(?i)risk.?management|^rmp[ _-]|[ _-]rmp$"
+    title: "chemical_plants (RMP facilities)"
+    fields:
+      name: {from: [PRIMARY_NAME, FAC_NAME]}
+      source_id: {from: [REGISTRY_ID]}
+    source_name: "EPA Risk Management Plan facilities (accidental release prevention)"
+    source_url: https://www.epa.gov/rmp
+    notes: "RMP covers facilities holding threshold quantities of regulated substances - anhydrous ammonia at farm co-ops is the common upper-Midwest case. Facility LOCATIONS are public; the offsite consequence analysis sections are not, and are not wanted here"
+
+  - layer: mines
+    id: mines@msha
+    provider: msha
+    entity: mine
+    sector: Mining
+    driver: file
+    url: https://arlweb.msha.gov/OpenGovernmentData/DataSets/Mines.zip
+    format: csv
+    zip_member: "Mines\\.txt$"
+    delimiter: "|"
+    lat_field: LATITUDE
+    lon_field: LONGITUDE
+    filter: {field: STATE, in: ["{state_abbr}"]}
+    group_by: [substance]
+    fields:
+      name: {from: [CURRENT_MINE_NAME, MINE_NAME]}
+      source_id: {from: [MINE_ID]}
+      operator: {from: [CURRENT_OPERATOR_NAME, OPERATOR_NAME]}
+      status: {from: [CURRENT_MINE_STATUS, MINE_STATUS]}
+      substance: {from: [PRIMARY_SIC_CD_DESC, PRIMARY_CANVASS]}
+      type: {from: [COAL_METAL_IND]}
+    source_name: "MSHA Mines (Mine Data Retrieval System open data)"
+    source_url: https://www.msha.gov/data-and-reports/mine-data-retrieval-system
+    notes: "The arlweb.msha.gov open-data host was retired at some point after 2023; if it 404s, look for the current Mines dataset under msha.gov data and reports, or data.gov. Column names are from the MSHA data dictionary and are unverified"
+
+  - layer: grain_storage
+    id: grain_storage@usda
+    provider: usda
+    sector: Agriculture & Food
+    driver: arcgis
+    url: https://www.usda.gov/
+    layer_match: "(?i)grain.?(warehouse|elevator|storage)"
+    source_name: "USDA licensed grain warehouses (placeholder - no confirmed GIS endpoint)"
+    source_url: https://www.ams.usda.gov/services/warehouse-licensing
+    notes: "USDA publishes licensed warehouse operators as a list, not a GIS service; no public endpoint was confirmed. Left here so contributors know it was looked for. OSM man_made=silo is the working source"

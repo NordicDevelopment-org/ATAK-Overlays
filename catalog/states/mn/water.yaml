@@ -1,0 +1,31 @@
+# Minnesota - state tier, water.
+defaults:
+  sector: Water
+  license: "Minnesota Geospatial Commons - public data, attribution requested"
+sources:
+  - layer: wastewater_treatment
+    id: wastewater_treatment@mpca
+    provider: mpca
+    entity: wastewater_treatment
+    driver: arcgis
+    url: https://enterprise.gisdata.mn.gov/aghost/rest/services/us_mn_state_pca/util_wastewater_facilities/FeatureServer
+    layer_id: 0
+    spatial: bbox
+    source_name: "MPCA Wastewater Facilities in Minnesota (NPDES/SDS permitted)"
+    source_url: https://gisdata.mn.gov/dataset/util-wastewater-facilities
+    notes: "~1,500 permitted facilities, refreshed daily from MPCA Tempo; cross-checked against EPA FRS"
+    confidence: medium
+
+  - layer: dams
+    id: dams@mn-dnr
+    provider: mn-dnr
+    entity: dam
+    driver: file
+    url: https://resources.gisdata.mn.gov/pub/gdrs/data/pub/us_mn_state_dnr/struc_mn_dams_inventory_pub/gpkg_struc_mn_dams_inventory_pub.zip
+    format: gpkg
+    zip_member: "\\.gpkg$"
+    group_by: [hazard_class]
+    source_name: "MN DNR Inventory of Dams in Minnesota (Dam Safety Unit)"
+    source_url: https://gisdata.mn.gov/dataset/struc-mn-dams-inventory-pub
+    notes: "Includes structures below NID thresholds and removed dams (filter on status). Zip name follows the MnGeo GDRS pattern; confirm on the dataset page"
+    confidence: medium

@@ -1,0 +1,39 @@
+name: ci
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+  schedule:
+    - cron: "17 9 * * 1"   # weekly catalog health check (Mon 09:17 UTC)
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python: ["3.10", "3.11", "3.12", "3.13"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+      - name: Install
+        run: |
+          python -m pip install -U pip
+          pip install -e ".[dev]"
+      - name: Lint catalog (offline)
+        run: overlaybuilder validate
+      - name: Test
+        run: pytest -q
+
+  catalog-health:
+    # weekly + on PRs that touch the catalog; failing here flags dead sources
+    runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request' || github.event_name == 'schedule'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: pip install -e .
+      - run: python scripts/health_check.py

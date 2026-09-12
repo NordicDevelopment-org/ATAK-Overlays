@@ -1,0 +1,20 @@
+# Minnesota - state tier, energy. Applies to every MN county and --aoi state:MN.
+# MN has NO current state transmission/substation layer: the MN Commerce EERA
+# "Electric Transmission Lines and Substations" dataset was withdrawn 2022-07-19
+# as outdated. Use the national archive + OSM layers for MN lines.
+defaults:
+  sector: Energy - Electric
+  license: "Minnesota Geospatial Commons - public data, attribution requested"
+sources:
+  - layer: service_territories
+    id: service_territories@mn-puc
+    provider: mn-puc
+    driver: arcgis
+    url: https://app.gisdata.mn.gov/arcgis/rest/services/EUSA/EUSA/FeatureServer
+    layer_id: 0
+    spatial: bbox
+    hidden: true
+    source_name: "Minnesota Electric Utility Service Areas (MN PUC via MnGeo)"
+    source_url: https://gisdata.mn.gov/dataset/util-eusa
+    notes: "Field names not verified - read with `overlaybuilder probe <url>/0`; defaults map NAME/UTILITY/etc. automatically"
+    confidence: medium

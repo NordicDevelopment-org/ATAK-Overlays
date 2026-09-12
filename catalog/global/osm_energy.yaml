@@ -1,0 +1,90 @@
+# WORLD tier - OpenStreetMap energy infrastructure via Overpass (ODbL).
+# Works for any AOI on Earth. Tags follow the OSM wiki conventions:
+#   plant:output:electrical / generator:output:electrical  "120 MW", "1.5 GW", "500 kW"
+#   voltage                                                volts, ';'-separated for multiple ("345000;115000")
+#   plant:source / generator:source                        coal, gas, nuclear, hydro, wind, solar, ...
+# Canonical fields (capacity_mw, voltage_kv, operator, fuel ...) are derived
+# automatically with unit conversion; raw tags are kept in the popup.
+defaults:
+  driver: overpass
+  provider: osm
+  license: "ODbL 1.0 - (c) OpenStreetMap contributors"
+  sector: Energy - Electric
+sources:
+  - layer: power_plants
+    entity: power_plant
+    tags: ["power=plant"]
+    elements: nwr
+    represent: both                      # polygon outline + a marker at its centre
+    group_by: [fuel]
+    name: "{name} ({capacity_mw})"
+    fields:
+      capacity_mw: {from: ["plant:output:electrical@W"]}
+      fuel: {from: ["plant:source"]}
+      technology: {from: ["plant:method"]}
+      generators: {from: ["generator:count"]}
+    notes: "OSM plant polygons; capacity from plant:output:electrical where mapped"
+
+  - layer: generators
+    tags: ["power=generator;generator:output:electrical", "power=generator;generator:source~^(nuclear|coal|gas|oil|hydro|geothermal|biomass|waste)$"]
+    elements: nwr
+    represent: point
+    group_by: [fuel]
+    hidden: true
+    fields:
+      capacity_mw: {from: ["generator:output:electrical@W"]}
+      fuel: {from: ["generator:source"]}
+      technology: {from: ["generator:method", "generator:type"]}
+    notes: "Individual generator units (turbines, reactors, panels arrays) with a rated output or a thermal/hydro source; wind/solar without output are skipped to limit volume"
+
+  - layer: substations
+    entity: substation
+    tags: ["power=substation"]
+    elements: nwr
+    represent: both
+    group_by: [voltage_kv]
+    name: "{name} ({voltage_kv})"
+    fields:
+      voltage_kv: {from: ["voltage@V"]}
+      type: {from: ["substation"]}
+    style_rules:
+      - {when: "voltage_kv >= 300", color: "ff0000ff", width: 3, icon: square}
+      - {when: "voltage_kv >= 100", color: "ff0080ff", width: 2, icon: square}
+      - {when: "voltage_kv < 100",  color: "ff00c0ff", width: 1, icon: square}
+
+  - layer: transmission_lines
+    entity: transmission_line
+    tags: ["power=line", "power=cable"]
+    elements: way
+    geometry: line
+    group_by: [voltage_kv]
+    name: "{name} {voltage_kv}"
+    fields:
+      voltage_kv: {from: ["voltage@V"]}
+      circuits: {from: ["circuits"]}
+      frequency_hz: {from: ["frequency"]}
+    style_rules:
+      - {when: "voltage_kv >= 500", color: "ff0000ff", width: 5}
+      - {when: "voltage_kv >= 300", color: "ff0040ff", width: 4}
+      - {when: "voltage_kv >= 200", color: "ff0080ff", width: 3}
+      - {when: "voltage_kv >= 100", color: "ff00b0ff", width: 2}
+      - {when: "voltage_kv < 100",  color: "ff00e0ff", width: 1}
+    notes: "power=line (overhead) + power=cable (underground). Distribution (minor_line) excluded"
+
+  - layer: power_towers
+    tags: ["power=tower"]
+    elements: node
+    hidden: true
+    aoi_kinds: [county, bbox]            # too dense above county scale
+    fields:
+      type: {from: ["design", "structure"]}
+      height_ft: {from: ["height@m"]}
+    notes: "transmission towers (pylons); county-scale only"
+
+  - layer: battery_storage
+    tags: ["power=plant;plant:source=battery", "power=generator;generator:source=battery", "power=storage"]
+    elements: nwr
+    represent: point
+    fields:
+      capacity_mw: {from: ["plant:output:electrical@W", "generator:output:electrical@W"]}
+      capacity_mwh: {from: ["plant:output:electrical:storage@Wh", "generator:output:electrical:storage@Wh", "storage:capacity@Wh"]}

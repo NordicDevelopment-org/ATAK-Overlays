@@ -1,0 +1,18 @@
+# Wisconsin - state tier, water.
+defaults:
+  sector: Water
+  license: "Wisconsin DNR Open Data - free public download; DNR disclaimer applies"
+sources:
+  - layer: dams
+    id: dams@wi-dnr
+    provider: wi-dnr
+    entity: dam
+    driver: arcgis
+    url: https://dnrmaps.wi.gov/arcgis2/rest/services/WT_DAM/WT_Dam_WTM_Ext/MapServer
+    layer_match: "dam"
+    spatial: bbox
+    group_by: [hazard_class]
+    source_name: "Wisconsin Repository of Dams (WI DNR Dam Safety)"
+    source_url: https://data-wi-dnr.opendata.arcgis.com/
+    notes: "~4,100 active dams, updated daily; ~40 attributes (hazard rating, structural/hydraulic height). Server CRS is WTM; the driver requests WGS84"
+    confidence: medium

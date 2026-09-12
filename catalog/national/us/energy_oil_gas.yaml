@@ -1,0 +1,235 @@
+# US national tier - OIL, GAS, FUEL (EIA U.S. Energy Atlas; USDOT/BTS NTAD mirrors).
+# PHMSA NPMS (the authoritative pipeline map) is view-only and NOT redistributable;
+# EIA's major-pipeline layers are the public equivalent (no gathering/distribution).
+defaults:
+  sector: Energy - Oil & Gas
+  license: "Public domain (US EIA / US Government work)"
+sources:
+  - layer: pipelines
+    id: pipelines@eia-gas
+    provider: eia
+    entity: pipeline
+    driver: arcgis
+    url: https://geo.dot.gov/server/rest/services/Hosted/Natural_Gas_Pipelines_US_EIA/FeatureServer
+    layer_id: 0
+    spatial: bbox
+    group_by: [type]
+    name: "{operator} {substance}"
+    fields:
+      substance: {const: "natural gas"}
+      type: {from: [TYPEPIPE]}             # Interstate / Intrastate
+      operator: {from: [Operator]}
+      status: {from: [Status]}
+    style: {color: "ffff00aa", width: 2}
+    source_name: "EIA Natural Gas Interstate and Intrastate Pipelines (USDOT BTS NTAD mirror)"
+    source_url: https://atlas.eia.gov/datasets/eia::natural-gas-interstate-and-intrastate-pipelines/about
+    notes: "Major transmission pipelines only. No diameter/capacity attributes in the public layer"
+    confidence: high
+    alternates:
+      - {driver: file, url: "https://www.eia.gov/maps/map_data/NaturalGas_InterIntrastate_Pipelines_US_EIA.zip", note: "EIA bulk shapefile"}
+
+  - layer: pipelines
+    id: pipelines@eia-crude
+    provider: eia-crude
+    entity: pipeline
+    driver: arcgis
+    url: https://geo.dot.gov/server/rest/services/hosted/Crude_Oil_Pipelines_US_EIA/FeatureServer
+    layer_id: 0
+    spatial: bbox
+    title: "pipelines (crude oil)"
+    name: "{name} - crude oil"
+    fields:
+      substance: {const: "crude oil"}
+      name: {from: [Pipename, PIPENAME, Pipeline, Name]}
+      operator: {from: [Operator, Opername]}
+    style: {color: "ff2020c0", width: 2}
+    source_name: "EIA Crude Oil Pipelines (USDOT BTS NTAD mirror)"
+    source_url: https://atlas.eia.gov/datasets/eia::crude-oil-pipelines/about
+    notes: "Capacity (b/d) is only in EIA's separate liquids pipeline projects table"
+    confidence: medium
+
+  - layer: pipelines
+    id: pipelines@eia-hgl
+    provider: eia-hgl
+    entity: pipeline
+    driver: arcgis
+    url: https://geo.dot.gov/server/rest/services/hosted/HGL_Pipelines_US_EIA/FeatureServer
+    layer_id: 0
+    spatial: bbox
+    title: "pipelines (HGL / NGL)"
+    name: "{name} - HGL"
+    fields:
+      substance: {const: "hydrocarbon gas liquids"}
+      name: {from: [Pipename, PIPENAME, Pipeline, Name]}
+      operator: {from: [Operator, Opername]}
+    style: {color: "ffc000c0", width: 2}
+    source_name: "EIA Hydrocarbon Gas Liquids Pipelines (USDOT BTS NTAD mirror)"
+    source_url: https://atlas.eia.gov/datasets/eia::hydrocarbon-gas-liquids-hgl-pipelines/about
+    confidence: high
+
+  - layer: pipelines
+    id: pipelines@eia-products
+    provider: eia-products
+    entity: pipeline
+    driver: file
+    url: https://www.eia.gov/maps/map_data/PetroleumProduct_Pipelines_US_EIA.zip
+    format: shp
+    title: "pipelines (petroleum products)"
+    name: "{name} - products"
+    fields:
+      substance: {const: "petroleum products"}
+      name: {from: [Pipename, PIPENAME, Pipeline, Name]}
+      operator: {from: [Operator, Opername]}
+    style: {color: "ff4040ff", width: 2}
+    source_name: "EIA Petroleum Product Pipelines (bulk shapefile)"
+    source_url: https://atlas.eia.gov/datasets/eia::petroleum-product-pipelines/about
+    notes: "Whole-nation download (cached), then clipped to the AOI"
+    confidence: medium
+
+  - layer: compressor_stations
+    id: compressor_stations@hifld-mirror
+    provider: hifld
+    driver: arcgis
+    url: https://maps.nccs.nasa.gov/mapping/rest/services/hifld_open/energy/FeatureServer
+    layer_id: 6
+    spatial: bbox
+    fields:
+      name: {from: [name, NAME]}
+      county: {from: [county, COUNTY]}
+    source_name: "Natural Gas Compressor Stations (HIFLD Open, NASA NCCS mirror; frozen Aug 2025)"
+    source_url: https://maps.nccs.nasa.gov/mapping/rest/services/hifld_open/energy/FeatureServer/6
+    license: "Public domain (US Government work) - mirror"
+    notes: "No horsepower field in the public layer. No EIA equivalent exists; OSM pipeline=substation is the maintained fallback"
+    confidence: medium
+
+  - layer: gas_processing
+    id: gas_processing@eia
+    provider: eia
+    driver: file
+    url: https://www.eia.gov/maps/map_data/NaturalGas_ProcessingPlants_US_EIA.zip
+    format: shp
+    name: "{name} ({capacity_mmcfd})"
+    fields:
+      name: {from: [Plant_Name, PLANT_NAME, Site, Name]}
+      capacity_mmcfd: {from: [Cap_MMcfd, CAP_MMCFD]}
+      operator: {from: [Operator, Company, Corp]}
+    source_name: "EIA Natural Gas Processing Plants (Form EIA-757)"
+    source_url: https://atlas.eia.gov/datasets/1603bffa90024b9eb280215af7edc3bd_0/about
+    notes: "Zip name follows EIA's map_data pattern (confirmed for pipelines/refineries); Plant_Flow (MMcf/d) also in attributes"
+    confidence: medium
+
+  - layer: gas_storage
+    id: gas_storage@eia
+    provider: eia
+    driver: arcgis
+    url: https://services7.arcgis.com/FGr1D95XCGALKXqM/arcgis/rest/services/Natural_Gas_Underground_Storage/FeatureServer
+    layer_id: 39
+    spatial: bbox
+    group_by: [type]
+    fields:
+      name: {from: [Field, FIELD, Name, Site]}
+      type: {from: [Type, TYPE, Storage_Type, Reservoir]}
+      operator: {from: [Operator, Owner, Company]}
+    source_name: "EIA Natural Gas Underground Storage (Form EIA-191)"
+    source_url: https://atlas.eia.gov/datasets/beffe709475c45909ff7423426ccb220_39/about
+    notes: "One search summary reported this endpoint as token-gated; if it errors, switch to the bulk zip alternate"
+    confidence: medium
+    alternates:
+      - {driver: file, url: "https://www.eia.gov/maps/map_data/NaturalGas_UndergroundStorage_US_EIA.zip"}
+
+  - layer: lng_terminals
+    id: lng_terminals@eia
+    provider: eia
+    driver: file
+    url: https://www.eia.gov/maps/map_data/LNG_ImportExportTerminals_US_EIA.zip
+    format: shp
+    fields:
+      name: {from: [Name, NAME, Site, Terminal]}
+      operator: {from: [Operator, Owner, Company]}
+      type: {from: [Function, Type, TYPE]}
+    source_name: "EIA LNG Import / Export Terminals"
+    source_url: https://atlas.eia.gov/datasets/e2e0a3828d3548b29aa03b7a53a4efb5/about
+    notes: "Regasification / liquefaction (Bcf/d) and storage (Bcf) ride in source attributes"
+    confidence: medium
+
+  - layer: refineries
+    id: refineries@eia
+    provider: eia
+    driver: file
+    url: https://www.eia.gov/maps/map_data/Petroleum_Refineries_US_EIA.zip
+    format: shp
+    name: "{name} ({capacity_bpd})"
+    fields:
+      name: {from: [Site, SITE, Name]}
+      owner: {from: [Corp, CORP, Company]}
+      capacity_bpd: {from: ["AD_Mbpd@Mbpd", "AD_MBPD@Mbpd"]}    # atmospheric distillation, thousand b/d -> b/d
+    source_name: "EIA Petroleum Refineries (Refinery Capacity Report)"
+    source_url: https://atlas.eia.gov/datasets/6547eda91ef84cc386e23397cf834524_22/about
+    notes: "Downstream unit capacities (VDist_Mbpd, Cat_Crack, ...) in source attributes; annual as of Jan 1"
+    confidence: high
+
+  - layer: fuel_terminals
+    id: fuel_terminals@eia
+    provider: eia
+    driver: file
+    url: https://www.eia.gov/maps/map_data/PetroleumProduct_Terminals_US_EIA.zip
+    format: shp
+    hidden: true
+    fields:
+      name: {from: [Site, SITE, Name, Company]}
+      operator: {from: [Company, Owner, Operator]}
+    source_name: "EIA Petroleum Product Terminals (Form EIA-815 bulk terminals >= 50,000 bbl)"
+    source_url: https://atlas.eia.gov/datasets/c3c2e337bee54706a3564b8889b8848d_36/about
+    notes: "Includes LPG/propane bulk terminals - the closest public propane layer"
+    confidence: medium
+
+  - layer: ethanol_plants
+    id: ethanol_plants@eia
+    provider: eia
+    driver: arcgis
+    url: https://services7.arcgis.com/FGr1D95XCGALKXqM/arcgis/rest/services/Ethanol_Plants_US_EIA/FeatureServer
+    layer_id: 112
+    spatial: bbox
+    name: "{name} ({capacity_mgy})"
+    fields:
+      name: {from: [Site, Plant, Name, Company]}
+      capacity_mgy: {from: [Cap_Mmgal, CAP_MMGAL]}
+      operator: {from: [Company, Operator]}
+    source_name: "EIA Ethanol Plants (Form EIA-819)"
+    source_url: https://atlas.eia.gov/datasets/eia::ethanol-plants/about
+    notes: "Locations researched from public sources (approximate); capacity in million gal/yr"
+    confidence: high
+
+  - layer: biodiesel_plants
+    id: biodiesel_plants@eia
+    provider: eia
+    driver: file
+    url: https://www.eia.gov/maps/map_data/Biodiesel_Plants_US_EIA.zip
+    format: shp
+    hidden: true
+    fields:
+      name: {from: [Site, Plant, Name, Company]}
+      capacity_mgy: {from: [Cap_Mmgal, CAP_MMGAL]}
+      operator: {from: [Company, Operator]}
+    source_name: "EIA Biodiesel Plants (Form EIA-22M)"
+    source_url: https://atlas.eia.gov/datasets/79dad60ce89c47519452a2959d49acd8/about
+    confidence: medium
+
+  - layer: fuel_stations
+    id: fuel_stations@afdc
+    provider: afdc
+    driver: file
+    enabled: false                       # needs a free API key: export NREL_API_KEY=...
+    url: "https://developer.nrel.gov/api/alt-fuel-stations/v1.geojson?api_key=${NREL_API_KEY}&status=E&state={state_abbr}"
+    format: geojson
+    aoi_kinds: [county, state]
+    hidden: true
+    group_by: [fuel_type_code]
+    fields:
+      name: {from: [station_name]}
+      type: {from: [fuel_type_code]}
+      address: {from: [street_address]}
+    source_name: "NREL/AFDC Alternative Fuel Stations (EV, CNG, LNG, LPG, E85, biodiesel, hydrogen)"
+    source_url: https://afdc.energy.gov/stations
+    notes: "Host may have moved to developer.nlr.gov (2026); adjust url if 404"
+    confidence: medium

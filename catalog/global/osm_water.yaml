@@ -1,0 +1,57 @@
+# WORLD tier - water, wastewater, dams (OSM via Overpass, ODbL).
+defaults:
+  driver: overpass
+  provider: osm
+  license: "ODbL 1.0 - (c) OpenStreetMap contributors"
+  sector: Water
+sources:
+  - layer: dams
+    entity: dam
+    tags: ["waterway=dam", "man_made=dam"]
+    elements: nwr
+    represent: both
+    fields:
+      height_ft: {from: ["height@m"]}
+      type: {from: ["dam:type", "material"]}
+    notes: "USACE NID is the authoritative US source (height, storage, hazard class); OSM adds geometry + world coverage"
+
+  - layer: water_treatment
+    entity: water_treatment
+    tags: ["man_made=water_works"]
+    elements: nwr
+    represent: both
+    fields:
+      type: {from: ["water_works", "man_made"]}
+
+  - layer: wastewater_treatment
+    entity: wastewater_treatment
+    tags: ["man_made=wastewater_plant"]
+    elements: nwr
+    represent: both
+
+  - layer: water_towers
+    tags: ["man_made=water_tower", "man_made=reservoir_covered", "man_made=storage_tank;content=water"]
+    elements: nwr
+    represent: point
+    fields:
+      height_ft: {from: ["height@m"]}
+      type: {from: ["man_made"]}
+
+  - layer: water_wells
+    tags: ["man_made=water_well;pump=powered", "man_made=water_well;operator"]
+    elements: node
+    hidden: true
+    aoi_kinds: [county, bbox]
+
+  - layer: reservoirs
+    tags: ["landuse=reservoir", "natural=water;water=reservoir"]
+    elements: wr
+    geometry: polygon
+    hidden: true
+    aoi_kinds: [county, state, bbox]
+
+  - layer: levees
+    tags: ["man_made=dyke", "man_made=embankment;embankment=levee"]
+    elements: way
+    geometry: line
+    hidden: true

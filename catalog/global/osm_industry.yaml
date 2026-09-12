@@ -1,0 +1,115 @@
+# WORLD tier - CHEMICAL & HAZMAT, AGRICULTURE & FOOD, MINING (OSM via Overpass, ODbL).
+#
+# Three DHS critical-infrastructure sectors the energy/water/comms layers miss,
+# and the ones that matter most across Minnesota, Wisconsin and Iowa: anhydrous
+# ammonia and fertiliser storage, grain elevators and co-ops, food and dairy
+# processing, chemical works, and aggregate/quarry operations.
+#
+# Tag conventions: OSM uses British spellings for some products
+# (fertiliser, sulphuric), so selectors match both. Storage tanks carry
+# `content`; works carry `product`.
+defaults:
+  driver: overpass
+  provider: osm
+  license: "ODbL 1.0 - (c) OpenStreetMap contributors"
+sources:
+  # ---------------- chemical & hazmat ----------------
+  - layer: chemical_plants
+    entity: chemical_plant
+    sector: Chemical & Hazmat
+    tags: ["industrial=chemical", "man_made=works;product~(?i)^(chemical|acid|sulphuric|sulfuric|ammonia|fertiliser|fertilizer|paint|plastic|explosive)"]
+    elements: nwr
+    represent: both
+    group_by: [type]
+    fields:
+      type: {from: [industrial, product]}
+      substance: {from: [product]}
+    notes: "EPA's Risk Management Plan and Toxics Release Inventory are the authoritative US lists; this is the exterior-footprint view and the only worldwide one"
+
+  - layer: hazmat_storage
+    sector: Chemical & Hazmat
+    tags: ["man_made=storage_tank;content~(?i)^(ammonia|anhydrous_ammonia|chlorine|propane|lpg|acid|sulphuric|sulfuric|fertiliser|fertilizer|chemical)",
+           "man_made=silo;content~(?i)^(ammonia|fertiliser|fertilizer|chemical)",
+           "landuse=industrial;industrial~(?i)^(fertiliser|fertilizer|agrochemical)"]
+    elements: nwr
+    represent: point
+    group_by: [substance]
+    name: "{substance} storage"
+    fields:
+      substance: {from: [content, industrial]}
+    style_rules:
+      - {when: "substance ~ (?i)ammonia", color: "ff00a5ff", icon: ring, width: 3}
+      - {when: "substance ~ (?i)(chlorine|acid|sulph|sulf)", color: "ff0000ff", icon: ring, width: 3}
+    notes: "Anhydrous ammonia and fertiliser tanks are the common rural hazmat risk in the upper Midwest"
+
+  - layer: explosives_storage
+    sector: Chemical & Hazmat
+    tags: ["military=bunker;bunker_type~(?i)^(munition|explosive|ammunition)", "industrial=explosive",
+           "man_made=works;product~(?i)explosive|ammunition"]
+    elements: nwr
+    represent: point
+    hidden: true
+    fields:
+      type: {from: [bunker_type, industrial, product]}
+    notes: "Ammunition and explosives storage as mapped in OSM. ATF-licensed magazines are not published; the layer is sparse by nature"
+
+  # ---------------- agriculture & food ----------------
+  - layer: grain_storage
+    entity: grain_storage
+    sector: Agriculture & Food
+    tags: ["man_made=silo", "building=silo", "man_made=storage_tank;content~(?i)^(grain|corn|soy|soybean|wheat)",
+           "man_made=works;product~(?i)^(grain|feed|flour)"]
+    elements: nwr
+    represent: point
+    group_by: [type, substance]
+    name: "{operator} {type}"
+    hidden: true
+    aoi_kinds: [county, bbox]
+    fields:
+      substance: {from: [content, crop, product]}
+      operator: {from: [operator, brand]}
+      type: {from: [man_made, building, industrial]}
+    notes: "Grain elevators, farm silos and co-op storage. Farm silos are extremely dense in the Corn Belt, so this is county-scale and hidden on import; `content`/`crop` are usually absent, which is why it groups by type first"
+
+  - layer: food_processing
+    sector: Agriculture & Food
+    tags: ["industrial=food", "industrial=dairy", "industrial=slaughterhouse", "industrial=brewery",
+           "man_made=works;product~(?i)^(food|dairy|milk|cheese|meat|sugar|corn_syrup|starch)"]
+    elements: nwr
+    represent: both
+    group_by: [type]
+    fields:
+      type: {from: [industrial, product]}
+    notes: "Dairies, meat plants, sugar and corn wet-milling - major water and power consumers, and food-supply nodes"
+
+  - layer: agri_facilities
+    sector: Agriculture & Food
+    tags: ["landuse=farmyard;operator", "man_made=works;product~(?i)fertiliser|fertilizer",
+           "shop=agrarian", "landuse=greenhouse_horticulture"]
+    elements: nwr
+    represent: point
+    hidden: true
+    aoi_kinds: [county, bbox]
+    notes: "Co-ops, ag retailers and greenhouse operations; county scale only"
+
+  - layer: livestock_operations
+    sector: Agriculture & Food
+    tags: ["landuse=farmyard;livestock", "building=farm_auxiliary;livestock", "man_made=works;product=animal_feed"]
+    elements: wr
+    represent: point
+    hidden: true
+    aoi_kinds: [county, bbox]
+    notes: "Concentrated feeding operations are permitted by state agencies (MPCA in MN); OSM coverage is thin"
+
+  # ---------------- mining & aggregates ----------------
+  - layer: mines
+    entity: mine
+    sector: Mining
+    tags: ["landuse=quarry", "man_made=mineshaft", "industrial=mine", "man_made=adit"]
+    elements: nwr
+    represent: both
+    group_by: [substance]
+    fields:
+      substance: {from: [resource, mineral, product]}
+      type: {from: [landuse, man_made, industrial]}
+    notes: "Quarries, sand and gravel pits, taconite and shafts. MSHA publishes the authoritative US mine list"

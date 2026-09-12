@@ -1,0 +1,62 @@
+# WORLD tier - transportation (OSM via Overpass, ODbL).
+defaults:
+  driver: overpass
+  provider: osm
+  license: "ODbL 1.0 - (c) OpenStreetMap contributors"
+  sector: Transportation
+sources:
+  - layer: airports
+    entity: airport
+    tags: ["aeroway=aerodrome"]
+    elements: nwr
+    represent: point
+    fields:
+      type: {from: ["aerodrome:type", "aerodrome"]}
+      source_id: {from: ["icao", "faa", "iata", "ref"]}
+      elevation_ft: {from: ["ele@m"]}
+
+  - layer: heliports
+    tags: ["aeroway=heliport", "aeroway=helipad"]
+    elements: nwr
+    represent: point
+    hidden: true
+
+  - layer: railways
+    tags: ["railway=rail;usage~^(main|branch|industrial)$", "railway=rail;railway:traffic_mode"]
+    elements: way
+    geometry: line
+    group_by: [usage]
+    aoi_kinds: [county, bbox]
+    fields:
+      tracks: {from: ["tracks"]}
+      type: {from: ["usage"]}
+    notes: "county scale only; BTS NTAD rail network is the US-wide source"
+
+  - layer: rail_facilities
+    tags: ["railway=station", "railway=yard", "landuse=railway"]
+    elements: nwr
+    represent: point
+    hidden: true
+
+  - layer: bridges
+    tags: ["man_made=bridge"]
+    elements: wr
+    represent: point
+    hidden: true
+    aoi_kinds: [county, bbox]
+
+  - layer: ports
+    tags: ["landuse=port", "industrial=port", "harbour=yes;industrial", "amenity=ferry_terminal"]
+    elements: nwr
+    represent: point
+
+  - layer: industrial
+    tags: ["landuse=industrial;industrial", "man_made=works"]
+    elements: wr
+    represent: point
+    hidden: true
+    aoi_kinds: [county, bbox]
+    sector: Industrial
+    fields:
+      type: {from: ["industrial", "product"]}
+    notes: "Industrial sites with a declared type (chemical, steel, food...). County scale only"
