@@ -48,7 +48,20 @@ def _add_common(ap):
     ap.add_argument("--tiger-year", type=int, default=2024)
 
 
+class AoiError(SystemExit):
+    pass
+
+
 def _resolve_aoi(args):
+    try:
+        return _resolve_aoi_inner(args)
+    except SystemExit:
+        raise
+    except (ValueError, KeyError, RuntimeError) as e:
+        raise AoiError(f"cannot resolve the AOI: {e}") from None
+
+
+def _resolve_aoi_inner(args):
     if args.aoi:
         return parse_aoi(args.aoi, cache_dir=args.cache_dir, county_name=args.county)
     if args.fips:

@@ -53,11 +53,19 @@ def abbr_for_fp(fp: str) -> str:
 
 
 def _gazetteer(cache_dir: str) -> str:
+    """The Census county file, downloaded once. Written atomically: a failed or
+    truncated download must not leave an empty file that later reads as a
+    successful lookup with no counties in it."""
     os.makedirs(cache_dir, exist_ok=True)
     path = os.path.join(cache_dir, "national_county2020.txt")
-    if not os.path.exists(path):
-        with open(path, "wb") as fh:
-            fh.write(http_get(_GAZETTEER))
+    if not os.path.exists(path) or os.path.getsize(path) < 1024:
+        body = http_get(_GAZETTEER, cache=False)
+        if len(body) < 1024 or b"|" not in body[:4096]:
+            raise RuntimeError(f"the Census county file at {_GAZETTEER} did not look like the gazetteer")
+        tmp = f"{path}.{os.getpid()}.tmp"
+        with open(tmp, "wb") as fh:
+            fh.write(body)
+        os.replace(tmp, path)
     with open(path, encoding="latin-1") as fh:
         return fh.read()
 
@@ -83,7 +91,18 @@ def resolve(state: str, county: Optional[str] = None,
             raise ValueError("fips must be 5 digits (state 2 + county 3)")
         sfp, cfp = f[:2], f[2:]
         abbr = abbr_for_fp(sfp)
-        name = county or _lookup_name(sfp, cfp, cache_dir)
+        if not abbr:
+            raise ValueError(f"'{f}' does not start with a known state FIPS "
+                             f"(got '{sfp}'); see overlaybuilder list-regions or a FIPS table")
+        if county:
+            name = county
+        else:
+            try:
+                name = _lookup_name(sfp, cfp, cache_dir)
+            except Exception:  # noqa: BLE001
+                # the county NAME is cosmetic (labels and the output folder);
+                # never let a gazetteer download stop a build that has a FIPS
+                name = ""
         return sfp, cfp, name, abbr
 
     sfp = state_fp(state)
@@ -91,7 +110,13 @@ def resolve(state: str, county: Optional[str] = None,
     if not county:
         raise ValueError("need a county name (or pass fips=SSCCC)")
     target = _norm(county)
-    for line in _gazetteer(cache_dir).splitlines()[1:]:
+    try:
+        gaz = _gazetteer(cache_dir)
+    except Exception as e:  # noqa: BLE001
+        raise RuntimeError(
+            f"cannot look up '{county}, {abbr}' without the Census county file ({e}). "
+            f"Use the FIPS directly instead, e.g. --aoi county:27025") from None
+    for line in gaz.splitlines()[1:]:
         parts = line.split("|")
         if len(parts) < 5:
             continue
