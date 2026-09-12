@@ -57,7 +57,15 @@ It probes every source without downloading data and writes `doctor.md`:
 | `skip` | no probe for that driver | nothing |
 
 Exit code 1 means at least one source has no working endpoint at all; the
-report lists them with the YAML file to edit. To inspect one service by hand:
+report lists them with the YAML file to edit.
+
+Some sources ship switched off because their endpoint was never verified
+(EPA chemical facilities, MSHA mines, the MnGeo emergency-services layers).
+Test those too and turn on whichever answer:
+
+```bash
+overlaybuilder doctor --aoi state:MN --include-disabled
+``` To inspect one service by hand:
 
 ```bash
 overlaybuilder probe https://gis.chisagocountymn.gov/arcgis/rest/services/DynamicData/MapServer

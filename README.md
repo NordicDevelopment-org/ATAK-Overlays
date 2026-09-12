@@ -92,8 +92,16 @@ AOI ─► catalog tiers ─► drivers ─► normalize ─► clip ─► reco
 | Communications | comm_towers (FCC ASR + OSM), broadcast_towers, data_centers, telecom_exchanges |
 | Emergency & Health | hospitals, urgent_care, fire_stations, police, ems, eoc, shelters, nursing_homes |
 | Government | correctional, government, schools |
-| Transportation | airports, heliports, railways, rail_facilities, bridges, ports |
+| Chemical & Hazmat | chemical_plants, hazmat_storage (anhydrous ammonia, chlorine, fertiliser), explosives_storage |
+| Agriculture & Food | grain_storage, food_processing, agri_facilities, livestock_operations |
+| Mining | mines (quarries, pits, shafts) |
+| Transportation | airports, heliports, railways, rail_facilities, rail_crossings, bridges, ports |
 | Base | county/state/city boundaries, roads, parcels, building_footprints, address_points |
+
+Some sources ship **switched off**: their endpoint is documented but was never
+verified, so they stay out of packs until you confirm them. Find the ones that
+work on your network with `overlaybuilder doctor --aoi state:MN --include-disabled`,
+then set `enabled: true` in the YAML.
 
 `docs/SOURCES.md` lists every endpoint with its 2026 status, rating fields,
 confidence and license. Important context: DHS shut down **HIFLD Open** in
@@ -108,8 +116,8 @@ overlaybuilder build     --aoi ... [--sectors ...] [--layers ...] [--exclude ...
                          [--format kmz geojson] [--out overlays] [--flat] [--precision 6]
                          [--no-clip] [--no-combined] [--no-reconcile] [--no-fallbacks]
                          [--jobs N] [--max-per-host N] [--no-http-cache] [--fail-fast]
-overlaybuilder sources   --aoi ...            what would build, by tier
-overlaybuilder doctor    --aoi ...            probe every endpoint, report dead ones -> doctor.md
+overlaybuilder sources   --aoi ... [--include-disabled]   what would build, by tier
+overlaybuilder doctor    --aoi ... [--include-disabled]  probe every endpoint -> doctor.md
 overlaybuilder demo                           synthetic sample pack, offline, to test ATAK rendering
 overlaybuilder probe     <arcgis url>[/<id>] [--sample]   list layers / fields / count / one record
 overlaybuilder validate                       lint the catalog offline

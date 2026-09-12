@@ -106,3 +106,22 @@ def test_validate_rejects_unknown_canonical_keys_and_units(tmp_path):
 def test_validate_accepts_known_units():
     # the shipped catalog maps MILES@mi, VOLTAGE@kV, height@m and so on
     assert catalog.validate(CATALOG) == []
+
+
+def test_disabled_sources_still_respect_coverage():
+    from overlaybuilder.aoi import parse_aoi as _p
+    ca = catalog.resolve_sources(CATALOG, _p("country:CA"), include_disabled=True)
+    assert all(s["_tier"] == "global" for s in ca)     # US-only candidates stay out of a Canada build
+    mn = catalog.resolve_sources(CATALOG, _p("state:MN"), include_disabled=True)
+    assert any(not s.get("enabled", True) for s in mn)
+
+
+def test_new_sectors_are_present_and_styled():
+    from overlaybuilder.convert.kmz import LAYER_STYLE
+    from overlaybuilder.normalize import HEADLINES
+    layers = {s["layer"] for s in catalog.global_sources(CATALOG)}
+    assert {"chemical_plants", "hazmat_storage", "grain_storage", "food_processing", "mines"} <= layers
+    for key in ("chemical_plants", "hazmat_storage", "grain_storage", "food_processing", "mines"):
+        assert key in LAYER_STYLE and key in HEADLINES
+    sectors = {s.get("sector") for s in catalog.global_sources(CATALOG)}
+    assert {"Chemical & Hazmat", "Agriculture & Food", "Mining"} <= sectors

@@ -65,7 +65,10 @@ def _add_common(ap):
     ap.add_argument("--fips", help="(legacy) 5-digit county FIPS")
     ap.add_argument("--layers", nargs="*", help="only these logical layers")
     ap.add_argument("--exclude", nargs="*", help="skip these logical layers")
-    ap.add_argument("--sectors", nargs="*", help="only sources whose sector starts with these (energy, water, comm, emergency, transport, base)")
+    ap.add_argument("--sectors", nargs="*", help="only sources whose sector starts with these (energy, water, comm, emergency, transport, chemical, agriculture, mining, base)")
+    ap.add_argument("--include-disabled", action="store_true",
+                    help="also include sources the catalog ships switched off (candidates whose "
+                         "endpoint is documented but unverified)")
     ap.add_argument("--catalog", help="catalog directory (default: repo ./catalog)")
     ap.add_argument("--cache-dir", default=".cache")
     ap.add_argument("--tiger-year", type=int, default=2024)
@@ -106,7 +109,8 @@ def cmd_build(args):
     set_max_per_host(args.max_per_host)
     ctx = Context(aoi=aoi, tiger_year=args.tiger_year, cache_dir=args.cache_dir,
                   http_cache=not args.no_http_cache, clip=not args.no_clip)
-    sources = catalog.resolve_sources(cat, aoi, args.layers, args.sectors, args.exclude)
+    sources = catalog.resolve_sources(cat, aoi, args.layers, args.sectors, args.exclude,
+                                      include_disabled=args.include_disabled)
     if not sources:
         if aoi.kind == "world":
             print("[!] --aoi world has no buildable sources: the Overpass API cannot serve a planet-wide\n"
@@ -143,10 +147,13 @@ def cmd_build(args):
 def cmd_sources(args):
     cat = _catalog_dir(args.catalog)
     aoi = _resolve_aoi(args)
-    srcs = catalog.resolve_sources(cat, aoi, args.layers, args.sectors, args.exclude)
+    srcs = catalog.resolve_sources(cat, aoi, args.layers, args.sectors, args.exclude,
+                                   include_disabled=args.include_disabled)
     print(f"{len(srcs)} source(s) for {aoi.describe()}:")
     for s in srcs:
-        print(f"  {s['_tier']:8} {s['layer']:24} {s['driver']:12} {s.get('sector',''):24} {s.get('source_name', s.get('url', ''))[:70]}")
+        off = "" if s.get("enabled", True) else " [off]"
+        print(f"  {s['_tier']:8} {s['layer']:22} {s['driver']:12} {s.get('sector',''):22} "
+              f"{s.get('source_name', s.get('url', ''))[:60]}{off}")
     return 0
 
 
@@ -157,7 +164,8 @@ def cmd_doctor(args):
     aoi = _resolve_aoi(args)
     configure_http(args.cache_dir, False)          # always hit the network for a health check
     ctx = Context(aoi=aoi, tiger_year=args.tiger_year, cache_dir=args.cache_dir)
-    sources = catalog.resolve_sources(cat, aoi, args.layers, args.sectors, args.exclude)
+    sources = catalog.resolve_sources(cat, aoi, args.layers, args.sectors, args.exclude,
+                                      include_disabled=args.include_disabled)
     print(f"[*] probing {len(sources)} source(s) for {aoi.describe()}\n")
     rows = doctor.check_sources(sources, ctx, use_alternates=not args.no_fallbacks)
     c = doctor.summarize(rows)

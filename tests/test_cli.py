@@ -73,3 +73,13 @@ def test_list_commands_and_sources(capsys):
     assert _run(["list-regions"]) == 0 and "upper-midwest" in capsys.readouterr().out
     assert _run(["sources", "--aoi", "county:27025", "--sectors", "water"]) == 0
     assert "dams" in capsys.readouterr().out
+
+
+def test_include_disabled_surfaces_candidate_sources(capsys):
+    assert _run(["sources", "--aoi", "state:MN"]) == 0
+    on = capsys.readouterr().out
+    assert _run(["sources", "--aoi", "state:MN", "--include-disabled"]) == 0
+    both = capsys.readouterr().out
+    assert both.count("\n") > on.count("\n")
+    assert "[off]" in both and "[off]" not in on
+    assert "epa-tri" not in on and "chemical_plants" in both

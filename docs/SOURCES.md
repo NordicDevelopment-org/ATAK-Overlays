@@ -44,6 +44,9 @@ knowledge, verify first. Status *live* / *frozen* (archive, no updates) /
 | hospitals, urgent_care, fire_stations, police, ems, eoc, shelters, nursing_homes | `amenity=hospital/fire_station/police`, `emergency=ambulance_station`, ... | `beds`, `emergency`, `helipad` | live |
 | correctional, government, schools | `amenity=prison/townhall/courthouse/school` | - | live |
 | airports, heliports, railways, rail_facilities, bridges, ports, industrial | `aeroway=*`, `railway=*`, `man_made=bridge`, `landuse=port/industrial` | `tracks`, `ele`, `icao` | live |
+| chemical_plants, hazmat_storage, explosives_storage | `industrial=chemical`, `man_made=works` + `product`, `man_made=storage_tank`/`silo` + `content` (ammonia, chlorine, fertiliser) | `content`, `product` | live |
+| grain_storage, food_processing, agri_facilities, livestock_operations | `man_made=silo`, `building=silo`, `industrial=food/dairy/slaughterhouse/brewery`, `landuse=farmyard` | `content`, `crop`, `product` | live |
+| mines | `landuse=quarry`, `man_made=mineshaft/adit`, `industrial=mine` | `resource`, `mineral` | live |
 
 Overpass etiquette: public instances allow ~2 concurrent queries; the driver
 tiles large AOIs (`tile_deg`), waits `min_interval` between calls, rotates
@@ -115,6 +118,22 @@ Database (CC BY, 2021 vintage) for non-US plants, FCC ULS licence dumps
 delimited multi-table parsers like `fcc_asr`), CMS nursing-home / hospital
 files (bed counts, coordinates for SNFs), USFA fire department registry
 (addresses only).
+
+## Candidates shipped switched off
+
+These are documented but unverified, so they stay out of packs until you turn
+them on. `overlaybuilder doctor --aoi <aoi> --include-disabled` tests them.
+
+| layer | source | endpoint | why off |
+|---|---|---|---|
+| chemical_plants | EPA Toxics Release Inventory via FRS | `geodata.epa.gov/arcgis/rest/services/OEI/FRS_INTERESTS/MapServer` (layer matched by name) | the host and FRS family are confirmed; this service name is not |
+| chemical_plants | EPA Risk Management Plan facilities | same service | same |
+| mines | MSHA Mines open data | `arlweb.msha.gov/OpenGovernmentData/DataSets/Mines.zip` | the arlweb open-data host may be retired |
+| grain_storage | USDA licensed warehouses | no GIS endpoint found | published as a list, not a service |
+| fuel_stations | NREL/AFDC alternative fuel stations | `developer.nrel.gov/api/alt-fuel-stations/v1.geojson` | needs a free API key in `NREL_API_KEY` |
+| rto_regions, service_territories | EIA / HIFLD mirror polygons | see `catalog/national/us/energy_electric.yaml` | large context polygons, off by default |
+| fire_stations, police, hospitals (MN) | U-Spatial / MnGeo datasets | resolve the service URL from gis.data.mn.gov | Commons moved to ArcGIS Hub in 2025; URLs unconfirmed |
+| ia service_territories | Iowa Utilities Commission | resolve from the geodata.iowa.gov hub item | FeatureServer URL not surfaced |
 
 ## State tiers
 

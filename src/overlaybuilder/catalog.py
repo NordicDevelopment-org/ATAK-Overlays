@@ -90,8 +90,8 @@ def county_sources(catalog_dir: str, fips5: str) -> List[dict]:
     return _load_sources(p, "county") if p else []
 
 
-def _applies(s: dict, aoi: Aoi) -> bool:
-    if s.get("enabled", True) is False:
+def _applies(s: dict, aoi: Aoi, ignore_enabled: bool = False) -> bool:
+    if not ignore_enabled and s.get("enabled", True) is False:
         return False
     kinds = s.get("aoi_kinds")
     if kinds and aoi.kind not in kinds:
@@ -128,7 +128,7 @@ def resolve_sources(catalog_dir: str, aoi: Aoi, only_layers: Optional[List[str]]
 
     out = []
     for s in srcs:
-        if not include_disabled and not _applies(s, aoi):
+        if not _applies(s, aoi, ignore_enabled=include_disabled):
             continue
         if only_layers and s["layer"] not in set(only_layers):
             continue

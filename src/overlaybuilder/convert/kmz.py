@@ -86,6 +86,17 @@ LAYER_STYLE: Dict[str, Tuple[str, str, int, str, bool, str]] = {
     "rail_crossings":      ("ff404040", "40404040", 1, "plus",     True,  "Transportation"),
     "ports":               ("ffff8040", "40ff8040", 2, "square",   False, "Transportation"),
     "industrial":          ("ff606060", "30606060", 1, "circle",   True,  "Industrial"),
+    # --- chemical & hazmat
+    "chemical_plants":     ("ff00a5ff", "4000a5ff", 2, "hexagon",  False, "Chemical & Hazmat"),
+    "hazmat_storage":      ("ff0045ff", "400045ff", 2, "ring",     False, "Chemical & Hazmat"),
+    "explosives_storage":  ("ff0000ff", "400000ff", 2, "diamond",  True,  "Chemical & Hazmat"),
+    # --- agriculture & food
+    "grain_storage":       ("ff40d0d0", "4040d0d0", 1, "square",   False, "Agriculture & Food"),
+    "food_processing":     ("ff40c0a0", "4040c0a0", 2, "hexagon",  False, "Agriculture & Food"),
+    "agri_facilities":     ("ff40c0a0", "2040c0a0", 1, "circle",   True,  "Agriculture & Food"),
+    "livestock_operations": ("ff40c0a0", "2040c0a0", 1, "circle",  True,  "Agriculture & Food"),
+    # --- mining
+    "mines":               ("ff8b8b8b", "408b8b8b", 2, "triangle", False, "Mining"),
     # --- base map
     "parcels":             ("ff00ffff", "1a00ffff", 1, "circle",   True,  "Base"),
     "building_footprints": ("ff0000ff", "330000ff", 1, "circle",   True,  "Base"),
