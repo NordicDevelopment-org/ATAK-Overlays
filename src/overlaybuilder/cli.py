@@ -7,6 +7,8 @@
   overlaybuilder build --aoi country:CA --sectors energy  # world tier (OSM)
   overlaybuilder build --aoi bbox:-93.2,45.3,-92.6,45.8
   overlaybuilder sources --aoi county:27025               # what would build
+  overlaybuilder doctor  --aoi county:27025               # probe every endpoint, report dead ones
+  overlaybuilder demo                                     # sample pack (synthetic) to test ATAK rendering
   overlaybuilder probe https://host/arcgis/rest/services/X/MapServer   # inspect a server
   overlaybuilder validate                                  # lint the catalog offline
   overlaybuilder list-drivers | list-counties | list-regions
@@ -74,13 +76,16 @@ def cmd_build(args):
     out_dir = args.out if args.flat else os.path.join(args.out, aoi.slug)
     manifest = run_build(ctx, sources, out_dir, args.format, not args.no_combined,
                          precision=args.precision, fail_fast=args.fail_fast,
-                         do_reconcile=not args.no_reconcile)
+                         do_reconcile=not args.no_reconcile,
+                         use_alternates=not args.no_fallbacks)
 
     print("\n==================== SUMMARY ====================")
     for row in manifest["layers"]:
         extra = ""
         if row.get("dropped_outside_aoi"):
             extra += f"  -{row['dropped_outside_aoi']} outside AOI"
+        if row.get("fallback"):
+            extra += "  (fallback endpoint)"
         if row.get("source"):
             extra += f"  [{row['source']}]"
         print(f"  {row.get('doc', row['layer']):28} {str(row['features']):>8} feat   {row['status'][:60]}{extra}")
@@ -99,6 +104,43 @@ def cmd_sources(args):
     print(f"{len(srcs)} source(s) for {aoi.describe()}:")
     for s in srcs:
         print(f"  {s['_tier']:8} {s['layer']:24} {s['driver']:12} {s.get('sector',''):24} {s.get('source_name', s.get('url', ''))[:70]}")
+    return 0
+
+
+def cmd_doctor(args):
+    """Probe every source an AOI would use; report dead endpoints and alternates."""
+    from . import doctor
+    cat = _catalog_dir(args.catalog)
+    aoi = _resolve_aoi(args)
+    configure_http(args.cache_dir, False)          # always hit the network for a health check
+    ctx = Context(aoi=aoi, tiger_year=args.tiger_year, cache_dir=args.cache_dir)
+    sources = catalog.resolve_sources(cat, aoi, args.layers, args.sectors, args.exclude)
+    print(f"[*] probing {len(sources)} source(s) for {aoi.describe()}\n")
+    rows = doctor.check_sources(sources, ctx, use_alternates=not args.no_fallbacks)
+    c = doctor.summarize(rows)
+    print(f"\nok {c['ok']}   warn {c['warn']}   auth-required {c['auth']}   "
+          f"dead {c['dead']} ({c['recovered']} recoverable via an alternate)   skipped {c['skip']}")
+    out = args.out or "doctor.md"
+    doctor.write_report(out, rows, ctx)
+    print(f"report: {os.path.abspath(out)}")
+    unrecoverable = [r for r in rows if not r["probe"].ok and not r["fallback"]]
+    if unrecoverable:
+        print("\nNo working endpoint for: " + ", ".join(r["id"] for r in unrecoverable))
+        print("Edit those entries in catalog/** (or set `enabled: false`) before relying on a pack.")
+        return 1
+    return 0
+
+
+def cmd_demo(args):
+    """Build a synthetic sample pack offline, to check ATAK rendering."""
+    from .demo import PROV_NOTE, build_demo
+    out = args.out or "demo"
+    print(f"[*] building a SYNTHETIC sample pack in {os.path.abspath(out)}")
+    print(f"    {PROV_NOTE}\n")
+    m = build_demo(out, precision=args.precision)
+    print(f"\n{len(m['layers'])} layers, {sum(r['features'] for r in m['layers'])} features")
+    print(f"Load {os.path.join(os.path.abspath(out), 'DEMO_SAMPLE_ALL.kmz')} into ATAK to check the")
+    print("folder tree, eye-toggles, icons, voltage styling and popup layout, then delete it.")
     return 0
 
 
@@ -165,6 +207,8 @@ def main(argv=None):
     b.add_argument("--no-clip", action="store_true", help="keep features outside the AOI boundary")
     b.add_argument("--no-http-cache", action="store_true")
     b.add_argument("--no-reconcile", action="store_true")
+    b.add_argument("--no-fallbacks", action="store_true",
+                   help="do not try a source's catalog `alternates:` when its endpoint fails")
     b.add_argument("--fail-fast", action="store_true")
     b.set_defaults(fn=cmd_build)
 
@@ -176,6 +220,17 @@ def main(argv=None):
     p.add_argument("url")
     p.add_argument("--sample", action="store_true", help="print one record's attributes")
     p.set_defaults(fn=cmd_probe)
+
+    d = sub.add_parser("doctor", help="probe every endpoint an AOI would use and report dead ones")
+    _add_common(d)
+    d.add_argument("--out", help="report path (default doctor.md)")
+    d.add_argument("--no-fallbacks", action="store_true", help="do not test catalog alternates")
+    d.set_defaults(fn=cmd_doctor)
+
+    dm = sub.add_parser("demo", help="build a synthetic sample pack offline (checks ATAK rendering)")
+    dm.add_argument("--out", help="output directory (default ./demo)")
+    dm.add_argument("--precision", type=int, default=6)
+    dm.set_defaults(fn=cmd_demo)
 
     v = sub.add_parser("validate", help="lint the catalog offline")
     v.add_argument("--catalog")

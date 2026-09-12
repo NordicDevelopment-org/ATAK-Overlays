@@ -71,6 +71,10 @@ AOI ─► catalog tiers ─► drivers ─► normalize ─► clip ─► reco
   OSM power plants; HIFLD and OSM substations; NID and state dam inventories),
   features are matched by proximity and capacity/voltage/height deltas are
   reported in `reconcile.md` and stamped on the placemarks.
+- **Survives dead endpoints.** Government services move constantly, so sources
+  carry `alternates:` (mirrors, bulk downloads, other drivers). A failure falls
+  through them automatically and the pack records which endpoint answered.
+  `overlaybuilder doctor --aoi county:27025` checks them all up front.
 - **Records provenance** on every document, placemark, manifest and GeoJSON.
 
 ## Sectors and layers
@@ -97,8 +101,11 @@ the authoritative, maintained source for generation and fuel.
 ```
 overlaybuilder build     --aoi ... [--sectors ...] [--layers ...] [--exclude ...]
                          [--format kmz geojson] [--out overlays] [--flat] [--precision 6]
-                         [--no-clip] [--no-combined] [--no-reconcile] [--no-http-cache] [--fail-fast]
+                         [--no-clip] [--no-combined] [--no-reconcile] [--no-fallbacks]
+                         [--no-http-cache] [--fail-fast]
 overlaybuilder sources   --aoi ...            what would build, by tier
+overlaybuilder doctor    --aoi ...            probe every endpoint, report dead ones -> doctor.md
+overlaybuilder demo                           synthetic sample pack, offline, to test ATAK rendering
 overlaybuilder probe     <arcgis url>[/<id>] [--sample]   list layers / fields / count / one record
 overlaybuilder validate                       lint the catalog offline
 overlaybuilder list-drivers | list-regions | list-counties
@@ -126,11 +133,26 @@ release workflow attaches the zip to a GitHub Release.
 
 The catalog was assembled in September 2026 from published documentation and
 search-verified endpoints; **the data hosts could not be reached from the
-build environment**, so run `overlaybuilder probe <url>` (or a first build)
-to confirm each service before relying on a pack. Field-name defaults are
+build environment**, so run `overlaybuilder doctor --aoi <your aoi>` once on a
+connected machine before relying on a pack. It probes every endpoint without
+downloading data, flags dead and login-only services, warns when a server no
+longer has a column the catalog maps, names the alternate that works, and
+writes `doctor.md`. Field-name defaults are
 broad (EIA / HIFLD / NID / FCC / OSM spellings), so a renamed column degrades
 to "attribute shown in the raw table" rather than a wrong number. Every
 placemark shows the source, retrieval date and license.
+
+## See it in ATAK first
+
+```bash
+overlaybuilder demo          # writes ./demo/DEMO_SAMPLE_ALL.kmz, no network needed
+```
+
+A small pack of **synthetic, clearly-labelled sample features** that exercises
+every rendering path: sector folders, nested eye-toggles, embedded icons,
+transmission lines styled by kV, dams by hazard class, a hidden dense layer,
+and the full popup layout. Load it, confirm your ATAK version behaves, delete
+it, then build the real thing. Nothing in it is real infrastructure.
 
 ## Add your county or state
 

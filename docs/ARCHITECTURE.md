@@ -14,8 +14,10 @@ state, a multi-state region, the whole US, another country, or the world.
    catalog (catalog.py)    global/  national/us/  states/mn/  states/mn/counties/
         │                  -> ordered list of source specs that apply to this AOI
         ▼
-   drivers (drivers/)      arcgis | file(shp,geojson,gpkg,csv) | overpass | osm_pbf | census_tiger
+   drivers (drivers/)      arcgis | file(shp,geojson,gpkg,csv,xlsx) | overpass | osm_pbf |
+        │                  census_tiger | fcc_asr | demo
         │                  each -> LayerResult(features in EPSG:4326, provenance)
+        │                  a failure falls through the source's `alternates:` mirrors
         ▼
    normalize (normalize.py) canonical, unit-labelled fields: capacity_mw, voltage_kv, ...
         │
@@ -84,7 +86,12 @@ point-in-polygon test, so envelope over-fetch never leaks into the pack.
    (`entity: power_plant` from EIA and from OSM), features are matched within
    `match_radius_m` and capacity/voltage/height/beds deltas over 5% are flagged
    in `reconcile.md` and stamped on the features as `xcheck`.
-6. **Public exterior data only.** No interior layouts, no access/security
+6. **A dead endpoint is visible, never silent.** Sources carry `alternates:`;
+   the build tries them in order, stamps the fallback into provenance and the
+   manifest, and reports the *primary's* error if they all fail.
+   `overlaybuilder doctor --aoi ...` probes every endpoint for an AOI in about
+   a minute and says which alternate would work.
+7. **Public exterior data only.** No interior layouts, no access/security
    details, no non-public endpoints (see CONTRIBUTING.md).
 
 ## ATAK output conventions

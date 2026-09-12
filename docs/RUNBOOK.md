@@ -5,6 +5,17 @@ normal broadband connection; the first build downloads and caches several
 national files (TIGER county polygons ~80 MB, NID CSV ~40 MB, FCC ASR
 ~120 MB, EIA zips a few MB each).
 
+## 0. See the output shape first (no network)
+
+```bash
+overlaybuilder demo
+```
+
+Writes `demo/DEMO_SAMPLE_ALL.kmz` from **synthetic** sample data. Load it into
+ATAK to confirm the folder tree, eye-toggles, icons, voltage-styled lines and
+popup layout look right on your device before spending a real build. Delete it
+afterwards - none of it is real infrastructure.
+
 ## 1. Install
 
 ```bash
@@ -26,29 +37,32 @@ Prints every source by tier (global / national / state / county), driver and
 sector. Use `--sectors energy water comm emergency transport base` or
 `--layers power_plants substations ...` to narrow.
 
-## 3. Verify the medium/low-confidence endpoints (10 minutes, once)
+## 3. Check the endpoints (one minute)
 
-The catalog was assembled without live access to the data hosts. Probe the
-ones marked medium/low in `docs/SOURCES.md` before trusting a pack:
+The catalog was assembled without live access to the data hosts, so verify
+before trusting a pack:
 
 ```bash
-overlaybuilder probe https://services7.arcgis.com/FGr1D95XCGALKXqM/arcgis/rest/services/Power_Plants_Testing/FeatureServer
-overlaybuilder probe https://services7.arcgis.com/FGr1D95XCGALKXqM/arcgis/rest/services/Power_Plants_Testing/FeatureServer/0 --sample
-overlaybuilder probe https://services.arcgis.com/G4S1dGvn7PIgYd6Y/ArcGIS/rest/services/HIFLD_electric_power_substations/FeatureServer
-overlaybuilder probe https://geo.dot.gov/server/rest/services/Hosted/Natural_Gas_Pipelines_US_EIA/FeatureServer/0 --sample
-overlaybuilder probe https://geodata.epa.gov/arcgis/rest/services/OEI/FRS_Wastewater/MapServer/1 --sample
-overlaybuilder probe https://app.gisdata.mn.gov/arcgis/rest/services/EUSA/EUSA/FeatureServer/0 --sample
-overlaybuilder probe https://gis.chisagocountymn.gov/arcgis/rest/services/DynamicData/MapServer
+overlaybuilder doctor --aoi county:27025
 ```
 
-For each: confirm the layer exists, note `maxRecordCount`, and compare the
-field list with the `fields:` block in the YAML. If a field is spelled
-differently, edit the YAML (`catalog/national/us/*.yaml`) - the engine never
-guesses a number from a field it cannot find, it just leaves that attribute
-out of the headline.
+It probes every source without downloading data and writes `doctor.md`:
 
-If a service is dead (HTTP error or `"error"` JSON), switch to one of its
-`alternates:` listed in the same YAML entry, or set `enabled: false`.
+| status | meaning | what to do |
+|---|---|---|
+| `ok` | service answered, layer found, count returned | nothing |
+| `warn` | answered, but a column the catalog maps is missing | fix that source's `fields:` block; the attribute is just absent from the popup headline until you do |
+| `auth` | needs a login, token or API key | leave disabled, or export the key the YAML names |
+| `dead` | gone, renamed, or unreachable | doctor names the alternate that works; builds already fall back to it automatically |
+| `skip` | no probe for that driver | nothing |
+
+Exit code 1 means at least one source has no working endpoint at all; the
+report lists them with the YAML file to edit. To inspect one service by hand:
+
+```bash
+overlaybuilder probe https://gis.chisagocountymn.gov/arcgis/rest/services/DynamicData/MapServer
+overlaybuilder probe https://.../FeatureServer/0 --sample     # fields + one record
+```
 
 ## 4. Build Chisago
 
@@ -62,7 +76,8 @@ Watch the summary. Typical outcomes per row:
 |---|---|---|
 | `ok  N feat` | fetched, clipped, written | none |
 | `ok  0 feat` | endpoint answered but nothing in the AOI, or a wrong filter/field | expected for LNG/refineries/ports in Chisago; otherwise probe the source |
-| `ERROR: HTTP 4xx` | endpoint moved or needs a token | use an alternate / disable |
+| `ok  N feat  (fallback endpoint)` | the primary failed, a catalog alternate answered | check `doctor.md`; promote the alternate in the YAML |
+| `ERROR: HTTP 4xx` | endpoint moved or needs a token, and no alternate worked | run `doctor`, then edit the YAML |
 | `ERROR: no layer matched` | `layer_match` regex did not hit | probe the service, set `layer_id` |
 | `ERROR: overpass ...` | Overpass busy | rerun; the driver retries and rotates endpoints |
 

@@ -92,10 +92,12 @@ def http_get(url: str, params: Optional[dict] = None, tries: int = 4, timeout: i
                 continue
             if 400 <= code < 500:
                 raise HttpStatusError(code, url, body)
-            time.sleep(1.5 * (i + 1))
+            if i < tries - 1:
+                time.sleep(1.5 * (i + 1))
         except (URLError, OSError, TimeoutError) as e:
             last = e
-            time.sleep(1.5 * (i + 1))
+            if i < tries - 1:
+                time.sleep(1.5 * (i + 1))
     raise RuntimeError(f"GET failed after {tries} tries: {url}\n  {last}")
 
 

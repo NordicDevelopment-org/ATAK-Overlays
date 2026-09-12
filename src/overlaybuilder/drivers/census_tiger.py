@@ -28,6 +28,26 @@ def _state_fps(ctx: Context) -> List[str]:
     return [state_fp(a) for a in ctx.aoi.state_abbrs]
 
 
+def _url_for_probe(spec: dict, ctx: Context) -> str:
+    """The first file this spec would download (for liveness probes)."""
+    product = spec["product"]
+    aoi, b, yr = ctx.aoi, _b(ctx), ctx.tiger_year
+    if aoi.country != "US":
+        raise RuntimeError("census_tiger only covers US AOIs")
+    if product == "roads":
+        if aoi.kind != "county":
+            raise RuntimeError("TIGER roads are per-county")
+        return f"{b}/ROADS/tl_{yr}_{aoi.fips5}_roads.zip"
+    if product == "cousub":
+        sfp = aoi.state_fp or (_state_fps(ctx) or [""])[0]
+        return f"{b}/COUSUB/tl_{yr}_{sfp}_cousub.zip"
+    if product == "county":
+        return f"{b}/COUNTY/tl_{yr}_us_county.zip"
+    if product == "state":
+        return f"{b}/STATE/tl_{yr}_us_state.zip"
+    raise RuntimeError(f"unknown TIGER product '{product}'")
+
+
 @driver("census_tiger")
 def fetch(logical: str, spec: dict, ctx: Context) -> LayerResult:
     product = spec["product"]

@@ -34,6 +34,46 @@ driver.
 | `title` | no | document/folder title (default layer key) |
 | `provider` | no | short source tag used in file names when a layer has several sources (`eia`, `osm`, `hifld`) |
 | `source_name`, `source_url`, `license`, `notes` | license required for non-OSM/TIGER | provenance written into every output |
+| `alternates` | no | backup endpoints, tried in order when the primary fails (see below) |
+| `confidence` | no | `high`/`medium`/`low` - how well the endpoint and field names were verified; shown by `doctor` |
+
+### `alternates:` - backup endpoints
+
+Government endpoints move. List mirrors and bulk downloads and the build falls
+back automatically when the primary raises:
+
+```yaml
+- layer: dams
+  driver: file
+  url: https://nid.sec.usace.army.mil/api/nation/csv
+  format: csv
+  fields: {name: {from: ["Dam Name"]}}
+  alternates:
+    - driver: arcgis                       # a different driver is fine
+      url: https://geospatial.sec.usace.army.mil/dls/rest/services/NID/National_Inventory_of_Dams_Public_Service/FeatureServer
+      layer_id: 0
+      note: USACE FeatureServer
+    - driver: arcgis
+      url: https://services2.arcgis.com/FiaPA4ga0iQKduv3/arcgis/rest/services/NID_v1/FeatureServer
+      layer_id: 0
+      note: Esri weekly cache
+```
+
+Rules:
+
+- An alternate **inherits** everything from its parent: `fields`, `group_by`,
+  `style_rules`, `entity`, `name`, `license`, `sector`.
+- When it sets `url` or `driver`, the parent's endpoint-selection keys
+  (`layer_id`, `layer_match`, `product`, `table`, `zip_member`, `format`,
+  `sheet`, `header_row`, `lat_field`, `lon_field`, `skip_lines`) are cleared so
+  a stale layer id never rides along. Attribute filters (`where`,
+  `where_by_aoi`) are inherited on purpose - they express the AOI.
+- `note:` is appended to the layer's provenance so the output says which
+  endpoint answered. A fallback build also stamps
+  `FALLBACK: primary source <id> failed (...)` into the KMZ provenance and
+  sets `"fallback": true` in `manifest.json`.
+- Build with `--no-fallbacks` to make a primary failure fatal for that layer,
+  and check them all ahead of time with `overlaybuilder doctor --aoi ...`.
 
 ### `fields:` canonical mapping
 
@@ -50,6 +90,12 @@ Canonical keys and units are listed in `normalize.py` (`CANONICAL`). Every key
 has default candidates (`DEFAULT_FROM`) covering EIA / HIFLD / NID / FCC / OSM
 naming, so most sources need only a few overrides. Numbers with OSM suffixes
 (`"1.2 MW"`, `"345 kV"`, `"115000;34500"`) parse correctly.
+
+Field lookup tries three passes per candidate: exact spelling, then
+case-insensitive, then ignoring punctuation - so a candidate `DAM_NAME` still
+finds a column named `Dam Name`, and a server that re-spells `Cap_MMcfd` as
+`CAP MMCFD` keeps working. Add `nulls: [-999999]` to a mapping to treat a
+source's sentinel as missing (common in HIFLD voltage columns).
 
 ## Driver: `arcgis`
 

@@ -10,3 +10,5 @@ overlays/
 .venv/
 venv/
 .DS_Store
+demo/
+doctor.md

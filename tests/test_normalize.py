@@ -66,3 +66,28 @@ def test_name_template():
     props = {"name": "Foo", "capacity_mw": 10, "fuel": "wind"}
     assert feature_name(props, {"name": "{name} - {fuel} ({capacity_mw})"}, "power_plants") == "Foo - wind (10.0 MW)"
     assert feature_name({"name": "Bar"}, {"name": "{name} ({capacity_mw})"}, "power_plants") == "Bar"
+
+
+def test_loose_field_match_handles_space_vs_underscore():
+    # NID ships "Dam Name" / "NID Height (Ft)"; the default candidates spell them DAM_NAME etc.
+    c = normalize_props({"Dam Name": "Big Dam", "NID HEIGHT": 82.0,
+                         "Hazard Potential Classification": "High"})
+    assert c["name"] == "Big Dam" and c["height_ft"] == 82.0 and c["hazard_class"] == "High"
+    # candidate priority is unchanged: an exact hit on an earlier candidate still wins
+    assert normalize_props({"name": "lower", "NAME": "upper"})["name"] == "upper"
+    # a loose match never beats an exact one on the same candidate
+    assert normalize_props({"Plant Name": "spaced", "PLANT_NAME": "under"})["name"] == "under"
+
+
+def test_name_template_skipped_when_leading_field_blank():
+    props = {"height_ft": 82.0, "hazard_class": "High"}
+    spec = {"name": "{name} ({height_ft}, {hazard_class})"}
+    assert feature_name(props, spec, "dams") == "82.0 ft"          # falls back, no "(82.0 ft, High)"
+    props["name"] = "Big Dam"
+    assert feature_name(props, spec, "dams") == "Big Dam (82.0 ft, High)"
+
+
+def test_name_template_drops_empty_parenthetical():
+    assert feature_name({"name": "Foo"}, {"name": "{name} ({capacity_mw}, {fuel})"}, "power_plants") == "Foo"
+    assert feature_name({"name": "Foo", "fuel": "wind"}, {"name": "{name} ({capacity_mw}, {fuel})"},
+                        "power_plants") == "Foo (wind)"

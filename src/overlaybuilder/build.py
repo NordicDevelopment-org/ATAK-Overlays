@@ -70,10 +70,75 @@ def _dedupe_layer(res: LayerResult) -> int:
     return d
 
 
+ALTERNATE_DROP = ("note", "notes", "confidence", "alternates")
+# Keys that select WHICH data a driver reads. When an alternate points at a
+# different endpoint these are cleared first, so a mirror that finds its layer
+# by name is never paired with the primary's numeric layer_id. Attribute
+# filters (where / where_by_aoi) are deliberately inherited: they express the
+# AOI, and ArcGIS field comparisons are case-insensitive on most servers.
+ENDPOINT_KEYS = ("layer_id", "layer_match", "product", "table", "zip_member",
+                 "format", "sheet", "header_row", "lat_field", "lon_field", "skip_lines")
+
+
+def merge_alternate(spec: dict, alt: dict) -> dict:
+    """A catalog `alternates:` entry overrides the endpoint of its parent and
+    inherits everything else (fields, group_by, style, entity, licence...)."""
+    merged = dict(spec)
+    merged.pop("alternates", None)
+    if "url" in alt or "driver" in alt:
+        for k in ENDPOINT_KEYS:
+            merged.pop(k, None)
+    for k, v in alt.items():
+        if k in ALTERNATE_DROP:
+            continue
+        merged[k] = v
+    if alt.get("note"):
+        merged["notes"] = (str(spec.get("notes", "")) + " | alternate: " + alt["note"]).strip(" |")
+    merged["_alternate_of"] = spec.get("id", spec["layer"])
+    return merged
+
+
+def fetch_with_fallback(spec: dict, ctx: Context, use_alternates: bool = True, log=print):
+    """Run a source, falling back through its `alternates:` when it fails.
+
+    Returns (LayerResult, attempts) where attempts lists every try as
+    (label, "ok"|error text). Raises the FIRST error if every attempt fails, so
+    the summary reports the primary endpoint's problem rather than the last
+    alternate's.
+    """
+    attempts = []
+    candidates = [(spec.get("id", spec["layer"]), spec)]
+    if use_alternates:
+        for i, alt in enumerate(spec.get("alternates") or [], 1):
+            if not isinstance(alt, dict):
+                continue
+            candidates.append((f"{spec.get('id', spec['layer'])} alt{i}", merge_alternate(spec, alt)))
+
+    first_error = None
+    for label, cand in candidates:
+        try:
+            res = get_driver(cand["driver"])(cand["layer"], cand, ctx)
+        except Exception as e:  # noqa: BLE001  try the next endpoint
+            attempts.append((label, f"ERROR: {e}"))
+            if first_error is None:
+                first_error = e
+            if len(candidates) > 1:
+                log(f"    {label} failed ({str(e)[:90]}), trying the next endpoint")
+            continue
+        attempts.append((label, "ok"))
+        if cand is not spec:
+            res.provenance.notes = (res.provenance.notes +
+                                    f" | FALLBACK: primary source {spec.get('id', spec['layer'])} failed "
+                                    f"({str(first_error)[:120]})").strip(" |")
+            log(f"    using alternate endpoint ({label})")
+        return res, cand, attempts
+    raise first_error if first_error else RuntimeError("no source candidates")
+
+
 def run_build(ctx: Context, sources: List[dict], out_dir: str,
               formats: Optional[List[str]] = None, combined: bool = True,
               precision: int = 6, fail_fast: bool = False, do_reconcile: bool = True,
-              log=print) -> dict:
+              use_alternates: bool = True, log=print) -> dict:
     """Fetch every source, cross-check, then write. Returns the manifest dict."""
     formats = formats or ["kmz"]
     os.makedirs(out_dir, exist_ok=True)
@@ -106,15 +171,17 @@ def run_build(ctx: Context, sources: List[dict], out_dir: str,
                 f"the boundary layer for {ctx.aoi.describe()} failed, so features cannot be clipped; "
                 "refusing to write a pack from the state envelope. Fix the boundary source "
                 "(TIGER download) or re-run with --no-clip to accept envelope-scoped output")
+        attempts = []
         try:
             log(f"[>] {sid}  ({spec['driver']})")
-            res = get_driver(spec["driver"])(logical, spec, ctx)
-            normalize.apply_to_layer(res, spec)
+            res, used_spec, attempts = fetch_with_fallback(spec, ctx, use_alternates, log)
+            normalize.apply_to_layer(res, used_spec)
             dup = _dedupe_layer(res)
             dropped = clip_layer(res, ctx)
         except Exception as e:  # keep going; report per layer
             rows.append({"id": sid, "layer": logical, "status": f"ERROR: {e}", "features": 0,
-                         "driver": spec["driver"], "seconds": round(time.time() - t0, 1)})
+                         "driver": spec["driver"], "attempts": attempts, "fallback": False,
+                         "seconds": round(time.time() - t0, 1)})
             log(f"[!] {sid}: {e}")
             if fail_fast:
                 raise
@@ -136,7 +203,7 @@ def run_build(ctx: Context, sources: List[dict], out_dir: str,
         doc_key = logical if n_same == 0 else f"{logical}__{provider}"
         if doc_key in specs:
             doc_key = f"{doc_key}{n_same}"
-        res_spec = dict(spec)
+        res_spec = dict(used_spec)
         res_spec.setdefault("title", logical if n_same == 0 else f"{logical} ({provider})")
         res.doc_key = doc_key  # type: ignore[attr-defined]
         results.append(res)
@@ -145,7 +212,9 @@ def run_build(ctx: Context, sources: List[dict], out_dir: str,
                      "features": len(res.features), "dropped_outside_aoi": dropped,
                      "deduped": dup, "server_count": res.server_count, "driver": spec["driver"],
                      "source": res.provenance.source_name, "license": res.provenance.license,
-                     "group_by": res.group_by, "seconds": round(time.time() - t0, 1)})
+                     "group_by": res.group_by, "seconds": round(time.time() - t0, 1),
+                     "fallback": used_spec.get("_alternate_of") is not None,
+                     "attempts": attempts if len(attempts) > 1 else None})
         log(f"    {len(res.features)} features ({dropped} outside AOI dropped)  {rows[-1]['seconds']}s")
 
     # ---- phase 2: cross-source check (stamps xcheck on features) ------------

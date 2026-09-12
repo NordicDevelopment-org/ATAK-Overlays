@@ -87,7 +87,9 @@ CANONICAL: Dict[str, Tuple[str, str, str]] = {
 # Default candidate source fields per canonical key (case-insensitive match).
 # Order = priority. Units: a candidate may be "FIELD@unit" to declare its unit.
 DEFAULT_FROM: Dict[str, List[str]] = {
-    "name": ["Plant_Name", "PLANT_NAME", "NAME", "name", "FACILITY", "FACILITY_NAME", "Site_Name",
+    "name": ["Plant_Name", "PLANT_NAME", "Plant Name", "NAME", "name", "FACILITY", "FACILITY_NAME",
+             "Facility Name", "Dam Name", "Station Name", "Site Name", "Provider Name", "Site_Name",
+             "CWP_NAME", "PWS_NAME", "SHELTER_NAME", "PORT_NAME", "STNNAME", "YARDNAME", "ARPT_NAME",
              "SITE_NAME", "DAM_NAME", "Dam_Name", "FACNAME", "STATION", "Utility_Name", "FULLNAME",
              "Ident", "ARPT_NAME", "official_name", "ref", "PIN", "PID"],
     "capacity_mw": ["Total_MW", "TOTAL_MW", "Capacity_MW", "CAPACITY_MW", "OPER_CAP", "SUMMER_CAP",
@@ -133,8 +135,8 @@ DEFAULT_FROM: Dict[str, List[str]] = {
     "year_built": ["Year Completed", "YEAR_COMPL", "YEAR_BUILT", "Year_Built", "start_date", "Operating Year",
                    "YEAR"],
     "purpose": ["Primary Purpose", "PURPOSES", "Purposes", "PURPOSE"],
-    "flow_mgd": ["Design_Flow_MGD", "DESIGN_FLOW", "Design Flow (MGD)", "FLOW_MGD", "Existing Total Flow (MGD)",
-                 "AVG_FLOW_MGD"],
+    "flow_mgd": ["CWP_TOTAL_DESIGN_FLOW_NMBR", "Design_Flow_MGD", "DESIGN_FLOW", "Design Flow (MGD)",
+                 "FLOW_MGD", "Existing Total Flow (MGD)", "CWP_ACTUAL_AVERAGE_FLOW_NMBR", "AVG_FLOW_MGD"],
     "population_served": ["POP_SERVED", "Population Served", "PopServed", "Population Served Count"],
     "capacity_persons": ["EVACUATION_CAPACITY", "POST_IMPACT_CAPACITY", "CAPACITY", "Capacity", "capacity"],
     "population": ["POPULATION", "Population", "population", "tot_res", "TOT_RES", "ENROLLMENT"],
@@ -154,7 +156,8 @@ DEFAULT_FROM: Dict[str, List[str]] = {
     "state": ["STATE", "State", "StateName", "STATE_ABBR", "ST", "addr:state"],
     "phone": ["TELEPHONE", "PHONE", "Phone", "phone", "contact:phone"],
     "source_id": ["Plant_Code", "PLANT_CODE", "NID ID", "NID_ID", "ID", "OBJECTID", "FID", "GLOBALID",
-                  "Registration Number", "REG_NUM", "STRUCTURE_NUMBER", "FACILITY_ID", "NPDES", "PWSID",
+                  "Registration Number", "REG_NUM", "STRUCTURE_NUMBER", "FACILITY_ID", "NPDES_ID",
+                  "NPDES", "PWSID", "NCESSCH", "UNITID", "STNCODE", "GNIS_ID", "SYSTEM_ID", "FDID",
                   "osm_id", "CCN_ID", "PROVIDER_ID"],
     "website": ["WEBSITE", "Website", "website", "URL", "contact:website"],
     "start_date": ["start_date", "Operating Year", "YEAR_COMPL", "Year Completed", "ONLINE_DATE"],
@@ -214,6 +217,23 @@ def _get_ci(props: dict, field: str):
     fl = field.lower()
     for k in props:
         if k.lower() == fl:
+            return props[k]
+    return None
+
+
+def _squash(name: str) -> str:
+    return re.sub(r"[^a-z0-9]", "", str(name).lower())
+
+
+def _get_loose(props: dict, field: str):
+    """Match ignoring case AND punctuation, so a candidate `DAM_NAME` still finds
+    the column `Dam Name` and `Cap_MMcfd` finds `CAP MMCFD`. Government servers
+    re-spell columns constantly; the meaning does not change."""
+    want = _squash(field)
+    if not want:
+        return None
+    for k in props:
+        if _squash(k) == want:
             return props[k]
     return None
 
@@ -289,9 +309,11 @@ def normalize_props(props: dict, spec: Optional[dict] = None) -> Dict[str, Any]:
         cands = _candidates(key, spec_fields)
         nulls = cfg.get("nulls") if isinstance(cfg, dict) else None
         found = False
-        for exact in (True, False):          # exact-case candidates first (OSM keys are lowercase)
+        # exact spelling first (OSM keys are lowercase and collide with nothing),
+        # then case-insensitive, then ignoring punctuation ("Dam Name" ~ DAM_NAME)
+        for getter in (lambda p, f: p.get(f), _get_ci, _get_loose):
             for field, unit in cands:
-                raw = props.get(field) if exact else _get_ci(props, field)
+                raw = getter(props, field)
                 if raw in (None, "") or _is_null(raw, nulls):
                     continue
                 val = _convert(key, raw, unit)
@@ -394,14 +416,17 @@ def feature_name(props: dict, spec: Optional[dict] = None, layer_key: str = "") 
         d = _D()
         for k, v in props.items():
             d[k] = fmt_value(k, v) if k in CANONICAL and k != "name" else v
-        try:
-            s = tmpl.format_map(d)
-            s = re.sub(r"\(\s*\)|\[\s*\]", "", s)         # drop empty parens
-            s = re.sub(r"\s{2,}", " ", s).strip(" -|,")
-            if s:
-                return s
-        except Exception:
-            pass
+        lead = re.match(r"\s*\{([A-Za-z_][A-Za-z0-9_]*)\}", tmpl)
+        if not (lead and not d.get(lead.group(1))):     # skip the template if it leads with a blank
+            try:
+                s = tmpl.format_map(d)
+                s = re.sub(r"\(\s*[,;]?\s*\)|\[\s*\]", "", s)   # drop empty parens/brackets
+                s = re.sub(r"\(\s*,\s*", "(", s)                   # "(, High)" -> "(High)"
+                s = re.sub(r"\s{2,}", " ", s).strip(" -|,;")
+                if s:
+                    return s
+            except Exception:
+                pass
     nm = props.get("name")
     if nm in (None, ""):
         for cand in DEFAULT_FROM["name"]:          # un-normalized features: scan raw names
@@ -417,7 +442,7 @@ def feature_name(props: dict, spec: Optional[dict] = None, layer_key: str = "") 
         if kv not in (None, "") and layer_key in ("transmission_lines", "substations"):
             return f"{nm} ({fmt_value('voltage_kv', kv)})"
         return str(nm)
-    for k in ("voltage_kv", "capacity_mw", "type", "source_id"):
+    for k in list(HEADLINES.get(layer_key, ())) + ["voltage_kv", "capacity_mw", "type", "source_id"]:
         if props.get(k) not in (None, ""):
-            return fmt_value(k, props[k]) if k != "type" else str(props[k])
+            return fmt_value(k, props[k])
     return ""
