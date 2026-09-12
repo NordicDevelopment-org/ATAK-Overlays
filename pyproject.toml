@@ -7,7 +7,7 @@ name = "overlaybuilder"
 version = "0.2.0"
 description = "Build ATAK-ready critical-infrastructure overlays (KMZ) from public GIS data, for any county, state, country, or the world."
 readme = "README.md"
-requires-python = ">=3.9"
+requires-python = ">=3.10"
 license = { text = "MIT" }
 authors = [{ name = "Nordic Development Industries" }]
 keywords = ["ATAK", "TAK", "GIS", "KMZ", "critical infrastructure", "EIA", "HIFLD", "OpenStreetMap", "TIGER", "overlays"]
