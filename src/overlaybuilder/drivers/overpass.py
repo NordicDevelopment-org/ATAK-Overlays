@@ -31,6 +31,7 @@ OSM is ODbL: attribution + share-alike are carried in provenance.
 """
 import json
 import re
+import threading
 import time
 from typing import Dict, List, Optional, Tuple
 
@@ -255,6 +256,18 @@ def _country_prelude(cc: str) -> str:
     return f'area["ISO3166-1"="{cc}"]["admin_level"="2"]->.a;'
 
 
+_COUNTRY_BOUNDS: Dict[str, Optional[Tuple[float, float, float, float]]] = {}
+_COUNTRY_LOCK = threading.Lock()
+
+
+def cached_country_bounds(cc: str, endpoints: List[str], timeout: int, min_iv: float):
+    """country_bounds, memoised under a lock so parallel workers ask once."""
+    with _COUNTRY_LOCK:
+        if cc not in _COUNTRY_BOUNDS:
+            _COUNTRY_BOUNDS[cc] = country_bounds(cc, endpoints, timeout, min_iv)
+        return _COUNTRY_BOUNDS[cc]
+
+
 def country_bounds(cc: str, endpoints: List[str], timeout: int, min_iv: float):
     """(west, south, east, north) of the country's admin_level=2 relation, or None."""
     q = f'[out:json][timeout:{timeout}];rel["ISO3166-1"="{cc}"]["admin_level"="2"];out bb;'
@@ -306,13 +319,16 @@ def fetch_elements(selectors, elements, ctx: Context, spec: dict) -> Tuple[List[
     max_tiles = int(spec.get("max_tiles", ctx.options.get("max_tiles", 200)))
     if ctx.aoi.kind == "country" and ctx.aoi.country:
         cc = ctx.aoi.country
-        if not ctx.bbox:
-            bb = country_bounds(cc, endpoints, 60, min_iv)
-            if not bb:
+        bbox = ctx.bbox
+        if not bbox:
+            # Looked up once per country and cached. Never written back onto the
+            # shared Context: with --jobs > 1 several workers run this at once,
+            # and a mutated ctx.bbox would change how other layers are clipped.
+            bbox = cached_country_bounds(cc, endpoints, 60, min_iv)
+            if not bbox:
                 raise RuntimeError(f"no OSM admin_level=2 relation with ISO3166-1={cc}; check the country code")
-            ctx.bbox = bb
-            notes.append(f"country bounds from OSM: {tuple(round(x, 3) for x in bb)}")
-        tiles = tile_bbox(ctx.bbox, float(spec.get("tile_deg", 1.0)))
+            notes.append(f"country bounds from OSM: {tuple(round(x, 3) for x in bbox)}")
+        tiles = tile_bbox(bbox, float(spec.get("tile_deg", 1.0)))
         if len(tiles) > max_tiles:
             raise RuntimeError(
                 f"country {cc} needs {len(tiles)} Overpass tiles (> max_tiles={max_tiles}); use the osm_pbf "

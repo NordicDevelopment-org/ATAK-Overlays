@@ -24,7 +24,7 @@ def check_sources(sources: List[dict], ctx, use_alternates: bool = True, log=pri
         row = {"id": sid, "layer": spec["layer"], "driver": spec["driver"],
                "tier": spec.get("_tier", ""), "confidence": spec.get("confidence", ""),
                "probe": pr, "fallback": None, "seconds": round(time.time() - t0, 1)}
-        if not pr.ok and use_alternates:
+        if pr.status == DEAD and use_alternates:
             for i, alt in enumerate(spec.get("alternates") or [], 1):
                 if not isinstance(alt, dict):
                     continue

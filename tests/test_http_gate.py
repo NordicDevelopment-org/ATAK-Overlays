@@ -88,3 +88,37 @@ def test_min_interval_spaces_requests_across_threads(monkeypatch):
     gaps = [b - a for a, b in zip(stamps, stamps[1:])]
     assert all(g >= 0.2 for g in gaps), gaps          # politeness held under concurrency
     http.set_max_per_host(2)
+
+
+def test_backoff_does_not_hold_the_host_slot(monkeypatch):
+    """A throttled URL must not block other requests to the same host."""
+    import urllib.error
+
+    state = {"n": 0, "peak": 0, "live": 0}
+    lock = threading.Lock()
+    slept = []
+    monkeypatch.setattr(http.time, "sleep", lambda s: slept.append(s))
+
+    def fake(req, timeout=None, context=None):
+        with lock:
+            state["live"] += 1
+            state["peak"] = max(state["peak"], state["live"])
+            state["n"] += 1
+            n = state["n"]
+        if n == 1:                       # first caller gets throttled and backs off
+            with lock:
+                state["live"] -= 1
+            raise urllib.error.HTTPError("https://h.example/a", 429, "slow down", {}, None)
+
+        class R(_FakeResp):
+            def __exit__(s, *a):
+                with lock:
+                    state["live"] -= 1
+                return False
+        return R()
+    monkeypatch.setattr(http, "urlopen", fake)
+    http.set_max_per_host(1)
+    _hammer(["https://h.example/a", "https://h.example/b"], tries=2)
+    assert slept and max(slept) > 0          # a backoff really happened
+    assert state["peak"] == 1                # the cap held
+    http.set_max_per_host(2)

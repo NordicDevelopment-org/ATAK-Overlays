@@ -78,18 +78,23 @@ def _arcgis(spec: dict, ctx) -> Probe:
             return Probe(DEAD, f"no layer matches /{spec['layer_match']}/ (have: {avail[:140]})", url=url)
         lid, name = hits[0]["id"], hits[0].get("name", "")
     elif lid is None and "fields" in meta:
-        lid = ""                       # the url already points at a layer
-    if lid == "" and "fields" in meta:
-        info = meta
-    else:
-        try:
-            info = get_json(f"{url}/{lid}", cache=False, tries=TRIES, timeout=TIMEOUT)
-        except Exception as e:  # noqa: BLE001
-            return Probe(DEAD, f"layer {lid} unreachable: {str(e)[:100]}", url=f"{url}/{lid}")
-        if "error" in info:
-            return Probe(DEAD, f"layer {lid} error: {str(info['error'].get('message'))[:80]}", url=f"{url}/{lid}")
+        # the catalog points straight at a layer; the arcgis driver needs an id,
+        # so say so rather than reporting a healthy service
+        return Probe(WARN, f"url is a layer, not a service: add layer_id or layer_match "
+                           f"(this layer is '{meta.get('name', '')}')",
+                     url=url, fields=[f.get("name", "") for f in meta.get("fields") or []],
+                     layer_name=meta.get("name", ""))
+    if lid is None:
+        return Probe(WARN, "no layer_id or layer_match on this source; the driver cannot pick a layer",
+                     url=url)
+    try:
+        info = get_json(f"{url}/{lid}", cache=False, tries=TRIES, timeout=TIMEOUT)
+    except Exception as e:  # noqa: BLE001
+        return Probe(DEAD, f"layer {lid} unreachable: {str(e)[:100]}", url=f"{url}/{lid}")
+    if "error" in info:
+        return Probe(DEAD, f"layer {lid} error: {str(info['error'].get('message'))[:80]}", url=f"{url}/{lid}")
     name = name or info.get("name", "")
-    flds = [f.get("name", "") for f in info.get("fields") or []]
+    flds = [f.get("name", "") for f in (info.get("fields") or [])]   # may be null on group layers
 
     count = None
     detail = f"layer {lid} '{name}'"
@@ -132,19 +137,28 @@ def _mapped_fields(spec: dict) -> List[str]:
 
 
 def _missing_fields(spec: dict, available: List[str]) -> List[str]:
-    """Canonical mappings whose every candidate is absent from the server schema."""
+    """Canonical mappings that this server can satisfy from no column at all.
+
+    Mirrors normalize's lookup exactly - the explicit `from:` candidates AND the
+    built-in DEFAULT_FROM fallbacks, compared ignoring case and punctuation -
+    so doctor does not warn about a field normalize would in fact find.
+    """
     if not available:
         return []
-    have = {a.lower() for a in available}
+    from .normalize import DEFAULT_FROM, _split_candidate, _squash
+    have = {_squash(a) for a in available}
     missing = []
     for key, cfg in (spec.get("fields") or {}).items():
-        if not isinstance(cfg, dict) or "const" in cfg:
+        if cfg is False or not isinstance(cfg, dict) or "const" in cfg:
             continue
         frm = cfg.get("from") or []
         if isinstance(frm, str):
             frm = [frm]
-        cands = [f.split("@", 1)[0].lower() for f in frm]
-        if cands and not any(c in have for c in cands):
+        cands = list(frm)
+        if cfg.get("defaults", True):
+            cands += DEFAULT_FROM.get(key, [])
+        names = [_squash(_split_candidate(c)[0]) for c in cands]
+        if names and not any(n in have for n in names):
             missing.append(key)
     return missing
 
@@ -172,7 +186,8 @@ def _probe_download(url: str) -> Probe:
     if "{" in url or "$" in url:
         return Probe(SKIP, "URL still holds a placeholder (an env secret?); cannot probe", url=url)
     try:
-        body = http_get(url, tries=TRIES, timeout=TIMEOUT, cache=False, headers={"Range": "bytes=0-2047"})
+        body = http_get(url, tries=TRIES, timeout=TIMEOUT, cache=False,
+                        max_bytes=4096, headers={"Range": "bytes=0-2047"})
     except HttpStatusError as e:
         if e.code in (401, 403):
             return Probe(AUTH, f"HTTP {e.code} (login or API key required)", url=url)
@@ -195,9 +210,15 @@ def _overpass(spec: dict, ctx) -> Probe:
     for ep in eps:
         try:
             http_get(ep, data=("data=" + quote("[out:json][timeout:10];node(1);out count;", safe="")).encode(),
-                     tries=TRIES, timeout=TIMEOUT, cache=False,
+                     tries=TRIES, timeout=TIMEOUT, cache=False, min_interval=1.0,
                      headers={"Content-Type": "application/x-www-form-urlencoded"})
             return Probe(OK, f"endpoint responding ({ep.split('/')[2]})", url=ep)
+        except HttpStatusError as e:
+            if e.code in (429, 504):
+                # the public instances throttle aggressively; alive, just busy
+                return Probe(WARN, f"{ep.split('/')[2]} is rate-limiting (HTTP {e.code}); "
+                                   "builds retry and rotate endpoints", url=ep)
+            last = f"HTTP {e.code}"
         except Exception as e:  # noqa: BLE001
             last = str(e)[:90]
     return Probe(DEAD, f"no Overpass endpoint responded: {last}", url=eps[0])
@@ -210,7 +231,8 @@ def _tiger(spec: dict, ctx) -> Probe:
     except Exception as e:  # noqa: BLE001
         return Probe(SKIP, str(e)[:120])
     try:
-        http_get(url, tries=TRIES, timeout=TIMEOUT, cache=False, headers={"Range": "bytes=0-1023"})
+        http_get(url, tries=TRIES, timeout=TIMEOUT, cache=False,
+                 max_bytes=2048, headers={"Range": "bytes=0-1023"})
         return Probe(OK, f"TIGER {spec.get('product')} file present", url=url)
     except HttpStatusError as e:
         return Probe(DEAD, f"HTTP {e.code} - try a different --tiger-year", url=url)
@@ -222,7 +244,8 @@ def _fcc(spec: dict, ctx) -> Probe:
     from .drivers.fcc_asr import DEFAULT_URL
     url = spec.get("url", DEFAULT_URL)
     try:
-        http_get(url, tries=TRIES, timeout=TIMEOUT, cache=False, headers={"Range": "bytes=0-1023"})
+        http_get(url, tries=TRIES, timeout=TIMEOUT, cache=False,
+                 max_bytes=2048, headers={"Range": "bytes=0-1023"})
         return Probe(OK, "FCC ASR archive reachable", url=url)
     except Exception as e:  # noqa: BLE001
         return Probe(DEAD, f"unreachable: {str(e)[:100]}", url=url)
@@ -233,7 +256,7 @@ PROBERS = {"arcgis": _arcgis, "file": _file, "overpass": _overpass,
 
 
 def probe_source(spec: dict, ctx) -> Probe:
-    fn = PROBERS.get(spec["driver"])
+    fn = PROBERS.get(spec.get("driver"))
     if fn is None:
         return Probe(SKIP, f"no probe for driver '{spec['driver']}'")
     try:

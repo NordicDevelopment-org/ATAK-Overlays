@@ -77,24 +77,45 @@ ALTERNATE_DROP = ("note", "notes", "confidence", "alternates")
 # by name is never paired with the primary's numeric layer_id. Attribute
 # filters (where / where_by_aoi) are deliberately inherited: they express the
 # AOI, and ArcGIS field comparisons are case-insensitive on most servers.
-ENDPOINT_KEYS = ("layer_id", "layer_match", "product", "table", "zip_member",
+# Host-specific keys: a numeric layer id or a file layout means nothing on a
+# different server, so they are dropped when an alternate changes the endpoint.
+# `layer_match` is NOT in this list: mirrors usually keep similar layer names,
+# so the parent's name regex is the best available guess unless the alternate
+# supplies its own.
+ENDPOINT_KEYS = ("layer_id", "product", "table", "zip_member",
                  "format", "sheet", "header_row", "lat_field", "lon_field", "skip_lines")
 
 
 def merge_alternate(spec: dict, alt: dict) -> dict:
     """A catalog `alternates:` entry overrides the endpoint of its parent and
-    inherits everything else (fields, group_by, style, entity, licence...)."""
+    inherits everything else (fields, group_by, style, entity...).
+
+    Provenance is NOT inherited blindly: a pack must never say it came from the
+    primary endpoint when an alternate answered.
+    """
     merged = dict(spec)
     merged.pop("alternates", None)
-    if "url" in alt or "driver" in alt:
+    changed_endpoint = "url" in alt or "driver" in alt
+    if changed_endpoint:
         for k in ENDPOINT_KEYS:
             merged.pop(k, None)
+        if "layer_match" in alt:
+            merged.pop("layer_match", None)
     for k, v in alt.items():
         if k in ALTERNATE_DROP:
             continue
         merged[k] = v
-    if alt.get("note"):
-        merged["notes"] = (str(spec.get("notes", "")) + " | alternate: " + alt["note"]).strip(" |")
+    note = alt.get("note")
+    if note:
+        merged["notes"] = (str(spec.get("notes", "")) + " | alternate: " + note).strip(" |")
+    if changed_endpoint:
+        # the URL actually queried, and a dataset name that admits the detour
+        if "source_url" not in alt:
+            merged["source_url"] = alt.get("url", merged.get("source_url", ""))
+        if "source_name" not in alt:
+            base = spec.get("source_name") or spec.get("id", spec["layer"])
+            host = str(alt.get("url", "")).split("//", 1)[-1].split("/", 1)[0]
+            merged["source_name"] = f"{base} [alternate endpoint: {note or host}]"
     merged["_alternate_of"] = spec.get("id", spec["layer"])
     return merged
 
@@ -123,6 +144,7 @@ def fetch_with_fallback(spec: dict, ctx: Context, use_alternates: bool = True, l
             attempts.append((label, f"ERROR: {e}"))
             if first_error is None:
                 first_error = e
+                setattr(first_error, "_attempts", attempts)
             if len(candidates) > 1:
                 log(f"    {label} failed ({str(e)[:90]}), trying the next endpoint")
             continue
@@ -225,6 +247,7 @@ def run_build(ctx: Context, sources: List[dict], out_dir: str,
             out["res"] = res
         except Exception as e:  # noqa: BLE001  reported per layer
             out["error"] = e
+            out["attempts"] = getattr(e, "_attempts", []) or out["attempts"]
             if os.environ.get("OVERLAYBUILDER_DEBUG"):
                 traceback.print_exc()
         out["seconds"] = round(time.time() - t0, 1)

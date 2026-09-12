@@ -199,7 +199,9 @@ def cmd_probe(args):
     """Inspect an ArcGIS server/layer: list layers, or a layer's fields + count."""
     from .drivers.base import get_json
     url = args.url.rstrip("/")
-    js = get_json(url, cache=False)
+    if not url.startswith(("http://", "https://")):
+        raise SystemExit(f"probe needs an http(s) URL, got {args.url!r}")
+    js = get_json(url, cache=False, tries=1, timeout=45)
     if "error" in js:
         print("error:", js["error"])
         return 1
@@ -213,14 +215,15 @@ def cmd_probe(args):
     print(f"layer: {js.get('name')}  type={js.get('geometryType')}  maxRecordCount={js.get('maxRecordCount')}")
     print(f"pagination={((js.get('advancedQueryCapabilities') or {}).get('supportsPagination'))}  "
           f"oid={js.get('objectIdField')}")
-    for f in js.get("fields", []):
+    for f in js.get("fields") or []:          # null on group layers
         print(f"  {f.get('name'):32} {f.get('type', '').replace('esriFieldType', ''):12} {f.get('alias', '')}")
     try:
-        cnt = get_json(url + "/query", {"where": "1=1", "returnCountOnly": "true"}, cache=False)
+        cnt = get_json(url + "/query", {"where": "1=1", "returnCountOnly": "true"},
+                       cache=False, tries=1, timeout=45)
         print("count:", cnt.get("count"))
         if args.sample:
             smp = get_json(url + "/query", {"where": "1=1", "outFields": "*", "resultRecordCount": 1,
-                                           "returnGeometry": "false"}, cache=False)
+                                           "returnGeometry": "false"}, cache=False, tries=1, timeout=45)
             print(json.dumps((smp.get("features") or [{}])[0].get("attributes"), indent=1)[:3000])
     except Exception as e:  # noqa: BLE001
         print("count/sample failed:", e)

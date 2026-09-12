@@ -84,7 +84,8 @@ def _host(url: str) -> str:
 
 def http_get(url: str, params: Optional[dict] = None, tries: int = 4, timeout: int = 120,
              cache: Optional[bool] = None, headers: Optional[dict] = None,
-             data: Optional[bytes] = None, min_interval: float = 0.0) -> bytes:
+             data: Optional[bytes] = None, min_interval: float = 0.0,
+             max_bytes: Optional[int] = None) -> bytes:
     """GET (or POST when `data` given) with retries, 429/5xx backoff, optional
     on-disk cache. Raises HttpStatusError for final 4xx, RuntimeError otherwise."""
     if params:
@@ -100,6 +101,7 @@ def http_get(url: str, params: Optional[dict] = None, tries: int = 4, timeout: i
     last: Optional[Exception] = None
     host = _host(url)
     sem, gap_lock = _host_gate(host)
+    backoff = 0.0
     for i in range(tries):
         gap = max(min_interval, MIN_INTERVAL_S)
         sem.acquire()                     # bound concurrency against this host
@@ -116,8 +118,10 @@ def http_get(url: str, params: Optional[dict] = None, tries: int = 4, timeout: i
                 _LAST_CALL[host] = time.time()
             req = Request(url, headers=hdrs, data=data)
             with urlopen(req, timeout=timeout, context=_SSL) as r:
-                body = r.read()
-            if cp and _cacheable(url, body):
+                # Range is only a hint; a server may send the whole file, so a
+                # probe caps what it will actually pull off the socket.
+                body = r.read(max_bytes) if max_bytes else r.read()
+            if cp and max_bytes is None and _cacheable(url, body):
                 tmp = f"{cp}.{os.getpid()}.{threading.get_ident()}.tmp"
                 with open(tmp, "wb") as fh:
                     fh.write(body)
@@ -133,9 +137,8 @@ def http_get(url: str, params: Optional[dict] = None, tries: int = 4, timeout: i
                 pass
             if code in (429, 500, 502, 503, 504) and i < tries - 1:
                 ra = e.headers.get("Retry-After") if e.headers else None
-                wait = float(ra) if (ra and ra.isdigit()) else 3.0 * (2 ** i)
-                time.sleep(min(wait, 120))
-                continue
+                backoff = float(ra) if (ra and ra.isdigit()) else 3.0 * (2 ** i)
+                continue          # slept below, after the host slot is released
             if 400 <= code < 500:
                 raise HttpStatusError(code, url, body)
             if i < tries - 1:
@@ -145,7 +148,11 @@ def http_get(url: str, params: Optional[dict] = None, tries: int = 4, timeout: i
             if i < tries - 1:
                 time.sleep(1.5 * (i + 1))
         finally:
-            sem.release()
+            sem.release()        # release BEFORE sleeping: a throttled URL must
+                                 # not block other requests to the same host
+        if backoff:
+            time.sleep(min(backoff, 120))
+            backoff = 0.0
     raise RuntimeError(f"GET failed after {tries} tries: {url}\n  {last}")
 
 

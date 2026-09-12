@@ -118,3 +118,67 @@ def test_monthly_probe_walks_back_when_the_newest_release_is_missing(monkeypatch
     monkeypatch.setattr(P, "http_get", fake)
     pr = P._file({"url": "https://x/{month}_generator{year}.xlsx"}, Context(aoi=_p("state:MN")))
     assert pr.status == P.OK and len(tried) == 3
+
+
+def test_fallback_provenance_names_the_endpoint_that_answered():
+    spec = {"layer": "dams", "driver": "file", "id": "dams@nid",
+            "url": "https://nid.sec.usace.army.mil/api/nation/csv",
+            "source_name": "USACE National Inventory of Dams",
+            "source_url": "https://nid.sec.usace.army.mil/",
+            "license": "Public domain (USACE)", "layer_match": "dam"}
+    m = merge_alternate(spec, {"driver": "arcgis", "url": "https://mirror/FeatureServer",
+                               "note": "Esri weekly cache"})
+    assert m["source_url"] == "https://mirror/FeatureServer"        # not the primary's site
+    assert "alternate endpoint: Esri weekly cache" in m["source_name"]
+    assert "USACE National Inventory of Dams" in m["source_name"]   # the dataset is still named
+    assert m["license"] == "Public domain (USACE)"                  # the data licence follows the data
+    # an alternate that states its own provenance keeps it
+    m2 = merge_alternate(spec, {"url": "https://x", "source_name": "Mirror Co", "source_url": "https://x/about"})
+    assert m2["source_name"] == "Mirror Co" and m2["source_url"] == "https://x/about"
+    # a note-only alternate is the same endpoint: provenance untouched
+    assert merge_alternate(spec, {"note": "documented"})["source_url"] == "https://nid.sec.usace.army.mil/"
+
+
+def test_alternate_keeps_layer_match_but_drops_layer_id():
+    spec = {"layer": "x", "driver": "arcgis", "url": "a", "layer_id": 7, "layer_match": "dam"}
+    m = merge_alternate(spec, {"url": "b"})
+    assert m["layer_match"] == "dam" and "layer_id" not in m    # ids are host-specific, names travel
+    m2 = merge_alternate(spec, {"url": "b", "layer_match": "other"})
+    assert m2["layer_match"] == "other"
+    m3 = merge_alternate(spec, {"url": "b", "layer_id": 3})
+    assert m3["layer_id"] == 3
+
+
+def test_failed_source_reports_every_endpoint_it_tried(tmp_path):
+    spec = _spec(alternates=[{"url": "bad2", "note": "mirror"}])
+    ctx = Context(aoi=parse_aoi("state:MN"), clip=False)
+    m = run_build(ctx, [spec], str(tmp_path), ["kmz"], False, do_reconcile=False, log=lambda *a: None)
+    row = m["layers"][0]
+    assert row["status"].startswith("ERROR")
+    assert len(row["attempts"]) == 2 and all(a[1].startswith("ERROR") for a in row["attempts"])
+
+
+def test_probe_missing_fields_honours_normalize_defaults():
+    from overlaybuilder.probe import _missing_fields
+    # capacity_mw has DEFAULT_FROM candidates including Total_MW
+    spec = {"fields": {"capacity_mw": {"from": ["Nonexistent_Column"]}}}
+    assert _missing_fields(spec, ["Total_MW", "NAME"]) == []          # the default finds it
+    assert _missing_fields(spec, ["OTHER"]) == ["capacity_mw"]
+    # punctuation-insensitive, like normalize
+    assert _missing_fields({"fields": {"name": {"from": ["DAM_NAME"], "defaults": False}}},
+                           ["Dam Name"]) == []
+
+
+def test_country_bounds_are_cached_not_written_to_the_context(monkeypatch):
+    from overlaybuilder.aoi import parse_aoi as _p
+    from overlaybuilder.drivers import overpass as ov
+    calls = []
+    monkeypatch.setattr(ov, "_COUNTRY_BOUNDS", {})
+    monkeypatch.setattr(ov, "country_bounds",
+                        lambda cc, eps, t, m: calls.append(cc) or (-141.0, 41.6, -52.6, 83.1))
+    monkeypatch.setattr(ov, "_run", lambda *a, **k: {"elements": []})
+    ctx = Context(aoi=_p("country:CA"))
+    for _ in range(3):
+        ov.fetch_elements(["power=plant"], "nwr", ctx, {"tile_deg": 40.0})
+    assert calls == ["CA"]                       # looked up once
+    assert ctx.bbox is None                      # the shared Context is never mutated
