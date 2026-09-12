@@ -136,6 +136,51 @@ def fetch_with_fallback(spec: dict, ctx: Context, use_alternates: bool = True, l
     raise first_error if first_error else RuntimeError("no source candidates")
 
 
+ODBL_NOTICE = (
+    "OpenStreetMap data is (c) OpenStreetMap contributors, available under the Open Database\n"
+    "License (ODbL) 1.0: https://www.openstreetmap.org/copyright\n"
+    "  - Attribution: credit \"(c) OpenStreetMap contributors\" wherever this pack is shown.\n"
+    "  - Share-alike: if you publish a DERIVED DATABASE that adapts this OSM data, that database\n"
+    "    must also be offered under ODbL. Producing a map or a briefing FROM it does not trigger\n"
+    "    share-alike; redistributing the modified data does. The OSM layers are kept as separate\n"
+    "    documents in this pack so they can be handled on their own terms.")
+
+
+def _write_attribution(path: str, results: List[LayerResult], specs: Dict[str, dict],
+                       ctx: Context, rows: List[dict]) -> None:
+    """Per-pack licence notice. A pack gets shared; the terms have to travel with it."""
+    by_licence: Dict[str, List[str]] = {}
+    for r in results:
+        doc = getattr(r, "doc_key", r.logical)
+        lic = (r.provenance.license or "unstated").strip()
+        by_licence.setdefault(lic, []).append(
+            f"{doc} ({len(r.features)} features) - {r.provenance.source_name}\n"
+            f"      {r.provenance.source_url}")
+    has_osm = any("odbl" in k.lower() or "openstreetmap" in k.lower() for k in by_licence)
+    built = _dt.datetime.now(_dt.timezone.utc).isoformat(timespec="seconds")
+    out = ["ATTRIBUTION AND LICENCE NOTICE", "=" * 30, "",
+           f"Pack: {ctx.aoi.describe()}", f"Built: {built} by overlaybuilder", "",
+           "This pack combines data from several publishers. Each layer keeps its own terms;",
+           "the tool's MIT licence covers the code only. Keep this file with the pack.", ""]
+    for lic, layers in sorted(by_licence.items()):
+        out.append(f"-- {lic}")
+        out += [f"    {l}" for l in sorted(layers)]
+        out.append("")
+    if has_osm:
+        out += ["-- OpenStreetMap share-alike", "", ODBL_NOTICE, ""]
+    failed = [r for r in rows if str(r.get("status", "")).startswith("ERROR")]
+    if failed:
+        out += [f"Sources that did not build ({len(failed)}) - absence in this pack is not evidence",
+                "of absence on the ground:", ""]
+        out += [f"    {r['id']}: {str(r['status'])[:140]}" for r in failed]
+        out.append("")
+    out += ["Accuracy: values shown in placemarks come from the sources above and are reproduced,",
+            "never inferred. Where two sources describe the same facility, see reconcile.md for",
+            "the differences. Verify anything you will act on against the operator of record.", ""]
+    with open(path, "w", encoding="utf-8") as fh:
+        fh.write("\n".join(out))
+
+
 def run_build(ctx: Context, sources: List[dict], out_dir: str,
               formats: Optional[List[str]] = None, combined: bool = True,
               precision: int = 6, fail_fast: bool = False, do_reconcile: bool = True,
@@ -308,6 +353,9 @@ def run_build(ctx: Context, sources: List[dict], out_dir: str,
         written.append(p)
         rows.append({"id": "ALL", "layer": "ALL", "status": "ok",
                      "features": sum(len(r.features) for r in results)})
+
+    _write_attribution(os.path.join(out_dir, "ATTRIBUTION.txt"), results, specs, ctx, rows)
+    written.append(os.path.join(out_dir, "ATTRIBUTION.txt"))
 
     manifest = {
         "tool": "overlaybuilder", "built": _dt.datetime.now(_dt.timezone.utc).isoformat(timespec="seconds"),

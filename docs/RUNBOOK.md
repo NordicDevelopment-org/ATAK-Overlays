@@ -90,7 +90,10 @@ Watch the summary. Typical outcomes per row:
 | `ERROR: overpass ...` | Overpass busy | rerun; the driver retries and rotates endpoints |
 
 Outputs: `overlays/us/mn/27025_chisago/` with one KMZ per layer, `ALL.kmz`,
-`manifest.json`, `reconcile.md`.
+`manifest.json`, `reconcile.md` and `ATTRIBUTION.txt`. Keep the attribution
+file with the pack if you pass it on: it names each layer's publisher and
+licence, carries the OpenStreetMap share-alike notice, and lists the sources
+that failed so a gap in the pack is not read as a gap on the ground.
 
 Open `reconcile.md`: it lists EIA vs OSM plants and HIFLD vs OSM substations
 that disagree by more than 5% or exist in only one source. Those are the

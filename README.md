@@ -47,6 +47,8 @@ pipelines.kmz  dams.kmz  wastewater_treatment.kmz  comm_towers.kmz  hospitals.km
 ALL.kmz                     one pack: Sector > Layer > class folders (eye-toggles)
 manifest.json               counts, bbox, provenance per layer, build time
 reconcile.md                EIA vs OSM plants, HIFLD vs OSM substations: matches, deltas, misses
+ATTRIBUTION.txt             every source with its licence, the OpenStreetMap share-alike
+                            notice, and the sources that failed - keep it with the pack
 ```
 
 Load into ATAK: Import Manager > Local SD > pick the `.kmz` (or drop it in
@@ -175,7 +177,11 @@ One YAML, no code: see `CONTRIBUTING.md` and `docs/ADDING_A_SOURCE.md`.
 
 ## Data sources and licensing
 
-MIT covers the **code**. Generated data carries each source's license,
-recorded in every output: US federal data is public domain; OpenStreetMap is
-ODbL (attribution + share-alike; OSM layers are kept as separate documents);
-state and county GIS carry that jurisdiction's terms. See `docs/SOURCES.md`.
+MIT covers the **code**. Generated data carries each source's license, and
+every pack ships an `ATTRIBUTION.txt` naming each layer's publisher, licence
+and endpoint, so the terms travel with the file when you share it. US federal
+data is public domain; OpenStreetMap is ODbL, meaning attribution always and
+share-alike if you redistribute a *derived database* (a map or briefing made
+from it does not trigger that, which is why OSM layers stay in their own
+documents); state and county GIS carry that jurisdiction's terms. See
+`docs/SOURCES.md`.

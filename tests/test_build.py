@@ -210,3 +210,26 @@ def test_geojson_reports_features_without_geometry(tmp_path):
     assert m["layers"][0]["dropped_without_geometry"] == 2
     fc = _json.load(open(tmp_path / "gas_processing.geojson"))
     assert len(fc["features"]) == 1 and fc["metadata"]["dropped_without_geometry"] == 2
+
+
+def test_pack_carries_an_attribution_file(tmp_path):
+    @driver("_lic")
+    def _lic(logical, spec, ctx):
+        lic = spec["_lic"]
+        return LayerResult(logical, [Feature({"type": "Point", "coordinates": [-92.9, 45.5]}, {"NAME": "x"})],
+                           Provenance(spec["_name"], "http://u", lic, "2026-09-12", "_lic"))
+
+    srcs = [{"layer": "county_boundary", "driver": "_fake", "id": "cb"},
+            {"layer": "power_plants", "driver": "_lic", "id": "eia", "provider": "eia",
+             "_lic": "Public domain (US EIA)", "_name": "EIA U.S. Energy Atlas"},
+            {"layer": "power_plants", "driver": "_lic", "id": "osm", "provider": "osm",
+             "_lic": "ODbL 1.0 - (c) OpenStreetMap contributors", "_name": "OpenStreetMap"},
+            {"layer": "boom", "driver": "_fake", "id": "boom"}]
+    ctx = Context(aoi=parse_aoi("county:27025", county_name="Chisago"))
+    run_build(ctx, srcs, str(tmp_path), ["kmz"], True, do_reconcile=False, log=lambda *a: None)
+    text = (tmp_path / "ATTRIBUTION.txt").read_text()
+    assert "Chisago County, MN" in text
+    assert "Public domain (US EIA)" in text and "EIA U.S. Energy Atlas" in text
+    assert "openstreetmap.org/copyright" in text and "Share-alike" in text
+    assert "boom" in text and "did not build" in text          # failures are disclosed, not hidden
+    assert "never inferred" in text
