@@ -163,6 +163,11 @@ def _missing_fields(spec: dict, available: List[str]) -> List[str]:
     return missing
 
 
+def _declared(spec: dict) -> Optional[str]:
+    f = spec.get("format")
+    return None if (not f or f == "auto") else f
+
+
 def _file(spec: dict, ctx) -> Probe:
     url = ctx.render(spec["url"])
     if "{month}" in url or "{year}" in url:
@@ -171,15 +176,15 @@ def _file(spec: dict, ctx) -> Probe:
         from .drivers.file import _month_candidates
         last = Probe(DEAD, "no monthly release resolved", url=url)
         for cand in list(_month_candidates(url, months_back=3)):
-            pr = _probe_download(cand)
+            pr = _probe_download(cand, _declared(spec))
             if pr.ok:
                 return pr
             last = pr
         return last
-    return _probe_download(url)
+    return _probe_download(url, _declared(spec))
 
 
-def _probe_download(url: str) -> Probe:
+def _probe_download(url: str, declared_format: Optional[str] = None) -> Probe:
     if not url.startswith(("http://", "https://")):
         import os
         return Probe(OK if os.path.exists(url) else DEAD, f"local path {url}", url=url)
@@ -194,9 +199,14 @@ def _probe_download(url: str) -> Probe:
         return Probe(DEAD, f"HTTP {e.code}", url=url)
     except Exception as e:  # noqa: BLE001
         return Probe(DEAD, f"unreachable: {str(e)[:120]}", url=url)
-    if body.lstrip()[:1] == b"<" and url.lower().split("?")[0].endswith(
-            (".zip", ".gpkg", ".xlsx", ".xlsm", ".csv")):
+    from .drivers.file import _guess, sniff
+    kind = sniff(body)
+    if kind == "html":
+        # the build refuses this too, so doctor must not green-light it
         return Probe(DEAD, "server answered with an HTML page, not the data file", url=url)
+    if kind is None and _guess(url) is None and not declared_format:
+        return Probe(WARN, "reachable, but neither the URL nor the first bytes say what format "
+                           "this is; set `format:` on the source", url=url)
     return Probe(OK, "download reachable", url=url)
 
 

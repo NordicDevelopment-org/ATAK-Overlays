@@ -112,3 +112,36 @@ def test_http_does_not_cache_html_error_pages():
     assert _cacheable("https://x/data.zip", b"PK\x03\x04")
     assert _cacheable("https://x/api?f=json", b'{"a":1}')
     assert not _cacheable("https://x/data.zip", b"")
+
+
+def test_explicit_format_survives_the_payload_sniffer(tmp_path):
+    """A zipped CSV must not be re-guessed as a shapefile because zips sniff as shp."""
+    import io
+    import zipfile
+
+    from overlaybuilder.aoi import parse_aoi
+    from overlaybuilder.drivers import Context
+    from overlaybuilder.drivers.file import fetch
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as z:
+        z.writestr("Mines.txt", "MINE_ID|NAME|LATITUDE|LONGITUDE\n1|SAMPLE Pit|45.5|-92.9\n2|Bad||\n")
+    path = tmp_path / "mines.zip"
+    path.write_bytes(buf.getvalue())
+    spec = {"layer": "mines", "driver": "file", "url": str(path), "format": "csv",
+            "zip_member": r"Mines\.txt$", "delimiter": "|",
+            "lat_field": "LATITUDE", "lon_field": "LONGITUDE"}
+    res = fetch("mines", spec, Context(aoi=parse_aoi("state:MN")))
+    assert len(res.features) == 1                                  # the row without coordinates is skipped
+    assert res.features[0].properties["NAME"] == "SAMPLE Pit"
+    assert res.features[0].geometry["coordinates"] == [-92.9, 45.5]
+
+
+def test_an_html_error_page_is_refused_whatever_the_url_looks_like(tmp_path):
+    from overlaybuilder.aoi import parse_aoi
+    from overlaybuilder.drivers import Context
+    from overlaybuilder.drivers.file import fetch
+    p = tmp_path / "download"
+    p.write_bytes(b"<!DOCTYPE html><html><body>Page Not Found</body></html>")
+    with pytest.raises(RuntimeError, match="HTML page"):
+        fetch("dams", {"layer": "dams", "driver": "file", "url": str(p), "format": "csv"},
+              Context(aoi=parse_aoi("state:MN")))

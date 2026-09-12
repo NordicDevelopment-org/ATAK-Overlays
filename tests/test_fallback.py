@@ -182,3 +182,15 @@ def test_country_bounds_are_cached_not_written_to_the_context(monkeypatch):
         ov.fetch_elements(["power=plant"], "nwr", ctx, {"tile_deg": 40.0})
     assert calls == ["CA"]                       # looked up once
     assert ctx.bbox is None                      # the shared Context is never mutated
+
+
+def test_probe_rejects_an_html_page_at_an_extensionless_url(monkeypatch):
+    from overlaybuilder import probe as P
+    monkeypatch.setattr(P, "http_get", lambda *a, **k: b"<!DOCTYPE html><html>index</html>")
+    assert P._probe_download("https://hifld.example/").status == P.DEAD
+    monkeypatch.setattr(P, "http_get", lambda *a, **k: b"PK\x03\x04")
+    assert P._probe_download("https://hifld.example/").status == P.OK
+    # an unidentifiable payload warns unless the source declares its format
+    monkeypatch.setattr(P, "http_get", lambda *a, **k: b"\x00\x01binary")
+    assert P._probe_download("https://x/download").status == P.WARN
+    assert P._probe_download("https://x/download", "csv").status == P.OK

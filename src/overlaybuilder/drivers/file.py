@@ -114,24 +114,15 @@ def _load_bytes(url: str):
 @driver("file")
 def fetch(logical: str, spec: dict, ctx: Context) -> LayerResult:
     url = ctx.render(spec["url"])
-    fmt = spec.get("format", "auto")
-    if fmt == "auto":
-        fmt = _guess(url)
+    declared = spec.get("format", "auto")
     raw, url = _load_bytes(url)
-    sniffed = sniff(raw)
-    if sniffed == "html":
+    if sniff(raw) == "html":
         raise RuntimeError(f"{url} returned an HTML page, not data (moved or an error page); "
                            "check the URL or use one of this source's alternates")
-    if fmt is None:
-        fmt = sniffed
-        if fmt is None:
-            raise RuntimeError(f"cannot tell what format {url} is; set `format:` on the source")
-    elif sniffed and sniffed != fmt and not (fmt == "csv" and sniffed is None):
-        # trust the bytes over the declared/guessed format, but say so
-        if {fmt, sniffed} != {"shp", "gpkg"}:
-            fmt = sniffed
     keep = _make_keep(spec, ctx)
 
+    # A zip member is the real payload: pull it out BEFORE deciding the format,
+    # or every zipped CSV looks like a shapefile.
     if spec.get("zip_member"):
         zf = zipfile.ZipFile(io.BytesIO(raw))
         rx = re.compile(spec["zip_member"], re.I)
@@ -139,6 +130,13 @@ def fetch(logical: str, spec: dict, ctx: Context) -> LayerResult:
         if not names:
             raise RuntimeError(f"no zip member matched /{spec['zip_member']}/ in {zf.namelist()[:20]}")
         raw = zf.read(names[0])
+
+    if declared and declared != "auto":
+        fmt = declared                       # an explicit format is the author's call
+    else:
+        fmt = _guess(url) or sniff(raw)      # extension first, then the bytes
+        if fmt is None:
+            raise RuntimeError(f"cannot tell what format {url} is; set `format:` on the source")
 
     if fmt == "shp":
         feats = read_zipped_shapefile(raw, keep)

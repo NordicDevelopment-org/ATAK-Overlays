@@ -266,7 +266,9 @@ def main(argv=None):
     b.add_argument("--no-reconcile", action="store_true")
     b.add_argument("--no-fallbacks", action="store_true",
                    help="do not try a source's catalog `alternates:` when its endpoint fails")
-    b.add_argument("--fail-fast", action="store_true")
+    b.add_argument("--fail-fast", action="store_true",
+                   help="abort on the first source that fails; with --jobs, fetches already in "
+                        "flight are not interrupted, so exit can lag by one download")
     b.add_argument("--jobs", "-j", type=int, default=1,
                    help="fetch this many sources at once (default 1). Boundary layers always "
                         "run first; per-host concurrency stays capped (--max-per-host)")

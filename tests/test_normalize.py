@@ -91,3 +91,14 @@ def test_name_template_drops_empty_parenthetical():
     assert feature_name({"name": "Foo"}, {"name": "{name} ({capacity_mw}, {fuel})"}, "power_plants") == "Foo"
     assert feature_name({"name": "Foo", "fuel": "wind"}, {"name": "{name} ({capacity_mw}, {fuel})"},
                         "power_plants") == "Foo (wind)"
+
+
+def test_a_tank_volume_is_never_reported_as_a_head_count():
+    # OSM `capacity` on a storage tank is a volume; publishing it as persons
+    # would be a fabricated fact, so the bare tag is not a capacity_persons source
+    c = normalize_props({"man_made": "storage_tank", "content": "ammonia", "capacity": "50000"})
+    assert "capacity_persons" not in c and c["substance"] == "ammonia"
+    # sources that really mean people still work, explicitly or by default
+    assert normalize_props({"EVACUATION_CAPACITY": 400})["capacity_persons"] == 400
+    assert normalize_props({"CAPACITY": 1200},
+                           {"fields": {"capacity_persons": {"from": ["CAPACITY"]}}})["capacity_persons"] == 1200

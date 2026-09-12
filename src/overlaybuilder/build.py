@@ -313,7 +313,8 @@ def run_build(ctx: Context, sources: List[dict], out_dir: str,
     if workers > 1 and len(other_specs) > 1:
         log(f"[*] fetching {len(other_specs)} sources with {workers} workers "
             f"(max {http.MAX_PER_HOST} concurrent per host)")
-        with _futures.ThreadPoolExecutor(max_workers=workers) as pool:
+        pool = _futures.ThreadPoolExecutor(max_workers=workers)
+        try:
             futures = {pool.submit(_fetch_one, spec): i for i, spec in enumerate(other_specs)}
             done = {}
             for fut in _futures.as_completed(futures):
@@ -323,9 +324,12 @@ def run_build(ctx: Context, sources: List[dict], out_dir: str,
                 state = "ERROR" if out["error"] is not None else f"{len(out['res'].features)} feat"
                 log(f"[>] {sid:34} {state}  ({len(done)}/{len(other_specs)})")
                 if out["error"] is not None and fail_fast:
-                    for f in futures:
-                        f.cancel()
+                    # drop queued work and report now; fetches already in flight
+                    # cannot be interrupted mid-socket, so exit can lag by one
+                    pool.shutdown(wait=False, cancel_futures=True)
                     raise out["error"]
+        finally:
+            pool.shutdown(wait=False)
         for i in range(len(other_specs)):          # deterministic order, whatever finished first
             if i in done:
                 _record(done[i])

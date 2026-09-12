@@ -138,7 +138,10 @@ DEFAULT_FROM: Dict[str, List[str]] = {
     "flow_mgd": ["CWP_TOTAL_DESIGN_FLOW_NMBR", "Design_Flow_MGD", "DESIGN_FLOW", "Design Flow (MGD)",
                  "FLOW_MGD", "Existing Total Flow (MGD)", "CWP_ACTUAL_AVERAGE_FLOW_NMBR", "AVG_FLOW_MGD"],
     "population_served": ["POP_SERVED", "Population Served", "PopServed", "Population Served Count"],
-    "capacity_persons": ["EVACUATION_CAPACITY", "POST_IMPACT_CAPACITY", "CAPACITY", "Capacity", "capacity"],
+    # Deliberately NOT the bare `capacity`: on an OSM storage tank that is a
+    # volume, and rendering it as "50,000 persons" would be a fabricated fact.
+    # Sources that mean a head count map CAPACITY explicitly (shelters, prisons).
+    "capacity_persons": ["EVACUATION_CAPACITY", "POST_IMPACT_CAPACITY", "TOTAL_CAPACITY", "BED_CAPACITY"],
     "population": ["POPULATION", "Population", "population", "tot_res", "TOT_RES", "ENROLLMENT"],
     "staff": ["TTL_STAFF", "tot_staff", "TOT_STAFF", "STAFF"],
     "security_level": ["SECURELVL", "SECURITY_LEVEL", "SecureLvl"],
@@ -452,7 +455,7 @@ HEADLINES: Dict[str, List[str]] = {
     "government": ["type", "operator", "address", "phone"],
     "psap": ["name", "county", "state"],
     "chemical_plants": ["type", "substance", "operator", "status", "address"],
-    "hazmat_storage": ["substance", "capacity_persons", "operator", "type"],
+    "hazmat_storage": ["substance", "type", "operator", "status"],
     "explosives_storage": ["substance", "operator", "type"],
     "grain_storage": ["substance", "operator", "type", "capacity_mgy"],
     "food_processing": ["type", "operator", "status", "address"],
