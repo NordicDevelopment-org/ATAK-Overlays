@@ -1,5 +1,6 @@
 import json
 import os
+import time
 import zipfile
 import xml.dom.minidom as minidom
 
@@ -122,3 +123,55 @@ def test_boundary_failure_refuses_unclipped_county_pack(tmp_path):
     ctx2 = Context(aoi=parse_aoi("county:27025", county_name="Chisago"), clip=False)
     m = run_build(ctx2, srcs, str(tmp_path), ["kmz"], False, do_reconcile=False, log=lambda *a: None)
     assert m["layers"][0]["status"].startswith("ERROR") and m["layers"][1]["status"] == "ok"
+
+
+def test_parallel_matches_serial_and_keeps_order(tmp_path):
+    import threading
+    seen = []
+
+    @driver("_slow")
+    def _slow(logical, spec, ctx):
+        seen.append((threading.get_ident(), spec["id"]))
+        time.sleep(0.05)
+        prov = Provenance(f"src-{spec['id']}", "u", "l", "d", "_slow")
+        if logical == "county_boundary":
+            return LayerResult(logical, [Feature({"type": "Polygon", "coordinates": [RING]}, {"NAME": "C"})], prov)
+        return LayerResult(logical, [Feature({"type": "Point", "coordinates": [-92.9, 45.5]},
+                                             {"NAME": spec["id"]})], prov)
+
+    srcs = [{"layer": "county_boundary", "driver": "_slow", "id": "cb"}] + [
+        {"layer": "power_plants", "driver": "_slow", "id": f"s{i}", "provider": f"p{i}"} for i in range(6)]
+
+    def run(jobs, out):
+        seen.clear()
+        ctx = Context(aoi=parse_aoi("county:27025", county_name="Chisago"))
+        m = run_build(ctx, srcs, str(out), ["kmz"], False, do_reconcile=False, jobs=jobs, log=lambda *a: None)
+        return m, len({t for t, _ in seen})
+
+    serial, threads_used = run(1, tmp_path / "a")
+    assert threads_used == 1
+    par, threads_used = run(4, tmp_path / "b")
+    assert threads_used > 1                                   # actually ran concurrently
+    assert [r["id"] for r in serial["layers"]] == [r["id"] for r in par["layers"]]
+    assert [r.get("doc") for r in serial["layers"]] == [r.get("doc") for r in par["layers"]]
+    assert all(r["status"] == "ok" for r in par["layers"])
+
+
+def test_parallel_boundary_runs_before_the_rest(tmp_path):
+    order = []
+
+    @driver("_order")
+    def _order(logical, spec, ctx):
+        order.append(logical)
+        prov = Provenance("s", "u", "l", "d", "_order")
+        if logical == "county_boundary":
+            time.sleep(0.05)
+            return LayerResult(logical, [Feature({"type": "Polygon", "coordinates": [RING]}, {})], prov)
+        assert ctx.boundary is not None, "boundary must be set before other sources fetch"
+        return LayerResult(logical, [], prov)
+
+    srcs = [{"layer": "power_plants", "driver": "_order", "id": f"s{i}"} for i in range(4)]
+    srcs.append({"layer": "county_boundary", "driver": "_order", "id": "cb"})
+    ctx = Context(aoi=parse_aoi("county:27025", county_name="Chisago"))
+    run_build(ctx, srcs, str(tmp_path), ["kmz"], False, do_reconcile=False, jobs=4, log=lambda *a: None)
+    assert order[0] == "county_boundary"

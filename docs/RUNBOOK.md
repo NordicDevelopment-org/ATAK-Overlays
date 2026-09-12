@@ -102,13 +102,18 @@ records to eyeball before a briefing.
 ## 6. Scale out
 
 ```bash
-overlaybuilder build --aoi state:MN --sectors energy water comm     # state-wide, ~10-20 min
+overlaybuilder build --aoi state:MN --sectors energy water comm --jobs 6   # state-wide
 overlaybuilder build --aoi region:mn-neighbors --layers power_plants substations transmission_lines pipelines dams
 overlaybuilder build --aoi us --layers power_plants transmission_lines dams refineries   # national (non-OSM layers)
 overlaybuilder build --aoi country:CA --sectors energy                                # OSM world tier
 ```
 
 Notes:
+- `--jobs N` fetches N sources at once. Boundary layers always run first (they
+  scope everything else), and no more than `--max-per-host` (default 2)
+  requests hit any one server, with Overpass spacing preserved - so a state
+  build finishes in a fraction of the time without hammering anyone. Output is
+  identical to a serial build, including layer order.
 - State builds use bbox tiles for OSM layers (a few dozen queries); national
   OSM layers are refused by the tile guard - use `osm_pbf` with a Geofabrik
   extract (`pip install osmium`, set `path:` on the source) instead.

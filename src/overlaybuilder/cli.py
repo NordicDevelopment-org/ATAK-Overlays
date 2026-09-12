@@ -24,6 +24,7 @@ from . import __version__, catalog
 from .aoi import load_regions, parse_aoi
 from .build import run_build
 from .drivers import Context, configure_http, known_drivers
+from .http import set_max_per_host
 
 
 def _catalog_dir(arg):
@@ -66,6 +67,7 @@ def cmd_build(args):
     aoi = _resolve_aoi(args)
     print(f"[*] AOI: {aoi.describe()}")
     configure_http(args.cache_dir, not args.no_http_cache)
+    set_max_per_host(args.max_per_host)
     ctx = Context(aoi=aoi, tiger_year=args.tiger_year, cache_dir=args.cache_dir,
                   http_cache=not args.no_http_cache, clip=not args.no_clip)
     sources = catalog.resolve_sources(cat, aoi, args.layers, args.sectors, args.exclude)
@@ -77,7 +79,7 @@ def cmd_build(args):
     manifest = run_build(ctx, sources, out_dir, args.format, not args.no_combined,
                          precision=args.precision, fail_fast=args.fail_fast,
                          do_reconcile=not args.no_reconcile,
-                         use_alternates=not args.no_fallbacks)
+                         use_alternates=not args.no_fallbacks, jobs=args.jobs)
 
     print("\n==================== SUMMARY ====================")
     for row in manifest["layers"]:
@@ -210,6 +212,11 @@ def main(argv=None):
     b.add_argument("--no-fallbacks", action="store_true",
                    help="do not try a source's catalog `alternates:` when its endpoint fails")
     b.add_argument("--fail-fast", action="store_true")
+    b.add_argument("--jobs", "-j", type=int, default=1,
+                   help="fetch this many sources at once (default 1). Boundary layers always "
+                        "run first; per-host concurrency stays capped (--max-per-host)")
+    b.add_argument("--max-per-host", type=int, default=2,
+                   help="concurrent requests allowed against one server (default 2)")
     b.set_defaults(fn=cmd_build)
 
     s = sub.add_parser("sources", help="list the sources that would build for an AOI")

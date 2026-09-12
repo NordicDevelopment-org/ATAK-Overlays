@@ -24,7 +24,7 @@ cd ATAK-Overlays
 pip install -e .                      # pyshp, pyproj, PyYAML; no GDAL
 
 overlaybuilder build --aoi county:27025           # Chisago County, MN - everything
-overlaybuilder build --aoi state:MN --sectors energy water
+overlaybuilder build --aoi state:MN --sectors energy water --jobs 6
 overlaybuilder build --aoi region:upper-midwest --layers power_plants substations transmission_lines
 overlaybuilder build --aoi us --layers power_plants dams
 overlaybuilder build --aoi country:CA --sectors energy      # world tier (OpenStreetMap)
@@ -102,7 +102,7 @@ the authoritative, maintained source for generation and fuel.
 overlaybuilder build     --aoi ... [--sectors ...] [--layers ...] [--exclude ...]
                          [--format kmz geojson] [--out overlays] [--flat] [--precision 6]
                          [--no-clip] [--no-combined] [--no-reconcile] [--no-fallbacks]
-                         [--no-http-cache] [--fail-fast]
+                         [--jobs N] [--max-per-host N] [--no-http-cache] [--fail-fast]
 overlaybuilder sources   --aoi ...            what would build, by tier
 overlaybuilder doctor    --aoi ...            probe every endpoint, report dead ones -> doctor.md
 overlaybuilder demo                           synthetic sample pack, offline, to test ATAK rendering

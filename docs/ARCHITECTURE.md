@@ -23,6 +23,8 @@ state, a multi-state region, the whole US, another country, or the world.
         │
         ▼
    clip + dedupe (build.py) boundary polygon from county/state layer; drop outside; dedupe ids
+        │                  (--jobs N fetches sources concurrently after the boundary resolves,
+        │                   capped per host so one server is never hammered)
         │
         ▼
    reconcile (reconcile.py) same entity from two sources -> match by proximity, flag deltas

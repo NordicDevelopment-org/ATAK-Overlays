@@ -4,6 +4,7 @@ Boundary layers (county_boundary / state_boundary) build first so the AOI's
 exact polygon can clip everything else and refine the query envelope handed
 to bbox-scoped drivers (ArcGIS envelope filter, Overpass tiles).
 """
+import concurrent.futures as _futures
 import datetime as _dt
 import json
 import os
@@ -12,7 +13,7 @@ import traceback
 from dataclasses import asdict
 from typing import Dict, List, Optional
 
-from . import convert, normalize, reconcile
+from . import convert, http, normalize, reconcile
 from .aoi import BoundaryIndex, bbox_of_geometry, geometry_touches
 from .drivers import Context, get_driver
 from .model import LayerResult
@@ -138,7 +139,7 @@ def fetch_with_fallback(spec: dict, ctx: Context, use_alternates: bool = True, l
 def run_build(ctx: Context, sources: List[dict], out_dir: str,
               formats: Optional[List[str]] = None, combined: bool = True,
               precision: int = 6, fail_fast: bool = False, do_reconcile: bool = True,
-              use_alternates: bool = True, log=print) -> dict:
+              use_alternates: bool = True, jobs: int = 1, log=print) -> dict:
     """Fetch every source, cross-check, then write. Returns the manifest dict."""
     formats = formats or ["kmz"]
     os.makedirs(out_dir, exist_ok=True)
@@ -159,36 +160,43 @@ def run_build(ctx: Context, sources: List[dict], out_dir: str,
     written: List[str] = []
 
     boundary_expected = any(s["layer"] in BOUNDARY_LAYERS for s in order)
+    boundary_specs = [s for s in order if s["layer"] in BOUNDARY_LAYERS]
+    other_specs = [s for s in order if s["layer"] not in BOUNDARY_LAYERS]
 
-    # ---- phase 1: fetch + normalize + clip ---------------------------------
-    for spec in order:
-        logical = spec["layer"]
-        sid = spec.get("id", logical)
+    def _fetch_one(spec: dict) -> dict:
+        """Fetch + normalize + dedupe + clip one source. Never raises; the
+        outcome rides in the returned dict so workers cannot kill the build."""
         t0 = time.time()
-        if (logical not in BOUNDARY_LAYERS and boundary_expected and ctx.boundary is None
-                and ctx.clip and ctx.aoi.kind in ("county", "state", "region")):
-            raise RuntimeError(
-                f"the boundary layer for {ctx.aoi.describe()} failed, so features cannot be clipped; "
-                "refusing to write a pack from the state envelope. Fix the boundary source "
-                "(TIGER download) or re-run with --no-clip to accept envelope-scoped output")
-        attempts = []
+        out = {"spec": spec, "res": None, "error": None, "attempts": [],
+               "used": spec, "dup": 0, "dropped": 0, "lines": []}
         try:
-            log(f"[>] {sid}  ({spec['driver']})")
-            res, used_spec, attempts = fetch_with_fallback(spec, ctx, use_alternates, log)
-            normalize.apply_to_layer(res, used_spec)
-            dup = _dedupe_layer(res)
-            dropped = clip_layer(res, ctx)
-        except Exception as e:  # keep going; report per layer
-            rows.append({"id": sid, "layer": logical, "status": f"ERROR: {e}", "features": 0,
-                         "driver": spec["driver"], "attempts": attempts, "fallback": False,
-                         "seconds": round(time.time() - t0, 1)})
-            log(f"[!] {sid}: {e}")
-            if fail_fast:
-                raise
+            res, used, attempts = fetch_with_fallback(
+                spec, ctx, use_alternates, log=lambda m: out["lines"].append(m))
+            out["attempts"] = attempts
+            out["used"] = used
+            normalize.apply_to_layer(res, used)
+            out["dup"] = _dedupe_layer(res)
+            out["dropped"] = clip_layer(res, ctx)
+            out["res"] = res
+        except Exception as e:  # noqa: BLE001  reported per layer
+            out["error"] = e
             if os.environ.get("OVERLAYBUILDER_DEBUG"):
                 traceback.print_exc()
-            continue
+        out["seconds"] = round(time.time() - t0, 1)
+        return out
 
+    def _record(out: dict) -> None:
+        spec, sid = out["spec"], out["spec"].get("id", out["spec"]["layer"])
+        logical = spec["layer"]
+        for m in out["lines"]:
+            log(m)
+        if out["error"] is not None:
+            rows.append({"id": sid, "layer": logical, "status": f"ERROR: {out['error']}", "features": 0,
+                         "driver": spec["driver"], "attempts": out["attempts"], "fallback": False,
+                         "seconds": out["seconds"]})
+            log(f"[!] {sid}: {out['error']}")
+            return
+        res, used_spec = out["res"], out["used"]
         if logical in BOUNDARY_LAYERS and ctx.boundary is None and res.features:
             ctx.boundary = _merge_boundary(res)
             bb = bbox_of_geometry(ctx.boundary) if ctx.boundary else None
@@ -197,7 +205,6 @@ def run_build(ctx: Context, sources: List[dict], out_dir: str,
                 ctx.boundary_index = BoundaryIndex(ctx.boundary)
                 log(f"[*] boundary set from {logical}: bbox={tuple(round(x, 4) for x in bb)}")
 
-        # a layer key can come from several sources (EIA + OSM): keep both documents
         n_same = sum(1 for r in results if r.logical == logical)
         provider = spec.get("provider") or spec["driver"]
         doc_key = logical if n_same == 0 else f"{logical}__{provider}"
@@ -209,13 +216,58 @@ def run_build(ctx: Context, sources: List[dict], out_dir: str,
         results.append(res)
         specs[doc_key] = res_spec
         rows.append({"id": sid, "layer": logical, "doc": doc_key, "status": "ok",
-                     "features": len(res.features), "dropped_outside_aoi": dropped,
-                     "deduped": dup, "server_count": res.server_count, "driver": spec["driver"],
+                     "features": len(res.features), "dropped_outside_aoi": out["dropped"],
+                     "deduped": out["dup"], "server_count": res.server_count, "driver": spec["driver"],
                      "source": res.provenance.source_name, "license": res.provenance.license,
-                     "group_by": res.group_by, "seconds": round(time.time() - t0, 1),
+                     "group_by": res.group_by, "seconds": out["seconds"],
                      "fallback": used_spec.get("_alternate_of") is not None,
-                     "attempts": attempts if len(attempts) > 1 else None})
-        log(f"    {len(res.features)} features ({dropped} outside AOI dropped)  {rows[-1]['seconds']}s")
+                     "attempts": out["attempts"] if len(out["attempts"]) > 1 else None})
+        log(f"    {sid}: {len(res.features)} features "
+            f"({out['dropped']} outside AOI dropped)  {out['seconds']}s")
+
+    # ---- phase 1a: boundary layers, serially - they scope everything else ----
+    for spec in boundary_specs:
+        log(f"[>] {spec.get('id', spec['layer'])}  ({spec['driver']})")
+        out = _fetch_one(spec)
+        _record(out)
+        if out["error"] is not None and fail_fast:
+            raise out["error"]
+
+    if (boundary_expected and ctx.boundary is None and ctx.clip
+            and ctx.aoi.kind in ("county", "state", "region")):
+        raise RuntimeError(
+            f"the boundary layer for {ctx.aoi.describe()} failed, so features cannot be clipped; "
+            "refusing to write a pack from the state envelope. Fix the boundary source "
+            "(TIGER download) or re-run with --no-clip to accept envelope-scoped output")
+
+    # ---- phase 1b: everything else (parallel when --jobs > 1) ----------------
+    workers = max(1, int(jobs))
+    if workers > 1 and len(other_specs) > 1:
+        log(f"[*] fetching {len(other_specs)} sources with {workers} workers "
+            f"(max {http.MAX_PER_HOST} concurrent per host)")
+        with _futures.ThreadPoolExecutor(max_workers=workers) as pool:
+            futures = {pool.submit(_fetch_one, spec): i for i, spec in enumerate(other_specs)}
+            done = {}
+            for fut in _futures.as_completed(futures):
+                out = fut.result()
+                done[futures[fut]] = out
+                sid = out["spec"].get("id", out["spec"]["layer"])
+                state = "ERROR" if out["error"] is not None else f"{len(out['res'].features)} feat"
+                log(f"[>] {sid:34} {state}  ({len(done)}/{len(other_specs)})")
+                if out["error"] is not None and fail_fast:
+                    for f in futures:
+                        f.cancel()
+                    raise out["error"]
+        for i in range(len(other_specs)):          # deterministic order, whatever finished first
+            if i in done:
+                _record(done[i])
+    else:
+        for spec in other_specs:
+            log(f"[>] {spec.get('id', spec['layer'])}  ({spec['driver']})")
+            out = _fetch_one(spec)
+            _record(out)
+            if out["error"] is not None and fail_fast:
+                raise out["error"]
 
     # ---- phase 2: cross-source check (stamps xcheck on features) ------------
     rec = None

@@ -3,6 +3,7 @@ import hashlib
 import json
 import os
 import ssl
+import threading
 import time
 from typing import Dict, Optional
 from urllib.error import HTTPError, URLError
@@ -22,7 +23,31 @@ class HttpStatusError(RuntimeError):
 _CACHE_DIR: Optional[str] = None
 _CACHE_ON = False
 _LAST_CALL: Dict[str, float] = {}
-MIN_INTERVAL_S = 0.0   # per-host politeness delay; drivers may raise it
+MIN_INTERVAL_S = 0.0        # per-host politeness delay; drivers may raise it
+MAX_PER_HOST = 2            # concurrent requests allowed to one host when jobs > 1
+
+_REG_LOCK = threading.Lock()
+_HOST_SEM: Dict[str, threading.Semaphore] = {}
+_HOST_GAP: Dict[str, threading.Lock] = {}
+
+
+def set_max_per_host(n: int) -> None:
+    """Cap concurrent requests per host (call before any request; jobs=1 ignores it)."""
+    global MAX_PER_HOST
+    with _REG_LOCK:
+        MAX_PER_HOST = max(1, int(n))
+        _HOST_SEM.clear()
+
+
+def _host_gate(host: str):
+    with _REG_LOCK:
+        sem = _HOST_SEM.get(host)
+        if sem is None:
+            sem = _HOST_SEM[host] = threading.Semaphore(MAX_PER_HOST)
+        gap = _HOST_GAP.get(host)
+        if gap is None:
+            gap = _HOST_GAP[host] = threading.Lock()
+    return sem, gap
 
 
 def configure_http(cache_dir: Optional[str], enabled: bool):
@@ -60,22 +85,29 @@ def http_get(url: str, params: Optional[dict] = None, tries: int = 4, timeout: i
     hdrs.update(headers or {})
     last: Optional[Exception] = None
     host = _host(url)
+    sem, gap_lock = _host_gate(host)
     for i in range(tries):
         gap = max(min_interval, MIN_INTERVAL_S)
-        if gap:
-            since = time.time() - _LAST_CALL.get(host, 0)
-            if since < gap:
-                time.sleep(gap - since)
-        _LAST_CALL[host] = time.time()
+        sem.acquire()                     # bound concurrency against this host
         try:
+            if gap:
+                # holding the gap lock across the sleep is what actually spaces
+                # requests apart when several workers target the same host
+                with gap_lock:
+                    since = time.time() - _LAST_CALL.get(host, 0)
+                    if since < gap:
+                        time.sleep(gap - since)
+                    _LAST_CALL[host] = time.time()
+            else:
+                _LAST_CALL[host] = time.time()
             req = Request(url, headers=hdrs, data=data)
             with urlopen(req, timeout=timeout, context=_SSL) as r:
                 body = r.read()
             if cp:
-                tmp = cp + ".tmp"
+                tmp = f"{cp}.{os.getpid()}.{threading.get_ident()}.tmp"
                 with open(tmp, "wb") as fh:
                     fh.write(body)
-                os.replace(tmp, cp)
+                os.replace(tmp, cp)       # atomic: concurrent writers cannot tear a cache entry
             return body
         except HTTPError as e:
             last = e
@@ -98,6 +130,8 @@ def http_get(url: str, params: Optional[dict] = None, tries: int = 4, timeout: i
             last = e
             if i < tries - 1:
                 time.sleep(1.5 * (i + 1))
+        finally:
+            sem.release()
     raise RuntimeError(f"GET failed after {tries} tries: {url}\n  {last}")
 
 
