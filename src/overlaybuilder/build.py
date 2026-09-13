@@ -446,9 +446,10 @@ def run_build(ctx: Context, sources: List[dict], out_dir: str,
         p = os.path.join(out_dir, "ALL.kmz")
         kml, icons = convert.combined_kml(results, specs, precision,
                                           title=f"Critical Infrastructure - {ctx.aoi.describe()}")
-        convert.write_kmz(p, kml, icons)
+        n = convert.write_kmz(p, kml, icons)
         written.append(p)
-        rows.append({"id": "ALL", "layer": "ALL", "status": "ok",
+        rows.append({"id": "ALL", "layer": "ALL", "doc": "ALL.kmz", "status": "ok",
+                     "placemarks": n,
                      "features": sum(len(r.features) for r in results)})
 
     _write_attribution(os.path.join(out_dir, "ATTRIBUTION.txt"), results, specs, ctx, rows)

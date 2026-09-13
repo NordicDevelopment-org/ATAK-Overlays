@@ -127,8 +127,14 @@ def cmd_build(args):
                          use_alternates=not args.no_fallbacks, jobs=args.jobs,
                          group_by=args.group_by)
 
-    print("\n==================== SUMMARY ====================")
-    for row in manifest["layers"]:
+    # sources and the files written are different things: a source that failed is
+    # not a missing pack, and a pack is not a source. Keep them in separate blocks.
+    packs = [r for r in manifest["layers"] if str(r.get("id", "")).startswith("SECTOR:")
+             or r.get("id") == "ALL"]
+    srcs = [r for r in manifest["layers"] if r not in packs]
+
+    print("\n--------------------- SOURCES ---------------------")
+    for row in srcs:
         extra = ""
         if row.get("dropped_outside_aoi"):
             extra += f"  -{row['dropped_outside_aoi']} outside AOI"
@@ -137,10 +143,18 @@ def cmd_build(args):
         if row.get("source"):
             extra += f"  [{row['source']}]"
         print(f"  {row.get('doc', row['layer']):28} {str(row['features']):>8} feat   {row['status'][:60]}{extra}")
-    print("=================================================")
+    if packs:
+        print("\n---------------------- PACKS ----------------------")
+        for row in packs:
+            n = row.get("placemarks", row.get("features", 0))
+            src_n = len(row.get("docs") or [])
+            note = f"   {src_n} source(s)" if src_n else ""
+            print(f"  {row.get('doc', row['layer']):38} {str(n):>8} placemarks{note}")
+    print("---------------------------------------------------")
     print(f"Output: {os.path.abspath(out_dir)}  ({manifest['seconds']}s)")
     print("ATAK: Import Manager > Local SD > select .kmz (or drop in atak/imports/).")
-    print("Toggle sectors/layers/classes with the eye button in Overlay Manager.")
+    print("Toggle a whole sector by its file; layers and classes with the eye button")
+    print("in Overlay Manager. Dense layers start hidden.")
     errs = [r for r in manifest["layers"] if str(r["status"]).startswith("ERROR")]
     return 2 if errs and len(errs) == len(sources) else 0
 
