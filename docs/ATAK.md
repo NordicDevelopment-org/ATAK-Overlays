@@ -6,7 +6,8 @@ version; ATAK's KML importer is strict about a few things.
 
 ## Structure
 
-- **One KMZ per layer + `ALL.kmz`.** Each KMZ is a top-level entry in Overlay
+- **One KMZ per sector + `ALL.kmz`.** A state pack is ~11 files, not ~60, which is
+  what Import Manager can actually handle. Each KMZ is a top-level entry in Overlay
   Manager. Inside, `<Folder>` nesting becomes the tree of eye-toggles:
   `Sector > Layer (count) > class (count) > placemarks`.
 - **`<visibility>0</visibility>`** on dense layers/folders so a 50k-parcel or

@@ -8,8 +8,10 @@ import concurrent.futures as _futures
 import datetime as _dt
 import json
 import os
+import re
 import time
 import traceback
+from collections import OrderedDict
 from dataclasses import asdict
 from typing import Dict, List, Optional
 
@@ -19,6 +21,34 @@ from .drivers import Context, get_driver
 from .model import LayerResult
 
 BOUNDARY_LAYERS = ("county_boundary", "state_boundary")
+GROUPINGS = ("sector", "layer", "both")
+
+
+def sector_slug(sector: str) -> str:
+    """'Energy - Oil & Gas' -> 'Energy-Oil-Gas'. Filename-safe, still readable
+    in ATAK's Import Manager, which shows the bare filename."""
+    return re.sub(r"[^A-Za-z0-9]+", "-", str(sector)).strip("-") or "Other"
+
+
+def aoi_prefix(aoi) -> str:
+    """Short, human token that leads every pack filename: 'MN', 'MN-Chisago',
+    'US', 'CONUS', 'upper-midwest'. The operator reads this on a tablet, so it
+    has to say WHERE at a glance."""
+    if aoi.kind == "county":
+        st = (aoi.state_abbr or "US").upper()
+        nm = re.sub(r"[^A-Za-z0-9]+", "-", (aoi.county_name or "")).strip("-")
+        return f"{st}-{nm}" if nm else f"{st}-{aoi.fips5 or 'county'}"
+    if aoi.kind == "state":
+        return aoi.id.upper()
+    if aoi.kind == "region":
+        return sector_slug(aoi.id)
+    if aoi.kind == "us":
+        return aoi.id.upper()
+    if aoi.kind == "country":
+        return aoi.id.upper()
+    if aoi.kind == "bbox":
+        return "BBOX"
+    return "WORLD"
 
 
 def _merge_boundary(res: LayerResult) -> Optional[dict]:
@@ -206,9 +236,21 @@ def _write_attribution(path: str, results: List[LayerResult], specs: Dict[str, d
 def run_build(ctx: Context, sources: List[dict], out_dir: str,
               formats: Optional[List[str]] = None, combined: bool = True,
               precision: int = 6, fail_fast: bool = False, do_reconcile: bool = True,
-              use_alternates: bool = True, jobs: int = 1, log=print) -> dict:
-    """Fetch every source, cross-check, then write. Returns the manifest dict."""
+              use_alternates: bool = True, jobs: int = 1, group_by: str = "sector",
+              log=print) -> dict:
+    """Fetch every source, cross-check, then write. Returns the manifest dict.
+
+    `group_by` decides how KMZ files are cut up:
+      sector  one KMZ per sector, named <AOI>_<Sector>.kmz  (default: what an
+              ATAK operator can actually manage in Import Manager)
+      layer   one KMZ per source document, the original 1-file-per-layer layout
+      both    both of the above
+    GeoJSON, when asked for, is always written per source document.
+    """
     formats = formats or ["kmz"]
+    group_by = (group_by or "sector").lower()
+    if group_by not in GROUPINGS:
+        raise ValueError(f"group_by must be one of {GROUPINGS}, got {group_by!r}")
     os.makedirs(out_dir, exist_ok=True)
     started = time.time()
 
@@ -353,11 +395,12 @@ def run_build(ctx: Context, sources: List[dict], out_dir: str,
             log(f"[!] reconcile skipped: {e}")
 
     # ---- phase 3: write --------------------------------------------------------
+    per_layer_kmz = group_by in ("layer", "both")
     for res in results:
         doc_key = res.doc_key  # type: ignore[attr-defined]
         res_spec = specs[doc_key]
         stem = os.path.join(out_dir, doc_key)
-        if "kmz" in formats:
+        if "kmz" in formats and per_layer_kmz:
             kml, icons = convert.layer_kml(res, res_spec, precision, title=res_spec["title"])
             n = convert.write_kmz(stem + ".kmz", kml, icons)
             written.append(stem + ".kmz")
@@ -371,6 +414,33 @@ def run_build(ctx: Context, sources: List[dict], out_dir: str,
                 for r in rows:
                     if r.get("doc") == doc_key:
                         r["dropped_without_geometry"] = no_geom
+
+    # one KMZ per sector: <AOI>_<Sector>.kmz. Each keeps the full folder tree,
+    # its own embedded icons and EVERY contributing source's provenance, so a
+    # merged pack never speaks for a source it did not use.
+    if group_by in ("sector", "both") and results and "kmz" in formats:
+        by_sector: "OrderedDict[str, List[LayerResult]]" = OrderedDict()
+        for res in results:
+            spec = specs[res.doc_key]  # type: ignore[attr-defined]
+            sector = convert.style_for(res.logical, spec)[5]
+            by_sector.setdefault(sector, []).append(res)
+        prefix = aoi_prefix(ctx.aoi)
+        for sector, group in by_sector.items():
+            fname = f"{prefix}_{sector_slug(sector)}.kmz"
+            path = os.path.join(out_dir, fname)
+            kml, icons = convert.combined_kml(
+                group, specs, precision,
+                title=f"{ctx.aoi.describe()} - {sector}", sector_folders=False)
+            n = convert.write_kmz(path, kml, icons)
+            written.append(path)
+            rows.append({
+                "id": f"SECTOR:{sector}", "layer": sector_slug(sector), "doc": fname,
+                "status": "ok", "sector": sector, "placemarks": n,
+                "features": sum(len(r.features) for r in group),
+                "sources": [r.provenance.source_name for r in group],
+                "docs": [r.doc_key for r in group],  # type: ignore[attr-defined]
+            })
+            log(f"    {fname:34} {n:>7} placemarks   {len(group)} source(s)")
 
     if combined and results and "kmz" in formats:
         p = os.path.join(out_dir, "ALL.kmz")

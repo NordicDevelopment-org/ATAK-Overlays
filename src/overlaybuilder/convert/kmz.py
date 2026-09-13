@@ -391,12 +391,17 @@ def layer_kml(result: LayerResult, spec: Optional[dict] = None, precision: int =
 
 
 def combined_kml(results: List[LayerResult], specs: Optional[Dict[str, dict]] = None,
-                 precision: int = 6, title: str = "Overlays") -> Tuple[str, Dict[str, bytes]]:
+                 precision: int = 6, title: str = "Overlays",
+                 sector_folders: bool = True) -> Tuple[str, Dict[str, bytes]]:
     """One Document: Folder per sector > Folder per source document > bucket folders.
 
     `specs` is keyed by each result's `doc_key` (falling back to its layer key), so
     two sources of the same layer - EIA and OSM power plants, rail yards and Amtrak
     stations - keep their own titles, visibility, name templates and style rules.
+
+    `sector_folders=False` drops the sector level and hangs the document folders
+    straight off the Document. A per-sector pack is already named for its sector,
+    so the extra folder would just be one more tap in ATAK's Overlay Manager.
     """
     specs = specs or {}
     styles, icons = [], {}
@@ -424,8 +429,11 @@ def combined_kml(results: List[LayerResult], specs: Optional[Dict[str, dict]] = 
         by_sector.setdefault(sector, []).append(
             f"<Folder><name>{_esc(name)} ({sub.count('<Placemark>')})</name>{vis}<open>0</open>"
             f"<description>{_prov_cdata(r.provenance)}</description>{sub}</Folder>")
-    folders = "".join(f"<Folder><name>{_esc(sec)}</name><open>0</open>{''.join(fs)}</Folder>"
-                      for sec, fs in by_sector.items())
+    if sector_folders:
+        folders = "".join(f"<Folder><name>{_esc(sec)}</name><open>0</open>{''.join(fs)}</Folder>"
+                          for sec, fs in by_sector.items())
+    else:
+        folders = "".join("".join(fs) for fs in by_sector.values())
     kml = ('<?xml version="1.0" encoding="UTF-8"?>'
            '<kml xmlns="http://www.opengis.net/kml/2.2"><Document>'
            f"<name>{_esc(title)}</name><open>1</open>{''.join(styles)}{folders}</Document></kml>")

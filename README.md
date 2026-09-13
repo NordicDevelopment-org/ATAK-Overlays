@@ -34,26 +34,44 @@ overlaybuilder build --aoi country:CA --sectors energy      # world tier (OpenSt
 overlaybuilder build --aoi bbox:-93.2,45.3,-92.6,45.8
 ```
 
-Output lands in `overlays/<aoi>/` (e.g. `overlays/us/mn/27025_chisago/`):
+Output lands in `overlays/<aoi>/` (e.g. `overlays/us/mn/`). By default the pack
+is cut **one KMZ per sector**, named for the area and the sector - a count an
+operator can actually manage in Import Manager:
 
 ```
-power_plants.kmz            EIA plants, folders by fuel, "Name (1,146.4 MW)"
-power_plants__osm.kmz       OSM plants, same layer from a second source (the most
-                            specific tier - county, then state, national, global -
-                            owns the plain name; others get a provider suffix)
-substations.kmz             folders by type, styled by max kV
-transmission_lines.kmz      folders "345 kV (12)", line width by class
-pipelines.kmz  dams.kmz  wastewater_treatment.kmz  comm_towers.kmz  hospitals.kmz ...
-ALL.kmz                     one pack: Sector > Layer > class folders (eye-toggles)
+MN_Energy-Electric.kmz      plants, substations, transmission, battery storage
+MN_Energy-Oil-Gas.kmz       pipelines, compressors, refineries, terminals
+MN_Water.kmz                dams, levees, treatment, towers, reservoirs
+MN_Emergency-Health.kmz     hospitals, fire, police, EMS, EOC, shelters
+MN_Communications.kmz       towers, data centres, exchanges, PSAPs
+MN_Transportation.kmz       airports, rail, bridges, ports
+MN_Chemical-Hazmat.kmz  MN_Agriculture-Food.kmz  MN_Mining.kmz
+MN_Government.kmz       MN_Base.kmz  (boundaries, roads, parcels)
+ALL.kmz                     every sector in one file (--no-combined to skip)
 manifest.json               counts, bbox, provenance per layer, build time
 reconcile.md                EIA vs OSM plants, HIFLD vs OSM substations: matches, deltas, misses
 ATTRIBUTION.txt             every source with its licence, the OpenStreetMap share-alike
                             notice, and the sources that failed - keep it with the pack
 ```
 
+Inside each sector pack the tree is **Layer/source > class folders**, so two
+sources of one layer stay apart and each keeps its own provenance:
+
+```
+MN_Energy-Electric.kmz
+  power_plants (214)              EIA, folders by fuel, "Name (1,146.4 MW)"
+  power_plants (osm) (188)        same layer, second source, its own footer
+  substations (1,204)             folders by type, styled by max kV
+  transmission_lines (892)        folders "345 kV (12)", width by class
+```
+
+`--group-by layer` restores the old one-file-per-source layout (~60 files for a
+state); `--group-by both` writes both. GeoJSON, if asked for, is always per source.
+
 Load into ATAK: Import Manager > Local SD > pick the `.kmz` (or drop it in
-`atak/imports/`). Toggle sectors, layers and classes with the eye in Overlay
-Manager. Dense layers (parcels, buildings, towers, generators) start hidden.
+`atak/imports/`). Toggle layers and classes with the eye in Overlay Manager, or
+toggle a whole sector by turning off its file. Dense layers (parcels, buildings,
+towers, generators) start hidden.
 
 ## What it does
 
@@ -162,14 +180,20 @@ placemark shows the source, retrieval date and license.
 ## See it in ATAK first
 
 ```bash
-overlaybuilder demo          # writes ./demo/DEMO_SAMPLE_ALL.kmz, no network needed
+overlaybuilder demo                      # ./demo/SAMPLE_*.kmz, no network needed
+overlaybuilder demo --aoi state:MN       # same pack, placed inside Minnesota
 ```
 
 A small pack of **synthetic, clearly-labelled sample features** that exercises
 every rendering path: sector folders, nested eye-toggles, embedded icons,
 transmission lines styled by kV, dams by hazard class, a hidden dense layer,
-and the full popup layout. Load it, confirm your ATAK version behaves, delete
-it, then build the real thing. Nothing in it is real infrastructure.
+and the full popup layout. It is split by sector exactly like a real pack, so
+what you see here is what a real build gives you.
+
+`--aoi` moves the sample grid into that area's envelope so it lands where you
+expect on the map. Every file is named `SAMPLE_...` and every placemark starts
+with `SAMPLE`: nothing in it is real infrastructure. Load it, confirm your ATAK
+version behaves, delete it, then build the real thing.
 
 ## Add your county or state
 

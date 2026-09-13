@@ -124,7 +124,8 @@ def cmd_build(args):
     manifest = run_build(ctx, sources, out_dir, args.format, not args.no_combined,
                          precision=args.precision, fail_fast=args.fail_fast,
                          do_reconcile=not args.no_reconcile,
-                         use_alternates=not args.no_fallbacks, jobs=args.jobs)
+                         use_alternates=not args.no_fallbacks, jobs=args.jobs,
+                         group_by=args.group_by)
 
     print("\n==================== SUMMARY ====================")
     for row in manifest["layers"]:
@@ -184,14 +185,24 @@ def cmd_doctor(args):
 
 def cmd_demo(args):
     """Build a synthetic sample pack offline, to check ATAK rendering."""
+    from .aoi import parse_aoi
     from .demo import PROV_NOTE, build_demo
     out = args.out or "demo"
+    aoi = parse_aoi(args.aoi, cache_dir=args.cache_dir) if args.aoi else None
     print(f"[*] building a SYNTHETIC sample pack in {os.path.abspath(out)}")
+    if aoi is not None:
+        print(f"[*] placed inside the {aoi.describe()} envelope")
     print(f"    {PROV_NOTE}\n")
-    m = build_demo(out, precision=args.precision)
-    print(f"\n{len(m['layers'])} layers, {sum(r['features'] for r in m['layers'])} features")
-    print(f"Load {os.path.join(os.path.abspath(out), 'DEMO_SAMPLE_ALL.kmz')} into ATAK to check the")
-    print("folder tree, eye-toggles, icons, voltage styling and popup layout, then delete it.")
+    m = build_demo(out, precision=args.precision, aoi=aoi, group_by=args.group_by)
+    packs = [f for f in m["files"] if f.startswith("SAMPLE")]
+    print(f"\n{len(m['layers'])} rows, {sum(r['features'] for r in m['layers'])} features")
+    print(f"Output: {os.path.abspath(out)}")
+    if packs:
+        print("Load these into ATAK (Import Manager > Local SD) to check the folder tree,")
+        print("eye-toggles, icons, voltage styling and popup layout:")
+        for f in packs:
+            print(f"    {f}")
+    print("Everything here is SYNTHETIC. Delete it before it can be mistaken for real data.")
     return 0
 
 
@@ -258,6 +269,12 @@ def main(argv=None):
     _add_common(b)
     b.add_argument("--format", nargs="*", default=["kmz"], choices=["kmz", "geojson"])
     b.add_argument("--no-combined", action="store_true", help="skip ALL.kmz")
+    b.add_argument("--group-by", choices=["sector", "layer", "both"], default="sector",
+                   help="how to cut up the KMZ files: sector (default) writes one pack per "
+                        "sector, named <AOI>_<Sector>.kmz - e.g. MN_Energy-Electric.kmz - which "
+                        "is what ATAK's Import Manager can actually handle; layer writes the "
+                        "original one-file-per-source layout; both writes both. GeoJSON is "
+                        "always per source.")
     b.add_argument("--flat", action="store_true", help="write into --out directly (no AOI subfolder)")
     b.add_argument("--out", default="overlays")
     b.add_argument("--precision", type=int, default=6, help="coordinate decimals (5 ~ 1 m)")
@@ -294,6 +311,11 @@ def main(argv=None):
     dm = sub.add_parser("demo", help="build a synthetic sample pack offline (checks ATAK rendering)")
     dm.add_argument("--out", help="output directory (default ./demo)")
     dm.add_argument("--precision", type=int, default=6)
+    dm.add_argument("--aoi", help="place the sample grid inside this AOI's envelope "
+                                  "(e.g. state:MN, county:27025) instead of near Chisago County")
+    dm.add_argument("--cache-dir", default=".cache")
+    dm.add_argument("--group-by", choices=["sector", "layer", "both"], default="sector",
+                    help="same as `build --group-by` (default: sector)")
     dm.set_defaults(fn=cmd_demo)
 
     v = sub.add_parser("validate", help="lint the catalog offline")

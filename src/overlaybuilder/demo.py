@@ -178,6 +178,56 @@ def _parcels() -> LayerResult:
     return LayerResult("parcels", feats, _prov("parcels"), group_by=["CITY"])
 
 
+def _walk_coords(coords, fn):
+    """Map fn over every position in a GeoJSON coordinate tree, at any nesting."""
+    if coords and isinstance(coords[0], (int, float)):
+        return fn(coords)
+    return [_walk_coords(c, fn) for c in coords]
+
+
+def _coord_bbox(results) -> tuple:
+    xs, ys = [], []
+
+    def note(pt):
+        xs.append(pt[0])
+        ys.append(pt[1])
+        return pt
+
+    for r in results:
+        for f in r.features:
+            if f.geometry:
+                _walk_coords(f.geometry["coordinates"], note)
+    if not xs:
+        raise ValueError("no coordinates to rescale")
+    return (min(xs), min(ys), max(xs), max(ys))
+
+
+def rescale_to_bbox(results, bbox, margin: float = 0.06) -> None:
+    """Move the synthetic grid into `bbox`, in place, uniformly.
+
+    The sample layout is drawn around Chisago County. Pointing the demo at a
+    whole state would otherwise leave every placemark in one corner. Scaling is
+    UNIFORM (one factor for both axes) so the shapes stay shapes; `margin`
+    keeps them off the envelope edge. This moves invented points around an
+    invented map - it is not a projection and no real feature is relocated.
+    """
+    w, s, e, n = bbox
+    sx0, sy0, sx1, sy1 = _coord_bbox(results)
+    k = min(((e - w) * (1 - 2 * margin)) / ((sx1 - sx0) or 1e-9),
+            ((n - s) * (1 - 2 * margin)) / ((sy1 - sy0) or 1e-9))
+    cxs, cys = (sx0 + sx1) / 2.0, (sy0 + sy1) / 2.0
+    cxt, cyt = (w + e) / 2.0, (s + n) / 2.0
+
+    def move(pt):
+        return [round(cxt + (pt[0] - cxs) * k, 6),
+                round(cyt + (pt[1] - cys) * k, 6)] + list(pt[2:])
+
+    for r in results:
+        for f in r.features:
+            if f.geometry:
+                f.geometry["coordinates"] = _walk_coords(f.geometry["coordinates"], move)
+
+
 BUILDERS = [_boundary, _plants, _substations, _lines, _pipelines, _dams,
             _hospitals, _towers, _wastewater, _hazmat, _grain, _mines, _parcels]
 _BY_LAYER = {b().logical: b for b in BUILDERS}
@@ -239,40 +289,95 @@ def demo_specs_and_results():
     return specs, results
 
 
-def build_demo(out_dir: str, precision: int = 6, log=print) -> dict:
-    """Write a synthetic pack (per-layer KMZ + ALL.kmz + manifest) with no network."""
+def build_demo(out_dir: str, precision: int = 6, log=print, aoi=None,
+               group_by: str = "sector") -> dict:
+    """Write a synthetic pack with no network.
+
+    `aoi` (an Aoi) moves the sample grid into that area's envelope, so the pack
+    sits where an operator expects to find it on the map. `group_by` matches
+    `overlaybuilder build`: "sector" writes one SAMPLE_<AOI>_<Sector>.kmz per
+    sector, "layer" the per-layer files, "both" both.
+
+    Every filename here starts with SAMPLE_ and every placemark name with
+    "SAMPLE", because none of this is real infrastructure.
+    """
     import datetime as _dt
     import json
     import os
+    from collections import OrderedDict
 
     from . import convert, normalize
+    from .build import GROUPINGS, aoi_prefix, sector_slug
+
+    group_by = (group_by or "sector").lower()
+    if group_by not in GROUPINGS:
+        raise ValueError(f"group_by must be one of {GROUPINGS}, got {group_by!r}")
 
     os.makedirs(out_dir, exist_ok=True)
     specs, results = demo_specs_and_results()
+    where = "a grid near Chisago County, MN"
+    if aoi is not None and aoi.bbox:
+        rescale_to_bbox(results, aoi.bbox)
+        where = f"a grid inside the {aoi.describe()} envelope"
+    prefix = f"SAMPLE_{aoi_prefix(aoi)}" if aoi is not None else "SAMPLE"
+
     stamp = _dt.date.today().isoformat()
     written, rows = [], []
     for res in results:
         spec = specs.get(res.logical, {"layer": res.logical, "driver": "demo"})
         res.provenance.retrieved = stamp
+        res.provenance.notes = f"{PROV_NOTE} Placed on {where}."
         normalize.apply_to_layer(res, spec)
-        kml, icons = convert.layer_kml(res, spec, precision, title=f"{res.logical} (SAMPLE)")
-        path = os.path.join(out_dir, f"{res.logical}.kmz")
-        n = convert.write_kmz(path, kml, icons)
-        written.append(path)
-        rows.append({"layer": res.logical, "status": "ok", "features": len(res.features), "placemarks": n})
+        if group_by in ("layer", "both"):
+            kml, icons = convert.layer_kml(res, spec, precision, title=f"{res.logical} (SAMPLE)")
+            path = os.path.join(out_dir, f"{res.logical}.kmz")
+            n = convert.write_kmz(path, kml, icons)
+            written.append(path)
+            rows.append({"layer": res.logical, "status": "ok",
+                         "features": len(res.features), "placemarks": n})
+        else:
+            rows.append({"layer": res.logical, "status": "ok", "features": len(res.features)})
         log(f"  {res.logical:24} {len(res.features):4} features")
+
+    if group_by in ("sector", "both"):
+        by_sector = OrderedDict()
+        for res in results:
+            sector = convert.style_for(res.logical, specs.get(res.logical))[5]
+            by_sector.setdefault(sector, []).append(res)
+        log("")
+        for sector, group in by_sector.items():
+            fname = f"{prefix}_{sector_slug(sector)}.kmz"
+            path = os.path.join(out_dir, fname)
+            kml, icons = convert.combined_kml(
+                group, specs, precision, sector_folders=False,
+                title=f"SAMPLE {sector} - synthetic demo data, NOT real infrastructure")
+            n = convert.write_kmz(path, kml, icons)
+            written.append(path)
+            rows.append({"layer": sector_slug(sector), "sector": sector, "status": "ok",
+                         "features": sum(len(r.features) for r in group), "placemarks": n,
+                         "doc": fname})
+            log(f"  {fname:42} {n:4} placemarks")
+
     kml, icons = convert.combined_kml(results, specs, precision,
                                       title="SAMPLE Critical Infrastructure (synthetic demo data)")
     allp = os.path.join(out_dir, "DEMO_SAMPLE_ALL.kmz")
     convert.write_kmz(allp, kml, icons)
     written.append(allp)
     manifest = {"tool": "overlaybuilder demo", "built": stamp, "warning": PROV_NOTE,
+                "aoi": aoi.describe() if aoi is not None else None,
+                "placement": where, "group_by": group_by,
                 "layers": rows, "files": [os.path.basename(w) for w in written]}
     with open(os.path.join(out_dir, "manifest.json"), "w", encoding="utf-8") as fh:
         json.dump(manifest, fh, indent=1)
+    sector_files = [os.path.basename(w) for w in written if os.path.basename(w).startswith(prefix)]
     with open(os.path.join(out_dir, "README.txt"), "w", encoding="utf-8") as fh:
         fh.write("SAMPLE PACK - SYNTHETIC DATA\n" + "=" * 28 + "\n\n" + PROV_NOTE + "\n\n"
-                 "Load DEMO_SAMPLE_ALL.kmz into ATAK (Import Manager > Local SD) to check the\n"
-                 "folder tree, eye-toggles, icons, line styling by voltage and the popup layout.\n"
-                 "Then delete it and build a real pack:  overlaybuilder build --aoi county:27025\n")
+                 f"Placed on {where}.\n"
+                 "Nothing in this pack is real. Every placemark name starts with SAMPLE and\n"
+                 "every file with SAMPLE_. Do not plan against it.\n\n"
+                 "Load these into ATAK (Import Manager > Local SD) to check the folder tree,\n"
+                 "eye-toggles, icons, line styling by voltage and the popup layout:\n\n"
+                 + "".join(f"    {f}\n" for f in sector_files)
+                 + "\nThen delete them and build a real pack on a machine with network access:\n"
+                 "    overlaybuilder build --aoi state:MN --group-by sector\n")
     return manifest
