@@ -6,6 +6,7 @@
 #   ./make-state-pack.sh MN --skip-le      # skip the OpenStreetMap sheriff step
 #   ./make-state-pack.sh MN --gaps         # print the per-county gap report,
 #                                          # and keep the full list as JSON
+#   ./make-state-pack.sh MN --deadline 1800 # more wall clock for the OSM step
 #
 # It runs the four steps that make a pack, in the order their data depends on:
 #
@@ -44,21 +45,29 @@ SP="$(cd -- "$HERE/.." && pwd -P)"          # statepacks/
 # it. Override with MATCH=... to be stricter or looser.
 MATCH="${MATCH:-sherr?iff|law enforcement cent|county jail|county public safety|justice cent}"
 
-state=""; install=0; skip_le=0; skip_seats=0; gaps=""
+# The OSM step's wall-clock budget. The default inside seed_le_contacts.py is
+# tuned for a state whose tiles are already cached; the FIRST fetch of a state
+# has none, and a rate-limited mirror is waited out rather than hammered, so
+# the first run of a new state is the slow one. Raise it rather than watching
+# the step soft-fail and re-running.
+state=""; install=0; skip_le=0; skip_seats=0; gaps=""; deadline=""
 while [ $# -gt 0 ]; do
   case "$1" in
     --install)     install=1 ;;
     --skip-le)     skip_le=1 ;;
     --skip-seats)  skip_seats=1 ;;
     --gaps)        gaps="--gaps" ;;
-    -h|--help)     sed -n '2,33p' "$0"; exit 0 ;;
+    --deadline)    shift; [ $# -gt 0 ] || die "--deadline needs a number of seconds"
+                   case "$1" in (*[!0-9]*|"") die "--deadline wants seconds, got '$1'" ;; esac
+                   deadline="--deadline $1" ;;
+    -h|--help)     sed -n '2,34p' "$0"; exit 0 ;;
     -*)            die "unknown option: $1" ;;
     *)             [ -z "$state" ] || die "one state at a time, got '$state' and '$1'"
                    state="$1" ;;
   esac
   shift
 done
-[ -n "$state" ] || die "usage: $0 <STATE> [--install] [--skip-le] [--skip-seats] [--gaps]
+[ -n "$state" ] || die "usage: $0 <STATE> [--install] [--skip-le] [--skip-seats] [--gaps] [--deadline S]
   e.g. $0 MN --install"
 state="$(printf '%s' "$state" | tr '[:lower:]' '[:upper:]')"
 case "$state" in
@@ -121,9 +130,9 @@ if [ "$skip_le" -eq 0 ]; then
   [ -n "$gaps" ] && dump="--gaps-dump $STAGE_DIR/${state}_le_gaps.json"
   # shellcheck disable=SC2086
   soft "sheriff / primary LE" \
-       "python3 $SP/seed_le_contacts.py --state $state --match '$MATCH' $gaps $dump" \
+       "python3 $SP/seed_le_contacts.py --state $state --match '$MATCH' $gaps $dump $deadline" \
        python3 "$SP/seed_le_contacts.py" \
-       --state "$state" --match "$MATCH" $gaps $dump
+       --state "$state" --match "$MATCH" $gaps $dump $deadline
 else
   banner "sheriff / primary LE - SKIPPED (--skip-le)"
 fi
