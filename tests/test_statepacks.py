@@ -2254,6 +2254,24 @@ def test_the_report_offers_a_discovered_term_when_the_curated_list_misses(capsys
     assert "--match" in out               # and runnable
 
 
+def test_the_discovered_command_keeps_the_curated_terms_it_builds_on(capsys):
+    """The two blocks are read together. A line someone pastes must not
+    quietly drop the widening the block above just recommended."""
+    names = {"55025": "Dane County", "55079": "Milwaukee County",
+             "55133": "Waukesha County", "55139": "Winnebago County"}
+    records = [
+        {"geoid": "55025", "agency": "Dane County Public Safety Center"},
+        {"geoid": "55079", "agency": "Milwaukee County Public Safety Center"},
+        {"geoid": "55133", "agency": "Waukesha County Communications Center"},
+        {"geoid": "55139", "agency": "Winnebago County Communications Center"},
+    ]
+    sle.report_gaps("WI", list(names), names, records, {}, "sherr?iff")
+    lines = [l for l in capsys.readouterr().out.splitlines() if "--match" in l]
+    assert lines, "no runnable command printed"
+    assert "county public safety" in lines[-1]     # the curated term, kept
+    assert "communications center" in lines[-1]    # and the discovered one
+
+
 def test_gaps_dump_writes_every_unmatched_county_not_the_printed_sample(tmp_path):
     """The printed report samples 20 counties. On a state nobody has fetched,
     the names it does not print are the evidence that decides the filter."""

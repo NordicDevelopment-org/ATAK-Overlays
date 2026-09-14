@@ -1968,7 +1968,11 @@ def report_gaps(state, geoids, names, records, chosen, match, log=print,
         log("    list - read them before using them, they are not vetted:")
         for t, n in found:
             log(f"      +{n:<3d} {t}")
-        wider = "|".join([match] + [t for t, _n in found])
+        # Built on the curated widening above, not on the bare filter: these
+        # two blocks are meant to be read together, and a line someone pastes
+        # must not quietly drop the terms the block above just recommended.
+        base = "|".join([match] + [h for h, _n in helps]) if helps else match
+        wider = "|".join([base] + [t for t, _n in found])
         log(f"    python3 seed_le_contacts.py --state {state} --gaps \\")
         log(f"        --match '{wider}'")
     if dump and unmatched:
