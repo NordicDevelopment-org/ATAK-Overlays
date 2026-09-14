@@ -143,15 +143,63 @@ environment still cannot reach these):
   | counties whose only records are city PDs | 20 - left empty on purpose |
   | counties with no LE record at all | 2 (Cottonwood, Kanabec) |
 
+  These counts were measured with `sherr?iff`, the default at the time. The
+  default is now `sherr?if` (see Wisconsin below), which is a superset, so
+  MN's numbers can only go up - they have NOT been re-measured and are left
+  as recorded rather than adjusted on paper.
+
   The phone column does not fill from any public source and no wider filter
   changes that: the numbers are on 87 separate county websites. MN files
   several sheriffs as "<County> Law Enforcement Center", "<County> Jail" or
-  "<County> Public Safety Center", and OSM spells one "Sherriff" - hence the
-  default `sherr?iff`. Writing a CITY police department as a county's primary
-  LE would be wrong, so those counties stay empty. `--gaps` reports each empty
-  county as one of three things: filter missed it, source has nothing, or its
-  tile was never fetched - which need different responses and must not be
-  conflated.
+  "<County> Public Safety Center". Writing a CITY police department as a
+  county's primary LE would be wrong, so those counties stay empty. `--gaps`
+  reports each empty county as one of four things: filter missed it, records
+  present but all nameless, source has nothing, or its tile was never fetched
+  - which need different responses and must not be conflated.
+- **Wisconsin, fetched live 2026-09-14** - the second state ever fetched, and
+  the first test of whether any of this was MN-specific. It was not: 72 of 72
+  counties for boundaries, ACS population and Wikidata county seats, first
+  try. The LE step found three things MN could not have:
+
+  | | |
+  |---|---|
+  | police features in the state box | 444 |
+  | ...carrying a phone number | 60 |
+  | counties with an agency (5-term filter) | 40 of 72 |
+  | ...of those carrying a phone number | 4 of 72 |
+  | ...carrying a website | 6 |
+  | have records, none matched the filter | 25 |
+  | records present but every one unnamed | 3 (Fond du Lac, Forest, Green Lake) |
+  | no LE record at all | 7 |
+
+  1. **OSM spells one "Clark County Sherrif"** - doubled r, single f. The old
+     `sherr?iff` required the second f and read past it, so the county went
+     empty with nothing to show anything had been missed. The default is now
+     `sherr?if`, which reaches sheriff, sherriff, sherrif and sherif; nothing
+     else in these names begins "sherif" (Sheridan, Sherwood, Shelby are all
+     untouched).
+  2. **A misspelling is invisible to `discover_terms` by construction.** It
+     offers a phrase only when it reaches two or more counties, because one is
+     that county's own name - and a typo reaches exactly one. `near_misses`
+     covers that: it learns the vocabulary from the agencies that DID match in
+     this state and flags an unmatched word within TWO edits of one. Two, not
+     one: "sherrif" to "sheriff" is two substitutions.
+  3. **Three counties had records where every record was nameless.** A blank
+     name cannot match any filter, so counting them as "widening may fix
+     these" promised a fix that does not exist. They are their own line now.
+
+  Still open for WI, and a maintainer call rather than a code one: Price
+  County files its agency as "Price County Safety Building". MN's
+  `county public safety` term requires "public" and misses it. Same class of
+  question as the jail one in README section 11.
+
+  **Cold state vs warm state, measured.** MN with 4 of 9 tiles cached took
+  364s and lost one tile. WI with nothing cached took 1042s, lost four tiles,
+  waited out four separate rate-limits, and did NOT finish in one pass - two
+  tiles were still short at the end. The re-run cost two sub-requests, because
+  successful quarters are cached individually and a tile whose four quarters
+  are all cached is served from them. Budget a cold state at roughly 3x a warm
+  one and expect a second pass.
 - Overpass mirrors: `overpass-api.de`, `overpass.kumi.systems` and
   `overpass.private.coffee` all answer; a whole-state box gets HTTP 504 under
   load but a 3x3 tile does not. `overpass.osm.jp` serves a certificate that is

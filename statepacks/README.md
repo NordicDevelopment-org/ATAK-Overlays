@@ -351,14 +351,20 @@ county *in this state's data*, with a count each and a runnable command:
         --match 'sherr?iff|county public safety|justice cent'
 ```
 
+(Real output from a MN run in September 2026, left as it was printed. The
+default in the first position is `sherr?if` now; the rest is unchanged.)
+
 It can only ever suggest a term that reaches a county here, because it is
 computed from the names rather than from a list of what such places are
 usually called.
 
-The default filter is `sherr?iff`, and the doubled `r` is deliberate: OSM
-carries "Steele County **Sherriff**'s Office and Detention Center". That is the
-same word misspelled by whoever typed it, not a different agency — and the name
-is still written out exactly as the source has it.
+The default filter is `sherr?if`. The doubled `r` and the single trailing `f`
+are both deliberate, and both were read off a real gap report: MN carries
+"Steele County **Sherriff**'s Office and Detention Center" and WI carries
+"Clark County **Sherrif**". Those are the same word misspelled by whoever typed
+it, not different agencies, and each name is still written out exactly as the
+source has it. `sherr?iff` required the second `f` and silently missed Clark
+County.
 
 The rest of the unmatched counties have only **city** police departments.
 Writing one of those as a county's primary LE would be wrong, so they stay
@@ -369,7 +375,7 @@ empty.
 | filter | counties with an agency |
 |---|---|
 | `sheriff` | 52 of 87 |
-| `sherr?iff` (default — catches the typo) | 53 |
+| `sherr?iff` (the default when MN was measured) | 53 |
 | `+ law enforcement cent \| county jail` | 63 |
 | `+ county public safety \| justice cent` | 65 |
 | counties with only city PDs, left empty | 20 |
@@ -686,11 +692,21 @@ Untried, and the most likely places for the next surprise:
 
 In this order. Each is a real gap, not a polish item.
 
-1. **Fetch a second state live.** `./make-state-pack.sh WI --gaps`. Nothing but
-   Minnesota has ever touched a real endpoint. The thing to read is the gap
-   report: does the default LE filter fit Wisconsin's spellings, or does
-   `--gaps` compute a different widening? Let the report decide it — it counts
-   what each candidate term would reach in *that state's* data.
+1. ~~**Fetch a second state live.**~~ **DONE 2026-09-14.** Wisconsin: 72 of 72
+   counties for boundaries, ACS and county seats, first try. Nothing was
+   MN-specific. The LE step found a spelling MN could not have shown
+   ("Clark County Sherrif", doubled r and single f, which the old `sherr?iff`
+   read straight past), a blind spot that a misspelling falls into, and three
+   counties whose records are all nameless. All three are fixed; see CLAUDE.md
+   "Wisconsin, fetched live 2026-09-14". Two things are left over from it:
+   - Price County files its agency as "Price County Safety Building". The
+     `county public safety` term requires "public" and misses it. Whether that
+     building is the county's primary LE is the same class of question as the
+     jail one below, so it is not in the default.
+   - A cold state costs roughly 3x a warm one and may not finish in one pass.
+     WI took 1042s, lost four tiles to Overpass 504s and read timeouts, and
+     needed a second run. That run cost two sub-requests, because successful
+     quarters are cached individually.
 2. **Alaska.** `./make-state-pack.sh AK --gaps`. The two-bounding-box
    antimeridian path is unit-tested against synthetic geometry and has never
    seen TIGER's real polygons. Expect: "straddles the antimeridian: 2 bounding
@@ -707,7 +723,7 @@ In this order. Each is a real gap, not a polish item.
   Both are written verbatim from OSM with source and date, and a record whose
   name actually says "sheriff" always outranks them — but whether that label
   should carry a jail is a judgement about the field, not about the data.
-  `MATCH='sherr?iff'` narrows it to 53 of 87.
+  `MATCH='sherr?if'` narrows it to the sheriff-proper records.
 - **The 20 city-PD-only counties stay empty.** Writing `Hill City Police
   Department` as Aitkin County's primary LE would be wrong. If you decide a
   city PD is better than a blank, that is a deliberate change of meaning and
