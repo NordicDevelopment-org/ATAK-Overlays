@@ -183,16 +183,23 @@ does — a deleted file can linger in the UI until the app restarts.
 **Every value in a popup is followed by its source and year:**
 
 ```
-County:               Chisago County, MN   [TIGER 2024]
-FIPS (GEOID):         27025                [TIGER 2024]
+County:               Chisago County, MN   [TIGER Current]
+FIPS (GEOID):         27025                [TIGER Current]
 County seat:          Center City          [Wikidata (community-maintained) 2026-09-14]
 Population:           58,241               [ACS 5-year 2023]
 Housing units:        23,110               [ACS 5-year 2023]
-Land area:            413.9 sq mi          [TIGER ALAND 2024]
-Water area:           28.5 sq mi           [TIGER AWATER 2024]
-Sheriff / primary LE: not in dataset
-LE non-emergency:     not in dataset
+Land area:            413.9 sq mi          [TIGER ALAND Current]
+Water area:           28.5 sq mi           [TIGER AWATER Current]
+
+No data for: Sheriff / primary LE, LE non-emergency
 ```
+
+**A field nothing returned gets no row.** Nine lines of "not in dataset" bury
+the six that carry real values, so an absent field is simply left out and the
+ones with nothing are named once, compactly, at the end. An omitted row asserts
+nothing — which is all the never-invent rule actually requires — and the
+Document description still lists every source consulted, so a blank stays
+explainable rather than looking like a value of zero.
 
 The `2024` is read from the Census service at build time, not hardcoded. The
 county is named exactly as its own source spells it — `Acadia Parish`,

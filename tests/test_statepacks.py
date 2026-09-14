@@ -94,17 +94,38 @@ def _meta(**over):
     return m
 
 
-def test_popup_stamps_every_value_and_admits_what_is_missing():
+def test_popup_shows_what_exists_and_omits_what_does_not():
+    """A field nothing returned is left out entirely. Nine rows of "not in
+    dataset" bury the three that carry real values."""
     pm = bcp.county_placemark({}, {"type": "Polygon", "coordinates": [
         [[-93, 45], [-92, 45], [-92, 46], [-93, 45]]]}, _meta())
     assert "58,241  [ACS 5-year 2023]" in pm
     assert "414.2 sq mi  [TIGER ALAND 2024]" in pm
-    # seat and LE were not supplied, so they must say so rather than look blank
-    assert "County seat:</b> not in dataset" in pm
-    assert "Sheriff / primary LE:</b> not in dataset" in pm
-    assert "LE non-emergency:</b> not in dataset" in pm
+
+    # absent fields get no row of their own at all
+    assert "<b>County seat:</b>" not in pm
+    assert "<b>Sheriff / primary LE:</b>" not in pm
+    assert "<b>LE non-emergency:</b>" not in pm
+    assert "not in dataset" not in pm
+
+    # but the pack still says which fields had nothing, in one compact line,
+    # so a blank is never mistaken for a value of zero
+    assert "No data for:" in pm
+    assert "County seat" in pm
+    assert "LE non-emergency" in pm
+
     # and the boundary provenance rides in the placemark itself
     assert "tigerweb.example" in pm
+
+
+def test_a_county_with_everything_has_no_no_data_line():
+    full = _meta(seat=bcp.Sourced("Center City", "Wikidata", "2026"),
+                 le_agency=bcp.Sourced("Chisago County Sheriff", "OSM", "2026"),
+                 le_phone=bcp.Sourced("651-257-4100", "OSM", "2026"))
+    pm = bcp.county_placemark({}, {"type": "Polygon", "coordinates": [
+        [[-93, 45], [-92, 45], [-92, 46], [-93, 45]]]}, full)
+    assert "No data for:" not in pm
+    assert "651-257-4100  [OSM 2026]" in pm
 
 
 # --------------------------------------------------------------------------
@@ -183,7 +204,8 @@ def test_missing_acs_still_builds_and_says_so(monkeypatch, tmp_path):
     r = bcp.build_state("MN", str(tmp_path), log=lambda *a: None, today="2026-09-14")
     assert r["counties"] == 1 and r["with_population"] == 0 and r["acs_year"] is None
     kml = _doc(tmp_path / MN_PACK)
-    assert "Population:</b> not in dataset" in kml      # never a fabricated number
+    assert "<b>Population:</b>" not in kml              # omitted, never fabricated
+    assert "No data for:" in kml and "Population" in kml
     assert "not retrieved" in kml                       # and the Document says why
 
 
@@ -490,7 +512,8 @@ def test_a_feature_with_no_identity_shows_no_fips(stubbed, tmp_path, monkeypatch
                         }], "http://e/1", "2024"))
     bcp.build_state("MN", str(tmp_path), log=lambda *a: None, today="2026-09-14")
     kml = _doc(tmp_path / "MN_Counties_2024.kmz")
-    assert "FIPS (GEOID):</b> not in dataset" in kml
+    assert "<b>FIPS (GEOID):</b>" not in kml         # omitted rather than invented
+    assert "No data for:" in kml and "FIPS (GEOID)" in kml
     assert "27000" not in kml                       # the old fabrication
 
 

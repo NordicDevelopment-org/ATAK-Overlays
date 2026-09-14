@@ -557,8 +557,17 @@ def county_placemark(props, geom, meta, precision=6):
     def comma(v):
         return f"{v:,}" if isinstance(v, (int, float)) else str(v)
 
+    # A field nothing returned is left OUT of the popup entirely. Printing
+    # "not in dataset" on nine rows buries the three that carry real values, and
+    # an omitted row asserts nothing - which is the only thing the rule against
+    # inventing values actually requires. The Document description still lists
+    # every source consulted, so absence stays explainable.
+    present = [(label, sv) for label, sv in rows if sv]
     body = "".join(
-        f"<b>{esc(label)}:</b> {esc(s.render(comma))}<br/>" for label, s in rows)
+        f"<b>{esc(label)}:</b> {esc(sv.render(comma))}<br/>" for label, sv in present)
+    missing = [label for label, sv in rows if not sv]
+    if missing:
+        body += (f"<br/><i>No data for: {esc(', '.join(missing))}</i><br/>")
     footer = (f"<hr/><i>Boundary: {esc(meta['boundary_source'])}<br/>"
               f"{esc(meta['boundary_url'])}<br/>"
               f"Licence: public domain (US Census Bureau)<br/>"

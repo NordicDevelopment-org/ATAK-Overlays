@@ -418,6 +418,13 @@ def main(argv=None):
             print()
         names = [str(r.get("name") or r.get("agency") or "") for r in raw]
         hits = [n for n in names if re.search(a.match, n, re.I)]
+        withph = sum(1 for r in raw if str(r.get("phone") or "").strip())
+        matched_with_phone = sum(
+            1 for r in raw
+            if re.search(a.match, str(r.get("name") or r.get("agency") or ""), re.I)
+            and str(r.get("phone") or "").strip())
+        print(f"records with a phone number : {withph} of {len(raw)}")
+        print(f"  ...of those matching /{a.match}/i : {matched_with_phone}")
         print(f"names matching /{a.match}/i : {len(hits)} of {len(names)}")
         for n in hits[:10]:
             print(f"    {n}")
@@ -627,7 +634,12 @@ def fetch_usgs(state_abbr, layer_id, log=print):
             raise RuntimeError(page["error"])
         feats = page.get("features") or []
         for f in feats:
-            p = f.get("properties") or {}
+            # The layer's own field list advertises NAME, ADDRESS, LOADDATE in
+            # upper case, but the geojson response returns them LOWER case. Reading
+            # the advertised spelling produced 448 records with every attribute
+            # empty and no error anywhere. Match keys case-insensitively and the
+            # question never arises again.
+            p = {str(k).lower(): v for k, v in (f.get("properties") or {}).items()}
             g = f.get("geometry") or {}
             if g.get("type") != "Point":
                 continue
@@ -635,11 +647,12 @@ def fetch_usgs(state_abbr, layer_id, log=print):
             if len(c) < 2:
                 continue
             out.append({
-                "name": str(p.get("NAME") or "").strip(),
-                "address": str(p.get("ADDRESS") or "").strip(),
-                "city": str(p.get("CITY") or "").strip(),
-                "admintype": str(p.get("ADMINTYPE") or "").strip(),
-                "loaddate": str(p.get("LOADDATE") or "").strip(),
+                "name": str(p.get("name") or "").strip(),
+                "phone": "",                      # this dataset has no phone column
+                "address": str(p.get("address") or "").strip(),
+                "city": str(p.get("city") or "").strip(),
+                "admintype": str(p.get("admintype") or "").strip(),
+                "loaddate": p.get("loaddate") or "",
                 "lon": float(c[0]), "lat": float(c[1]),
             })
         if not feats or not page.get("exceededTransferLimit"):
