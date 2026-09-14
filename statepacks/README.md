@@ -266,26 +266,45 @@ names the current `--match` would hit, and lists the distinct values of the
 classifying columns. A run that writes zero rows is usually a filter that does
 not match how that dataset spells its names — not an absence of sheriffs.
 
-### It is allowed to be slow. It is not allowed to look hung.
+### How the OSM fetch is made fast
 
-OSM is read from the public Overpass mirrors, which rate-limit hard. The state
-is fetched as a **3x3 grid of tiles** because a whole-state box gets a 504, and
-every tile that succeeds is **cached on disk**, so a re-run only refetches what
-actually failed. All of it runs against **one wall-clock budget**:
+OSM is read from the public Overpass mirrors, which rate-limit hard and time
+out under load. The state is fetched as a **3x3 grid of tiles**, because a
+whole-state box gets a 504. On top of that:
 
-```bash
-python3 seed_le_contacts.py --state MN                      # 480s budget, 2 passes
-python3 seed_le_contacts.py --state MN --deadline 1200      # give it 20 minutes
-python3 seed_le_contacts.py --state MN --osm-timeout 60     # per-tile socket
-python3 seed_le_contacts.py --state MN --osm-attempts 3     # mirror cycles per tile
+| | |
+|---|---|
+| **Tiles run concurrently** | Three at a time, one in-flight request per mirror. Nine tiles one after another is nine round trips of waiting; three at a time is three. |
+| **Every tile is cached on disk** | `~/.cache/atak-statepacks/`. A re-run only fetches what is actually missing. |
+| **A stuck tile is split, not repeated** | A tile that times out on two mirrors is retried as four quarters. Asking a busy mirror the same large question again is what turned one slow tile into a stalled run. |
+| **A tile already served as quarters is not re-requested** | Otherwise every run pays the timeout for the one tile the mirrors would not serve. |
+| **County boundaries are cached 30 days** | 87 polygons was the largest download the seeder made, and it was being made twice per run. |
+| **One wall-clock budget** | 480s for the whole fetch. It stops new requests; one already in flight can overrun it by up to `--osm-timeout`. |
+
+Measured against a replay of a real run — eight healthy tiles and one that
+times out on every mirror:
+
+```
+before                 39.1 min
+now, cold cache         1.2 min
+now, re-run             0 requests, instant
 ```
 
-Each tile prints its result with the time used and the time left, so you can
-see progress instead of a blank prompt. When the budget runs out the run
-**fails and says how many tiles were never tried** — it does not hand back a
-partial set that would read as "these counties have no sheriff". The tiles that
-did land are cached, so running it again picks up where it stopped.
+```bash
+python3 seed_le_contacts.py --state MN                    # defaults
+python3 seed_le_contacts.py --state MN --deadline 1200    # 20 minutes to play with
+python3 seed_le_contacts.py --state MN --osm-timeout 60   # let each tile work longer
+python3 seed_le_contacts.py --state MN --jobs 1           # one request at a time
+python3 seed_le_contacts.py --state MN --no-split         # never split a failed tile
+python3 seed_le_contacts.py --state MN --refresh-shapes   # redownload the boundaries
+```
 
+Each tile prints its result with time used and time left, so you can see
+progress instead of a blank prompt. When the budget runs out or a tile cannot
+be served, the run **fails and names the counties that would come back empty**
+— it does not hand back a partial set that would read as "these counties have
+no sheriff". `--allow-partial` accepts one knowingly, with those counties
+listed.
 
 ### Finding a state's own GIS server
 
@@ -362,7 +381,9 @@ If you came here from a script that hit one state's GIS server directly:
 | `permission denied` running a script | `chmod +x termux/*.sh` |
 | `unknown option: --x` from remove | deliberate — an unrecognised flag is never treated as a filename pattern |
 | Seats/contacts still say `not in dataset` after editing a CSV | check the row has a 5-digit `geoid` in the first column and that you kept the `geoid,...` header line |
-| The LE fetch sits there for ages | It prints a line per tile with time used/left. It stops on its own at 480s; `--deadline 1200` gives it longer. Finished tiles are cached, so a re-run resumes. |
+| The LE fetch sits there for ages | It prints a line per tile with time used/left. It stops on its own at 480s; `--deadline 1200` gives it longer. Finished tiles are cached, so a re-run resumes where it stopped. |
+| One tile keeps timing out | It is split into quarters automatically. If the quarters land, the parent is never asked for again. |
+| Boundaries look out of date in the LE match | `--refresh-shapes`. The cache is only used to decide which county a station falls in; overlay boundaries are always fetched fresh by the builder. |
 | `N of 9 tiles failed ... never tried` | The budget ran out, not "no data". Re-run — cached tiles are skipped — or raise `--deadline`. |
 | The county build sits on one request | Each url gets 150s total, retries included, and every retry names the host. `--http-budget 600` on a slow link; `--http-budget 30` to fail fast. |
 

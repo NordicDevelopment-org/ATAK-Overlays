@@ -633,7 +633,7 @@ def test_auto_prefers_osm_because_it_is_the_only_source_with_phone_numbers(
         {"name": "Elsewhere Sheriff", "phone": "", "address": "", "city": "",
          "admintype": "", "loaddate": "", "lon": 99.0, "lat": 99.0},
     ])
-    monkeypatch.setattr(sle, "county_shapes", lambda sfp, log=print: [
+    monkeypatch.setattr(sle, "county_shapes", lambda sfp, log=print, **kw: [
         ("27025", [[[[0, 0], [5, 0], [5, 5], [0, 5], [0, 0]]]])])
 
     assert sle.main(["--state", "MN"]) == 0
@@ -663,7 +663,7 @@ def test_osm_reads_both_phone_spellings_and_a_way_centre(monkeypatch, tmp_path):
                   "addr:city": "Town", "operator:type": "county"}},
         {"type": "way", "id": 3, "tags": {"name": "No Geometry"}},   # dropped
     ]
-    monkeypatch.setattr(sle, "_overpass_tile", lambda tile, m, t, a, log, deadline=None: (els, False))
+    monkeypatch.setattr(sle, "_overpass_tile", lambda tile, m, t, a, log, deadline=None, locks=None, start=0: (els, False))
     got = sle.fetch_osm("MN", log=lambda *a: None, bbox=(-97.3, 43.4, -89.4, 49.4))
 
     assert [r["name"] for r in got] == ["A PD", "B Sheriff"]
@@ -712,6 +712,8 @@ def test_every_source_down_writes_nothing_and_exits_nonzero(monkeypatch, tmp_pat
     monkeypatch.setattr(sle, "resolve_layer", dead)
     monkeypatch.setattr(sle, "fetch_usgs", dead)
     monkeypatch.setattr(sle, "fetch_osm", dead)
+    monkeypatch.setattr(sle, "county_shapes", lambda sfp, log=print, **kw: [
+        ("27025", [[[[0, 0], [5, 0], [5, 5], [0, 5], [0, 0]]]])])
     assert sle.main(["--state", "MN"]) == 2
     err = capsys.readouterr().err
     assert "no source answered" in err and "stay empty" in err
@@ -1064,7 +1066,7 @@ def test_records_that_all_fail_the_filter_are_reported_not_silently_zero(
         {"name": "ST PAUL POLICE", "phone": "", "address": "", "city": "",
          "admintype": "Local", "loaddate": "", "lon": 2.0, "lat": 2.0},
     ])
-    monkeypatch.setattr(sle, "county_shapes", lambda sfp, log=print: [
+    monkeypatch.setattr(sle, "county_shapes", lambda sfp, log=print, **kw: [
         ("27053", [[[[0, 0], [5, 0], [5, 5], [0, 5], [0, 0]]]])])
 
     sle.main(["--state", "MN"])
@@ -1200,27 +1202,90 @@ def test_tile_bbox_covers_the_whole_box_without_gaps():
     assert abs(sum((t[2] - t[0]) * (t[3] - t[1]) for t in tiles) - 81.0) < 1e-9
 
 
+def _one_bad_tile(dead, ids=None):
+    """A stub whose tile at `dead` (and every quarter of it) always fails."""
+    ids = ids or {"n": 0}
+    lock = __import__("threading").Lock()
+
+    def stub(tile, mirrors, timeout, attempts, log, deadline=None,
+             locks=None, start=0):
+        w, s_, e, n = tile
+        dw, ds, de, dn = dead
+        inside = (w >= dw - 1e-9 and e <= de + 1e-9
+                  and s_ >= ds - 1e-9 and n <= dn + 1e-9)
+        if inside:
+            raise RuntimeError("HTTP Error 504: Gateway Timeout")
+        with lock:
+            ids["n"] += 1
+            i = ids["n"]
+        return ([{"type": "node", "id": i, "lat": 1.0, "lon": 1.0,
+                  "tags": {"name": f"PD {i}"}}], False)
+
+    return stub
+
+
 def test_a_failed_tile_refuses_to_pass_off_a_partial_answer(monkeypatch, tmp_path):
     """Some counties populated and others empty, with nothing in the pack to say
     which is which, is worse than a clean failure."""
     monkeypatch.setattr(sle, "CACHE_DIR", str(tmp_path))
-    calls = {"n": 0}
-
-    def flaky(tile, mirrors, timeout, attempts, log, deadline=None):
-        calls["n"] += 1
-        if calls["n"] == 5:
-            raise RuntimeError("HTTP Error 504: Gateway Timeout")
-        return ([{"type": "node", "id": calls["n"], "lat": 1.0, "lon": 1.0,
-                  "tags": {"name": f"PD {calls['n']}"}}], False)
-
-    monkeypatch.setattr(sle, "_overpass_tile", flaky)
+    bbox = (0.0, 0.0, 9.0, 9.0)
+    dead = sle.tile_bbox(bbox)[4]                   # the middle tile, and its quarters
+    monkeypatch.setattr(sle, "_overpass_tile", _one_bad_tile(dead))
     with pytest.raises(RuntimeError, match="tiles failed"):
-        sle.fetch_osm("MN", bbox=(0.0, 0.0, 9.0, 9.0), log=lambda *a: None)
+        sle.fetch_osm("MN", bbox=bbox, log=lambda *a: None)
 
-    calls["n"] = 0
-    got = sle.fetch_osm("MN", bbox=(0.0, 0.0, 9.0, 9.0), log=lambda *a: None,
-                        allow_partial=True)
+    monkeypatch.setattr(sle, "_overpass_tile", _one_bad_tile(dead))
+    got = sle.fetch_osm("MN", bbox=bbox, log=lambda *a: None, allow_partial=True)
     assert len(got) == 8                            # 9 tiles, 1 failed
+
+
+def test_a_tile_the_mirrors_refuse_is_retried_as_quarters(monkeypatch, tmp_path):
+    """A smaller box is a cheaper question. Asking for the same one again is
+    what turned one busy mirror into a failed run."""
+    monkeypatch.setattr(sle, "CACHE_DIR", str(tmp_path))
+    bbox = (0.0, 0.0, 9.0, 9.0)
+    dead = sle.tile_bbox(bbox)[4]
+    seen, lock = [], __import__("threading").Lock()
+
+    def stub(tile, mirrors, timeout, attempts, log, deadline=None,
+             locks=None, start=0):
+        with lock:
+            seen.append(tile)
+            i = len(seen)
+        # the whole middle tile fails; its quarters are served
+        if tile == dead:
+            raise RuntimeError("HTTP Error 504: Gateway Timeout")
+        return ([{"type": "node", "id": i, "lat": 1.0, "lon": 1.0,
+                  "tags": {"name": f"PD {i}"}}], False)
+
+    monkeypatch.setattr(sle, "_overpass_tile", stub)
+    got = sle.fetch_osm("MN", bbox=bbox, log=lambda *a: None)
+    quarters = sle.split_tile(dead)
+    assert all(q in seen for q in quarters), "the failed tile was not split"
+    assert len(got) == 8 + 4                        # 8 whole tiles + 4 quarters
+
+
+def test_splitting_is_not_partial_credit(monkeypatch, tmp_path):
+    """Three quarters out of four is still a hole. It must not pass as covered."""
+    monkeypatch.setattr(sle, "CACHE_DIR", str(tmp_path))
+    bbox = (0.0, 0.0, 9.0, 9.0)
+    dead = sle.tile_bbox(bbox)[4]
+    doomed = sle.split_tile(dead)[2]
+    lock, ids = __import__("threading").Lock(), {"n": 0}
+
+    def stub(tile, mirrors, timeout, attempts, log, deadline=None,
+             locks=None, start=0):
+        if tile == dead or tile == doomed:
+            raise RuntimeError("HTTP Error 504: Gateway Timeout")
+        with lock:
+            ids["n"] += 1
+            i = ids["n"]
+        return ([{"type": "node", "id": i, "lat": 1.0, "lon": 1.0,
+                  "tags": {"name": f"PD {i}"}}], False)
+
+    monkeypatch.setattr(sle, "_overpass_tile", stub)
+    with pytest.raises(RuntimeError, match="1 of 9 tiles failed"):
+        sle.fetch_osm("MN", bbox=bbox, log=lambda *a: None)
 
 
 def test_successful_tiles_are_cached_so_a_retry_only_refetches_failures(
@@ -1261,7 +1326,7 @@ def test_a_feature_on_a_tile_boundary_is_not_counted_twice(monkeypatch, tmp_path
     dup = {"type": "way", "id": 42, "center": {"lat": 1.0, "lon": 1.0},
            "tags": {"name": "Border Sheriff", "phone": "111"}}
     monkeypatch.setattr(sle, "_overpass_tile",
-                        lambda tile, m, t, a, log, deadline=None: ([dup], False))
+                        lambda tile, m, t, a, log, deadline=None, locks=None, start=0: ([dup], False))
     got = sle.fetch_osm("MN", bbox=(0.0, 0.0, 9.0, 9.0), log=lambda *a: None)
     assert len(got) == 1                            # nine tiles, one feature
     assert got[0]["phone"] == "111"
@@ -1367,31 +1432,57 @@ def test_overpass_socket_never_outlives_the_remaining_budget(monkeypatch, tmp_pa
 
 def test_fetch_osm_stops_at_the_budget_and_says_so(monkeypatch):
     """Out of time must not read as 'no police stations in those counties'."""
-    tiles = sle.tile_bbox((-97.0, 43.0, -89.0, 49.0))
-    calls = []
+    bbox = (-97.0, 43.0, -89.0, 49.0)
+    tiles = sle.tile_bbox(bbox)
+    lock, calls = __import__("threading").Lock(), []
 
-    def tile(t, mirrors, timeout, attempts, log, deadline=None):
-        calls.append(t)
-        if len(calls) > 2:
+    def tile(t, mirrors, timeout, attempts, log, deadline=None,
+             locks=None, start=0):
+        with lock:
+            calls.append(t)
+            n = len(calls)
+        if n > 2:
             raise TimeoutError("deadline reached")
         return ([], False)
 
     monkeypatch.setattr(sle, "_overpass_tile", tile)
     with pytest.raises(RuntimeError) as ex:
-        sle.fetch_osm("MN", bbox=(-97.0, 43.0, -89.0, 49.0), log=lambda *a: None)
+        sle.fetch_osm("MN", bbox=bbox, log=lambda *a: None)
     msg = str(ex.value)
-    # every untried tile is counted as a failure, not quietly treated as empty
+    # out of budget is reported as failure, and as a budget problem
     assert f"{len(tiles) - 2} of {len(tiles)} tiles failed" in msg, msg
-    assert "never tried" in msg and "--deadline" in msg, msg
-    # and it stopped instead of grinding through the rest
-    assert len(calls) == 3, calls
+    assert "ran out of the" in msg and "--deadline" in msg, msg
+    # running out of budget is not a tile the mirrors refused: do not split it
+    assert not any("q1" in str(c) for c in calls)
+    assert len(calls) == len(tiles), calls
+
+
+def test_running_out_of_budget_does_not_trigger_a_split(monkeypatch, tmp_path):
+    """Splitting spends budget. Splitting because the budget is gone is absurd."""
+    monkeypatch.setattr(sle, "CACHE_DIR", str(tmp_path))
+    bbox = (0.0, 0.0, 9.0, 9.0)
+    quarters = {q for t in sle.tile_bbox(bbox) for q in sle.split_tile(t)}
+    seen, lock = [], __import__("threading").Lock()
+
+    def tile(t, mirrors, timeout, attempts, log, deadline=None,
+             locks=None, start=0):
+        with lock:
+            seen.append(t)
+        raise TimeoutError("deadline reached")
+
+    monkeypatch.setattr(sle, "_overpass_tile", tile)
+    with pytest.raises(RuntimeError):
+        sle.fetch_osm("MN", bbox=bbox, log=lambda *a: None)
+    assert not [t for t in seen if t in quarters], "split a tile that ran out of time"
 
 
 def test_fetch_osm_passes_one_shared_clock_to_every_tile(monkeypatch):
-    clocks = []
+    clocks, lock = [], __import__("threading").Lock()
 
-    def tile(t, mirrors, timeout, attempts, log, deadline=None):
-        clocks.append(deadline)
+    def tile(t, mirrors, timeout, attempts, log, deadline=None,
+             locks=None, start=0):
+        with lock:
+            clocks.append(deadline)
         return ([], True)
 
     monkeypatch.setattr(sle, "_overpass_tile", tile)
@@ -1477,3 +1568,295 @@ def test_http_budget_flag_reaches_every_request(monkeypatch):
     monkeypatch.setattr(bcp, "probe", lambda *a, **kw: True)
     assert bcp.main(["--probe", "--http-budget", "7"]) == 0
     assert bcp.HTTP_BUDGET_S == 7
+
+
+# --------------------------------------------------------------------------
+# Speed. A fetch that does real work is allowed to take time; doing the same
+# work nine times in a row, or downloading the same boundaries twice, is not.
+# --------------------------------------------------------------------------
+def test_tiles_are_fetched_concurrently_not_one_after_another(monkeypatch, tmp_path):
+    import threading
+    import time
+    monkeypatch.setattr(sle, "CACHE_DIR", str(tmp_path))
+    live, peak, lock = [0], [0], threading.Lock()
+
+    def tile(t, mirrors, timeout, attempts, log, deadline=None, locks=None, start=0):
+        with lock:
+            live[0] += 1
+            peak[0] = max(peak[0], live[0])
+        time.sleep(0.05)
+        with lock:
+            live[0] -= 1
+        return ([], False)
+
+    monkeypatch.setattr(sle, "_overpass_tile", tile)
+    t0 = time.monotonic()
+    sle.fetch_osm("MN", bbox=(0.0, 0.0, 9.0, 9.0), log=lambda *a: None, jobs=3)
+    elapsed = time.monotonic() - t0
+    assert peak[0] > 1, "tiles were fetched one at a time"
+    assert elapsed < 9 * 0.05, f"no faster than serial ({elapsed:.2f}s)"
+
+
+def test_a_mirror_only_takes_one_of_our_requests_at_a_time(monkeypatch, tmp_path):
+    """The public instances ask for that, and queueing behind yourself is not
+    faster anyway."""
+    import threading
+    import time
+    monkeypatch.setattr(sle, "CACHE_DIR", str(tmp_path))
+    mirrors = ["https://a.invalid/i", "https://b.invalid/i", "https://c.invalid/i"]
+    live, peak, lock = {}, {}, threading.Lock()
+
+    class Resp:
+        def read(self):
+            return b'{"elements": []}'
+        def __enter__(self):
+            return self
+        def __exit__(self, *a):
+            return False
+
+    def fake_urlopen(req, timeout=None, context=None):
+        host = req.full_url
+        with lock:
+            live[host] = live.get(host, 0) + 1
+            peak[host] = max(peak.get(host, 0), live[host])
+        time.sleep(0.05)
+        with lock:
+            live[host] -= 1
+        return Resp()
+
+    monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
+    sle.fetch_osm("MN", bbox=(0.0, 0.0, 9.0, 9.0), mirrors=mirrors,
+                  log=lambda *a: None, jobs=3)
+    assert peak, "no mirror was used"
+    assert max(peak.values()) == 1, peak
+
+
+def test_results_come_back_in_tile_order_however_the_mirrors_answer(monkeypatch, tmp_path):
+    """pick_sheriffs keeps the first match per county. If thread completion
+    order reached it, the same data would pick a different agency per run."""
+    import time
+    monkeypatch.setattr(sle, "CACHE_DIR", str(tmp_path))
+    tiles = sle.tile_bbox((0.0, 0.0, 9.0, 9.0))
+    index = {t: i for i, t in enumerate(tiles)}
+
+    def tile(t, mirrors, timeout, attempts, log, deadline=None, locks=None, start=0):
+        i = index[t]
+        time.sleep(0.01 * (len(tiles) - i))     # later tiles finish FIRST
+        return ([{"type": "node", "id": i, "lat": 1.0, "lon": 1.0,
+                  "tags": {"name": f"PD {i}"}}], False)
+
+    monkeypatch.setattr(sle, "_overpass_tile", tile)
+    got = sle.fetch_osm("MN", bbox=(0.0, 0.0, 9.0, 9.0), log=lambda *a: None, jobs=4)
+    assert [r["name"] for r in got] == [f"PD {i}" for i in range(len(tiles))]
+
+
+def test_concurrent_tiles_do_not_all_start_on_the_same_mirror(monkeypatch, tmp_path):
+    monkeypatch.setattr(sle, "CACHE_DIR", str(tmp_path))
+    mirrors = ["https://a.invalid/i", "https://b.invalid/i", "https://c.invalid/i"]
+    first = []
+
+    def fake_urlopen(req, timeout=None, context=None):
+        first.append(req.full_url)
+        raise OSError("no")
+
+    monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
+    for i in range(3):
+        try:
+            sle._overpass_tile((float(i), 0.0, float(i) + 1, 1.0), mirrors, 5, 1,
+                               lambda *a: None, start=i)
+        except RuntimeError:
+            pass
+    assert len({first[0], first[3], first[6]}) == 3, first
+
+
+def test_split_tile_covers_its_parent_exactly():
+    parent = (-97.0, 43.0, -89.0, 49.0)
+    q = sle.split_tile(parent)
+    assert len(q) == 4
+    assert min(t[0] for t in q) == parent[0] and max(t[2] for t in q) == parent[2]
+    assert min(t[1] for t in q) == parent[1] and max(t[3] for t in q) == parent[3]
+    # every quarter is a quarter of the area, and they do not overlap
+    area = lambda t: (t[2] - t[0]) * (t[3] - t[1])
+    assert abs(sum(area(t) for t in q) - area(parent)) < 1e-9
+
+
+def test_county_boundaries_are_downloaded_once_not_twice(monkeypatch, tmp_path):
+    """87 polygons is the biggest download the seeder makes. It was being
+    fetched for the bounding box AND again for the spatial match."""
+    monkeypatch.setattr(sle, "CACHE_DIR", str(tmp_path))
+    import build_county_pack as _bcp
+    hits = []
+
+    def fake_fetch(sfp, ep=None, alts=None, log=print):
+        hits.append(sfp)
+        return ([{"properties": {"GEOID": "27025"},
+                  "geometry": {"type": "Polygon",
+                               "coordinates": [[[0, 0], [5, 0], [5, 5], [0, 5], [0, 0]]]}}],
+                "http://e/1", "Current")
+
+    monkeypatch.setattr(_bcp, "fetch_counties", fake_fetch)
+    a = sle.county_shapes("27", log=lambda *x: None)
+    b = sle.county_shapes("27", log=lambda *x: None)
+    assert len(hits) == 1, hits
+    assert a == b
+
+
+def test_a_stale_shape_cache_is_refetched_not_trusted(monkeypatch, tmp_path):
+    monkeypatch.setattr(sle, "CACHE_DIR", str(tmp_path))
+    import build_county_pack as _bcp
+    hits = []
+
+    def fake_fetch(sfp, ep=None, alts=None, log=print):
+        hits.append(sfp)
+        return ([{"properties": {"GEOID": "27025"},
+                  "geometry": {"type": "Polygon",
+                               "coordinates": [[[0, 0], [5, 0], [5, 5], [0, 5], [0, 0]]]}}],
+                "http://e/1", "Current")
+
+    monkeypatch.setattr(_bcp, "fetch_counties", fake_fetch)
+    sle.county_shapes("27", log=lambda *x: None)
+    # age it past the TTL
+    path = sle._shapes_cache_path("27")
+    doc = json.loads(open(path, encoding="utf-8").read())
+    doc["fetched"] = "2000-01-01"
+    open(path, "w", encoding="utf-8").write(json.dumps(doc))
+    sle.county_shapes("27", log=lambda *x: None)
+    assert len(hits) == 2, "a years-old boundary cache was used"
+
+    # --refresh-shapes ignores a fresh cache too
+    sle.county_shapes("27", log=lambda *x: None, refresh=True)
+    assert len(hits) == 3
+
+
+def test_a_corrupt_cache_file_is_refetched_not_read_as_empty(monkeypatch, tmp_path):
+    """A truncated tile file reads back as 'no police stations here', which is
+    indistinguishable from a county that genuinely has none."""
+    monkeypatch.setattr(sle, "CACHE_DIR", str(tmp_path))
+    tile = (0.0, 0.0, 1.0, 1.0)
+    path = sle._tile_cache_path(tile)
+    os.makedirs(str(tmp_path), exist_ok=True)
+    with open(path, "w", encoding="utf-8") as fh:
+        fh.write('[{"type": "node", "id": 1')            # truncated mid-write
+
+    class Resp:
+        def read(self):
+            return b'{"elements": [{"type": "node", "id": 9, "lat": 1, "lon": 1}]}'
+        def __enter__(self):
+            return self
+        def __exit__(self, *a):
+            return False
+
+    monkeypatch.setattr("urllib.request.urlopen",
+                        lambda req, timeout=None, context=None: Resp())
+    els, from_cache = sle._overpass_tile(tile, ["https://x.invalid/i"], 5, 1,
+                                         lambda *a: None)
+    assert not from_cache and [e["id"] for e in els] == [9]
+    # and the repaired cache is complete this time
+    assert json.loads(open(path, encoding="utf-8").read())[0]["id"] == 9
+
+
+def test_the_cache_is_written_atomically_leaving_no_temp_files(monkeypatch, tmp_path):
+    monkeypatch.setattr(sle, "CACHE_DIR", str(tmp_path))
+    sle._write_cache(sle._tile_cache_path((0.0, 0.0, 1.0, 1.0)), [{"id": 1}])
+    assert not [p for p in os.listdir(str(tmp_path)) if p.endswith(".tmp")]
+
+
+def test_a_partial_result_names_the_counties_it_costs(monkeypatch, tmp_path):
+    """'Some counties will be empty' is not actionable. Which ones is."""
+    monkeypatch.setattr(sle, "CACHE_DIR", str(tmp_path))
+    bbox = (0.0, 0.0, 9.0, 9.0)
+    dead = sle.tile_bbox(bbox)[0]
+    shapes = [("27001", [[[[0.1, 0.1], [1.0, 0.1], [1.0, 1.0], [0.1, 1.0], [0.1, 0.1]]]]),
+              ("27099", [[[[8.0, 8.0], [8.9, 8.0], [8.9, 8.9], [8.0, 8.9], [8.0, 8.0]]]])]
+    monkeypatch.setattr(sle, "_overpass_tile", _one_bad_tile(dead))
+    with pytest.raises(RuntimeError) as ex:
+        sle.fetch_osm("MN", bbox=bbox, shapes=shapes, log=lambda *a: None)
+    msg = str(ex.value)
+    assert "27001" in msg, msg            # under the dead tile
+    assert "27099" not in msg, msg        # nowhere near it
+
+
+def test_a_tile_served_as_quarters_is_not_asked_for_again(monkeypatch, tmp_path):
+    """It is the one tile the mirrors would not serve. Re-requesting it every
+    run means every run pays its timeout, cache or no cache."""
+    monkeypatch.setattr(sle, "CACHE_DIR", str(tmp_path))
+    parent = (0.0, 0.0, 2.0, 2.0)
+    for j, q in enumerate(sle.split_tile(parent), 1):
+        sle._write_cache(sle._tile_cache_path(q),
+                         [{"type": "node", "id": j, "lat": 1.0, "lon": 1.0}])
+
+    def never(*a, **kw):
+        raise AssertionError("went to the network for a tile that is cached")
+
+    monkeypatch.setattr("urllib.request.urlopen", never)
+    els, from_cache = sle._overpass_tile(parent, ["https://x.invalid/i"], 5, 1,
+                                         lambda *a: None)
+    assert from_cache
+    assert sorted(e["id"] for e in els) == [1, 2, 3, 4]
+
+
+def test_a_timeout_is_told_apart_from_a_refusal():
+    """The split threshold counts timeouts only. A 504 or a TLS failure is a
+    mirror problem, not a sign the box is too big - counting it would split
+    tiles that were never too big and waste the budget."""
+    import socket
+    import ssl as _ssl
+    import urllib.error as ue
+    timeouts = [socket.timeout("The read operation timed out"),
+                ue.URLError(socket.timeout("timed out"))]
+    refusals = [ue.HTTPError("u", 504, "Gateway Timeout", {}, None),
+                ue.URLError(ConnectionRefusedError(111, "refused")),
+                ue.URLError(socket.gaierror(-2, "Name or service not known")),
+                ue.URLError(_ssl.SSLCertVerificationError("Hostname mismatch"))]
+    assert all(sle._is_timeout(e) for e in timeouts)
+    assert not any(sle._is_timeout(e) for e in refusals)
+
+
+def test_two_timeouts_stop_a_tile_but_two_refusals_do_not(monkeypatch, tmp_path):
+    import socket
+    monkeypatch.setattr(sle, "CACHE_DIR", str(tmp_path))
+    mirrors = ["https://a.invalid/i", "https://b.invalid/i", "https://c.invalid/i"]
+
+    for err, expected in ((socket.timeout("timed out"), sle.OSM_TIMEOUTS_BEFORE_SPLIT),
+                          (OSError("connection refused"), len(mirrors))):
+        tries = []
+
+        def boom(req, timeout=None, context=None, _e=err):
+            tries.append(req.full_url)
+            raise _e
+
+        monkeypatch.setattr("urllib.request.urlopen", boom)
+        with pytest.raises(RuntimeError):
+            sle._overpass_tile((0.0, 0.0, 1.0, 1.0), mirrors, 5, 1, lambda *a: None)
+        assert len(tries) == expected, (err, tries)
+
+
+def test_the_budget_running_out_is_never_counted_as_the_box_being_too_big(
+        monkeypatch, tmp_path):
+    """Both are TimeoutError. Only one of them means 'split this tile'."""
+    monkeypatch.setattr(sle, "CACHE_DIR", str(tmp_path))
+
+    def never(*a, **kw):
+        raise AssertionError("a request was made after the budget ran out")
+
+    monkeypatch.setattr("urllib.request.urlopen", never)
+    with pytest.raises(TimeoutError):           # not RuntimeError("timed out on N mirrors")
+        sle._overpass_tile((0.0, 0.0, 1.0, 1.0), ["https://a.invalid/i"], 5, 1,
+                           lambda *a: None, deadline=_expired())
+
+
+def test_only_the_budget_ever_escapes_as_a_timeouterror(monkeypatch, tmp_path):
+    """Load-bearing invariant: the caller tells 'out of budget' apart from
+    'this box was too big' with a plain isinstance, and acts differently on
+    each. A socket timeout leaking out as TimeoutError would stop the split."""
+    import socket
+    monkeypatch.setattr(sle, "CACHE_DIR", str(tmp_path))
+    for err in (socket.timeout("timed out"), OSError("refused"),
+                RuntimeError("504")):
+        monkeypatch.setattr("urllib.request.urlopen",
+                            lambda req, timeout=None, context=None, _e=err:
+                            (_ for _ in ()).throw(_e))
+        with pytest.raises(RuntimeError) as ex:
+            sle._overpass_tile((0.0, 0.0, 1.0, 1.0), ["https://a.invalid/i"],
+                               5, 1, lambda *a: None)
+        assert not isinstance(ex.value, TimeoutError), err
