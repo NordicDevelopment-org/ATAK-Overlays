@@ -108,6 +108,23 @@ per-source confidence and 2026 status. Run
 `overlaybuilder doctor --aoi <aoi> [--include-disabled]` on a connected
 machine before trusting a pack.
 
-HIFLD Open shut down in August 2025: its substation, transmission and
-emergency-services layers are frozen archives here, with OpenStreetMap and
-USGS/FEMA/NCES as the maintained alternatives.
+HIFLD Open shut down in August 2025. **Its NASA NCCS re-host
+(`maps.nccs.nasa.gov`) stopped resolving entirely** - verified 2026-09-14
+on-device: `ping: unknown host`, `curl: Could not resolve host`. Not blocked,
+not an IPv6 problem; the host is gone from DNS.
+
+The 13 sources whose primary url was that host are `enabled: false` with
+`confidence: dead`. One more (`transmission_lines@hifld-archive`) keeps it only
+as an alternate and stays enabled, since its primary is live. Coverage after
+disabling them, for `state:MN`:
+
+- Still covered by USGS and/or OSM: hospitals, fire_stations, police, ems,
+  nursing_homes, urgent_care, correctional, eoc, comm_towers,
+  service_territories, compressor_stations.
+- `psap` lost its only source. The FCC Master PSAP Registry is tabular only,
+  so there is no polygon replacement; the layer has no live source.
+- `pharmacies` was already disabled before this.
+
+`validate` now rejects duplicate YAML keys. Appending a second `notes:` or
+`confidence:` to a source used to parse fine and silently discard the first -
+which is how a provenance note or a licence string disappears without a word.

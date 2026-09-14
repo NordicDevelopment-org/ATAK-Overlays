@@ -84,8 +84,9 @@ sources:
     source_name: "HIFLD Microwave Service Towers (2019 HIFLD Open snapshot, NASA NCCS re-host)"
     source_url: https://maps.nccs.nasa.gov/mapping/rest/services/hifld_open/communications/FeatureServer
     license: "Public domain (US Government work) - unofficial re-host; frozen"
-    notes: "Known ids on this service: 0 am_transmission_towers, 3 cellular_towers, 7 land_mobile_private_transmission_towers, 8 microwave_service_towers"
-    confidence: medium
+    notes: "Known ids on this service: 0 am_transmission_towers, 3 cellular_towers, 7 land_mobile_private_transmission_towers, 8 microwave_service_towers || HOST DEAD 2026-09-14: maps.nccs.nasa.gov no longer resolves ('ping: unknown host', 'curl: Could not resolve host') - not blocked, not IPv6; the NASA NCCS re-host of HIFLD Open is gone from DNS. Disabled until a live mirror is found."
+    confidence: dead
+    enabled: false
 
   - layer: psap
     id: psap@hifld-nasa
@@ -100,5 +101,6 @@ sources:
     source_name: "PSAP 911 Service Area Boundaries (primary PSAPs; HIFLD final snapshot, NASA NCCS re-host)"
     source_url: https://maps.nccs.nasa.gov/mapping/rest/services/hifld_open/emergency_services/FeatureServer
     license: "Public domain (US Government work) - unofficial re-host; frozen"
-    notes: "Service-area polygons, not facility points (PSAP buildings are not published). FCC Master PSAP Registry is tabular only"
-    confidence: medium
+    notes: "Service-area polygons, not facility points (PSAP buildings are not published). FCC Master PSAP Registry is tabular only || HOST DEAD 2026-09-14: maps.nccs.nasa.gov no longer resolves ('ping: unknown host', 'curl: Could not resolve host') - not blocked, not IPv6; the NASA NCCS re-host of HIFLD Open is gone from DNS. Disabled until a live mirror is found."
+    confidence: dead
+    enabled: false

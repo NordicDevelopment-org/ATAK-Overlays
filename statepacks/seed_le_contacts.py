@@ -155,23 +155,42 @@ def probe_sources(log=print):
             names = ", ".join(str(l.get("name")) for l in layers[:12])
             log(f"    no match; layers present: {names}")
             continue
-        lid = hits[0]["id"]
-        try:
-            meta = http_json(f"{src['url']}/{lid}", {"f": "json"}, tries=1, timeout=30)
+
+        # Examine EVERY match, not just the first. A group layer carries no
+        # fields of its own, so stopping at hits[0] reports "MISSING" for
+        # columns that are sitting right there on the feature layer below it.
+        for hit in hits:
+            lid = hit["id"]
+            try:
+                meta = http_json(f"{src['url']}/{lid}", {"f": "json"}, tries=1,
+                                 timeout=30)
+            except Exception as e:                  # noqa: BLE001
+                log(f"    layer {lid} ({hit.get('name')}): unreadable - {e}")
+                continue
             fields = [f["name"] for f in (meta.get("fields") or [])]
-            log(f"    layer {lid} fields: {', '.join(fields[:16])}"
-                f"{' ...' if len(fields) > 16 else ''}")
-            for label, key in (("county join", src["county_field"]),
-                               ("agency name", src["name_field"]),
-                               ("phone", src["phone_field"])):
-                if key is None:
-                    log(f"      {label:12} - none in this dataset")
-                else:
-                    log(f"      {label:12} {key}: "
-                        f"{'PRESENT' if key in fields else 'MISSING'}")
-            any_ok = True
-        except Exception as e:                      # noqa: BLE001
-            log(f"    could not read layer {lid}: {e}")
+            kind = meta.get("type") or ("Group Layer" if hit.get("subLayerIds") else "?")
+            if not fields:
+                log(f"    layer {lid:>3} {str(hit.get('name'))[:22]:<22} "
+                    f"{kind} - no fields of its own, skipping")
+                continue
+            log(f"    layer {lid:>3} {str(hit.get('name'))[:22]:<22} {kind}")
+            log(f"        fields: {', '.join(fields[:18])}"
+                f"{' ...' if len(fields) > 18 else ''}")
+            # name the column that would serve each role, whatever it is called
+            def pick(cands):
+                for c in cands:
+                    for f in fields:
+                        if f.upper() == c:
+                            return f
+                return None
+            county = pick(["COUNTYFIPS", "COUNTY_FIPS", "FIPS", "COUNTY"])
+            nm = pick(["NAME", "FACILITYNAME", "FACILITY_NAME", "AGENCYNAME"])
+            ph = pick(["TELEPHONE", "PHONE", "PHONENUMBER", "PHONE_NUMBER"])
+            log(f"        county join: {county or 'NONE - needs a spatial match'}")
+            log(f"        agency name: {nm or 'NONE'}")
+            log(f"        phone:       {ph or 'NONE - phone stays not in dataset'}")
+            if nm:
+                any_ok = True
     return any_ok
 
 

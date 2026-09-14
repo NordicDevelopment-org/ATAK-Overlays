@@ -99,8 +99,9 @@ sources:
     source_name: "Natural Gas Compressor Stations (HIFLD Open, NASA NCCS mirror; frozen Aug 2025)"
     source_url: https://maps.nccs.nasa.gov/mapping/rest/services/hifld_open/energy/FeatureServer/6
     license: "Public domain (US Government work) - mirror"
-    notes: "No horsepower field in the public layer. No EIA equivalent exists; OSM pipeline=substation is the maintained fallback"
-    confidence: medium
+    notes: "No horsepower field in the public layer. No EIA equivalent exists; OSM pipeline=substation is the maintained fallback || HOST DEAD 2026-09-14: maps.nccs.nasa.gov no longer resolves ('ping: unknown host', 'curl: Could not resolve host') - not blocked, not IPv6; the NASA NCCS re-host of HIFLD Open is gone from DNS. Disabled until a live mirror is found."
+    confidence: dead
+    enabled: false
 
   - layer: gas_processing
     id: gas_processing@eia
