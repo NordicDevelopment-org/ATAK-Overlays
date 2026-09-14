@@ -534,6 +534,36 @@ def test_a_feature_with_no_identity_shows_no_fips(stubbed, tmp_path, monkeypatch
 sle = _load("seed_le_contacts")
 
 
+TODAY = __import__("datetime").date.today().isoformat()
+
+
+class FakeHTTP:
+    """A stand-in for HTTPResponse that honours read(n), like the real one.
+
+    The body is now read in chunks so the wall-clock budget has somewhere to be
+    enforced; a fake whose read() takes no size argument would pass a test the
+    real code path could never reach.
+    """
+
+    def __init__(self, payload):
+        self._b = payload if isinstance(payload, bytes) else json.dumps(payload).encode()
+        self._i = 0
+
+    def read(self, n=-1):
+        if n is None or n < 0:
+            n = len(self._b) - self._i
+        out = self._b[self._i:self._i + n]
+        self._i += len(out)
+        return out
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *a):
+        return False
+
+
+
 def _fake_shapes(*geoids, name="Test County"):
     """A county_shapes stub that honours with_names, like the real one."""
     shapes = [(g, [[[[0, 0], [5, 0], [5, 5], [0, 5], [0, 0]]]]) for g in geoids]
@@ -674,7 +704,8 @@ def test_osm_reads_both_phone_spellings_and_a_way_centre(monkeypatch, tmp_path):
                   "addr:city": "Town", "operator:type": "county"}},
         {"type": "way", "id": 3, "tags": {"name": "No Geometry"}},   # dropped
     ]
-    monkeypatch.setattr(sle, "_overpass_tile", lambda tile, m, t, a, log, deadline=None, locks=None, start=0: (els, False))
+    monkeypatch.setattr(sle, "_overpass_tile", lambda tile, m, t, a, log, deadline=None, locks=None, start=0, **kw:
+                        (els, False, TODAY))
     got = sle.fetch_osm("MN", log=lambda *a: None, bbox=(-97.3, 43.4, -89.4, 49.4))
 
     assert [r["name"] for r in got] == ["A PD", "B Sheriff"]
@@ -693,17 +724,9 @@ def test_the_overpass_query_is_a_bbox_not_an_area_lookup(monkeypatch, tmp_path):
     monkeypatch.setattr(sle, "CACHE_DIR", str(tmp_path))
     captured = {}
 
-    class FakeResp:
-        def read(self):
-            return _json.dumps({"elements": []}).encode()
-        def __enter__(self):
-            return self
-        def __exit__(self, *a):
-            return False
-
     def fake_urlopen(req, timeout=None, context=None):
         captured["body"] = urllib.parse.unquote_plus(req.data.decode())
-        return FakeResp()
+        return FakeHTTP({"elements": []})
 
     monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
     sle._overpass_tile((-97.3, 43.4, -89.4, 49.4), sle.OVERPASS_MIRRORS, 90, 1,
@@ -1217,7 +1240,7 @@ def _one_bad_tile(dead, ids=None):
     lock = __import__("threading").Lock()
 
     def stub(tile, mirrors, timeout, attempts, log, deadline=None,
-             locks=None, start=0):
+             locks=None, start=0, **kw):
         w, s_, e, n = tile
         dw, ds, de, dn = dead
         inside = (w >= dw - 1e-9 and e <= de + 1e-9
@@ -1228,7 +1251,7 @@ def _one_bad_tile(dead, ids=None):
             ids["n"] += 1
             i = ids["n"]
         return ([{"type": "node", "id": i, "lat": 1.0, "lon": 1.0,
-                  "tags": {"name": f"PD {i}"}}], False)
+                  "tags": {"name": f"PD {i}"}}], False, TODAY)
 
     return stub
 
@@ -1257,7 +1280,7 @@ def test_a_tile_the_mirrors_refuse_is_retried_as_quarters(monkeypatch, tmp_path)
     seen, lock = [], __import__("threading").Lock()
 
     def stub(tile, mirrors, timeout, attempts, log, deadline=None,
-             locks=None, start=0):
+             locks=None, start=0, **kw):
         with lock:
             seen.append(tile)
             i = len(seen)
@@ -1265,7 +1288,7 @@ def test_a_tile_the_mirrors_refuse_is_retried_as_quarters(monkeypatch, tmp_path)
         if tile == dead:
             raise RuntimeError("HTTP Error 504: Gateway Timeout")
         return ([{"type": "node", "id": i, "lat": 1.0, "lon": 1.0,
-                  "tags": {"name": f"PD {i}"}}], False)
+                  "tags": {"name": f"PD {i}"}}], False, TODAY)
 
     monkeypatch.setattr(sle, "_overpass_tile", stub)
     got = sle.fetch_osm("MN", bbox=bbox, log=lambda *a: None)
@@ -1283,14 +1306,14 @@ def test_splitting_is_not_partial_credit(monkeypatch, tmp_path):
     lock, ids = __import__("threading").Lock(), {"n": 0}
 
     def stub(tile, mirrors, timeout, attempts, log, deadline=None,
-             locks=None, start=0):
+             locks=None, start=0, **kw):
         if tile == dead or tile == doomed:
             raise RuntimeError("HTTP Error 504: Gateway Timeout")
         with lock:
             ids["n"] += 1
             i = ids["n"]
         return ([{"type": "node", "id": i, "lat": 1.0, "lon": 1.0,
-                  "tags": {"name": f"PD {i}"}}], False)
+                  "tags": {"name": f"PD {i}"}}], False, TODAY)
 
     monkeypatch.setattr(sle, "_overpass_tile", stub)
     with pytest.raises(RuntimeError, match="1 of 9 tiles failed"):
@@ -1304,19 +1327,9 @@ def test_successful_tiles_are_cached_so_a_retry_only_refetches_failures(
     monkeypatch.setattr(sle, "CACHE_DIR", str(tmp_path))
     fetched = []
 
-    class FakeResp:
-        def __init__(self, payload):
-            self._p = json.dumps(payload).encode()
-        def read(self):
-            return self._p
-        def __enter__(self):
-            return self
-        def __exit__(self, *a):
-            return False
-
     def fake_urlopen(req, timeout=None, context=None):
         fetched.append(req.full_url)
-        return FakeResp({"elements": [
+        return FakeHTTP({"elements": [
             {"type": "node", "id": len(fetched), "lat": 1.0, "lon": 1.0,
              "tags": {"name": "PD"}}]})
 
@@ -1335,7 +1348,8 @@ def test_a_feature_on_a_tile_boundary_is_not_counted_twice(monkeypatch, tmp_path
     dup = {"type": "way", "id": 42, "center": {"lat": 1.0, "lon": 1.0},
            "tags": {"name": "Border Sheriff", "phone": "111"}}
     monkeypatch.setattr(sle, "_overpass_tile",
-                        lambda tile, m, t, a, log, deadline=None, locks=None, start=0: ([dup], False))
+                        lambda tile, m, t, a, log, deadline=None, locks=None, start=0, **kw:
+                        ([dup], False, TODAY))
     got = sle.fetch_osm("MN", bbox=(0.0, 0.0, 9.0, 9.0), log=lambda *a: None)
     assert len(got) == 1                            # nine tiles, one feature
     assert got[0]["phone"] == "111"
@@ -1446,13 +1460,13 @@ def test_fetch_osm_stops_at_the_budget_and_says_so(monkeypatch):
     lock, calls = __import__("threading").Lock(), []
 
     def tile(t, mirrors, timeout, attempts, log, deadline=None,
-             locks=None, start=0):
+             locks=None, start=0, **kw):
         with lock:
             calls.append(t)
             n = len(calls)
         if n > 2:
             raise TimeoutError("deadline reached")
-        return ([], False)
+        return ([], False, TODAY)
 
     monkeypatch.setattr(sle, "_overpass_tile", tile)
     with pytest.raises(RuntimeError) as ex:
@@ -1474,7 +1488,7 @@ def test_running_out_of_budget_does_not_trigger_a_split(monkeypatch, tmp_path):
     seen, lock = [], __import__("threading").Lock()
 
     def tile(t, mirrors, timeout, attempts, log, deadline=None,
-             locks=None, start=0):
+             locks=None, start=0, **kw):
         with lock:
             seen.append(t)
         raise TimeoutError("deadline reached")
@@ -1489,10 +1503,10 @@ def test_fetch_osm_passes_one_shared_clock_to_every_tile(monkeypatch):
     clocks, lock = [], __import__("threading").Lock()
 
     def tile(t, mirrors, timeout, attempts, log, deadline=None,
-             locks=None, start=0):
+             locks=None, start=0, **kw):
         with lock:
             clocks.append(deadline)
-        return ([], True)
+        return ([], True, TODAY)
 
     monkeypatch.setattr(sle, "_overpass_tile", tile)
     sle.fetch_osm("MN", bbox=(-97.0, 43.0, -89.0, 49.0), log=lambda *a: None)
@@ -1589,21 +1603,21 @@ def test_tiles_are_fetched_concurrently_not_one_after_another(monkeypatch, tmp_p
     monkeypatch.setattr(sle, "CACHE_DIR", str(tmp_path))
     live, peak, lock = [0], [0], threading.Lock()
 
-    def tile(t, mirrors, timeout, attempts, log, deadline=None, locks=None, start=0):
+    def tile(t, mirrors, timeout, attempts, log, deadline=None, locks=None,
+             start=0, **kw):
         with lock:
             live[0] += 1
             peak[0] = max(peak[0], live[0])
         time.sleep(0.05)
         with lock:
             live[0] -= 1
-        return ([], False)
+        return ([], False, TODAY)
 
     monkeypatch.setattr(sle, "_overpass_tile", tile)
-    t0 = time.monotonic()
     sle.fetch_osm("MN", bbox=(0.0, 0.0, 9.0, 9.0), log=lambda *a: None, jobs=3)
-    elapsed = time.monotonic() - t0
+    # Overlap, not elapsed time: a wall-clock bound would flake on a loaded
+    # runner and would be measuring the machine rather than the code.
     assert peak[0] > 1, "tiles were fetched one at a time"
-    assert elapsed < 9 * 0.05, f"no faster than serial ({elapsed:.2f}s)"
 
 
 def test_a_mirror_only_takes_one_of_our_requests_at_a_time(monkeypatch, tmp_path):
@@ -1615,14 +1629,6 @@ def test_a_mirror_only_takes_one_of_our_requests_at_a_time(monkeypatch, tmp_path
     mirrors = ["https://a.invalid/i", "https://b.invalid/i", "https://c.invalid/i"]
     live, peak, lock = {}, {}, threading.Lock()
 
-    class Resp:
-        def read(self):
-            return b'{"elements": []}'
-        def __enter__(self):
-            return self
-        def __exit__(self, *a):
-            return False
-
     def fake_urlopen(req, timeout=None, context=None):
         host = req.full_url
         with lock:
@@ -1631,7 +1637,7 @@ def test_a_mirror_only_takes_one_of_our_requests_at_a_time(monkeypatch, tmp_path
         time.sleep(0.05)
         with lock:
             live[host] -= 1
-        return Resp()
+        return FakeHTTP({"elements": []})
 
     monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
     sle.fetch_osm("MN", bbox=(0.0, 0.0, 9.0, 9.0), mirrors=mirrors,
@@ -1648,11 +1654,12 @@ def test_results_come_back_in_tile_order_however_the_mirrors_answer(monkeypatch,
     tiles = sle.tile_bbox((0.0, 0.0, 9.0, 9.0))
     index = {t: i for i, t in enumerate(tiles)}
 
-    def tile(t, mirrors, timeout, attempts, log, deadline=None, locks=None, start=0):
+    def tile(t, mirrors, timeout, attempts, log, deadline=None, locks=None,
+             start=0, **kw):
         i = index[t]
         time.sleep(0.01 * (len(tiles) - i))     # later tiles finish FIRST
         return ([{"type": "node", "id": i, "lat": 1.0, "lon": 1.0,
-                  "tags": {"name": f"PD {i}"}}], False)
+                  "tags": {"name": f"PD {i}"}}], False, TODAY)
 
     monkeypatch.setattr(sle, "_overpass_tile", tile)
     got = sle.fetch_osm("MN", bbox=(0.0, 0.0, 9.0, 9.0), log=lambda *a: None, jobs=4)
@@ -1747,21 +1754,17 @@ def test_a_corrupt_cache_file_is_refetched_not_read_as_empty(monkeypatch, tmp_pa
     with open(path, "w", encoding="utf-8") as fh:
         fh.write('[{"type": "node", "id": 1')            # truncated mid-write
 
-    class Resp:
-        def read(self):
-            return b'{"elements": [{"type": "node", "id": 9, "lat": 1, "lon": 1}]}'
-        def __enter__(self):
-            return self
-        def __exit__(self, *a):
-            return False
-
     monkeypatch.setattr("urllib.request.urlopen",
-                        lambda req, timeout=None, context=None: Resp())
-    els, from_cache = sle._overpass_tile(tile, ["https://x.invalid/i"], 5, 1,
-                                         lambda *a: None)
+                        lambda req, timeout=None, context=None: FakeHTTP(
+                            {"elements": [{"type": "node", "id": 9,
+                                           "lat": 1, "lon": 1}]}))
+    els, from_cache, fetched = sle._overpass_tile(tile, ["https://x.invalid/i"],
+                                                  5, 1, lambda *a: None)
     assert not from_cache and [e["id"] for e in els] == [9]
-    # and the repaired cache is complete this time
-    assert json.loads(open(path, encoding="utf-8").read())[0]["id"] == 9
+    # and the repaired cache is complete, and dated
+    doc = json.loads(open(path, encoding="utf-8").read())
+    assert doc["elements"][0]["id"] == 9
+    assert doc["fetched"] == fetched == TODAY
 
 
 def test_the_cache_is_written_atomically_leaving_no_temp_files(monkeypatch, tmp_path):
@@ -1798,8 +1801,8 @@ def test_a_tile_served_as_quarters_is_not_asked_for_again(monkeypatch, tmp_path)
         raise AssertionError("went to the network for a tile that is cached")
 
     monkeypatch.setattr("urllib.request.urlopen", never)
-    els, from_cache = sle._overpass_tile(parent, ["https://x.invalid/i"], 5, 1,
-                                         lambda *a: None)
+    els, from_cache, _fetched = sle._overpass_tile(parent, ["https://x.invalid/i"],
+                                                   5, 1, lambda *a: None)
     assert from_cache
     assert sorted(e["id"] for e in els) == [1, 2, 3, 4]
 
@@ -1944,7 +1947,7 @@ def test_osm_keeps_the_website_tag_in_both_spellings(monkeypatch, tmp_path):
     ]
     monkeypatch.setattr(sle, "_overpass_tile",
                         lambda tile, m, t, a, log, deadline=None, locks=None,
-                        start=0: (els, False))
+                        start=0, **kw: (els, False, TODAY))
     got = sle.fetch_osm("MN", bbox=(0.0, 0.0, 9.0, 9.0), log=lambda *a: None)
     assert [r["website"] for r in got] == ["https://a.example",
                                            "https://b.example", ""]
@@ -2098,3 +2101,177 @@ def test_the_report_prints_a_runnable_widening_command(capsys):
     assert "would reach 1 of those 2 counties" in out, out
     assert "--match 'sherr?iff|county public safety'" in out, out
     assert "python3 seed_le_contacts.py --state MN --gaps" in out, out
+
+
+# --------------------------------------------------------------------------
+# Mutations that used to leave every test green. Each of these fails if the
+# named line is reverted - that is the whole point of them.
+# --------------------------------------------------------------------------
+def test_an_overpass_runtime_error_is_not_cached_as_an_empty_tile(monkeypatch, tmp_path):
+    """Overpass answers a server-side timeout with HTTP 200, a normal JSON
+    body, an empty elements list and a "remark". Taking that at face value
+    caches "no police stations in this part of the state" forever."""
+    monkeypatch.setattr(sle, "CACHE_DIR", str(tmp_path))
+    tile = (0.0, 0.0, 1.0, 1.0)
+    body = {"version": 0.6, "elements": [],
+            "remark": 'runtime error: Query timed out in "query" at line 3 '
+                      'after 30 seconds.'}
+    monkeypatch.setattr("urllib.request.urlopen",
+                        lambda req, timeout=None, context=None: FakeHTTP(body))
+    with pytest.raises(RuntimeError) as ex:
+        sle._overpass_tile(tile, ["https://a.invalid/i"], 30, 1, lambda *a: None)
+    assert "timed out" in str(ex.value).lower()
+    assert not os.path.exists(sle._tile_cache_path(tile)), "cached a non-answer"
+
+
+def test_a_server_side_timeout_counts_towards_splitting_the_tile(monkeypatch, tmp_path):
+    """It is the clearest possible evidence that the box is too big."""
+    monkeypatch.setattr(sle, "CACHE_DIR", str(tmp_path))
+    body = {"elements": [], "remark": "runtime error: Query timed out"}
+    tries = []
+
+    def fake(req, timeout=None, context=None):
+        tries.append(req.full_url)
+        return FakeHTTP(body)
+
+    monkeypatch.setattr("urllib.request.urlopen", fake)
+    with pytest.raises(RuntimeError):
+        sle._overpass_tile((0.0, 0.0, 1.0, 1.0),
+                           ["https://a.invalid/i", "https://b.invalid/i",
+                            "https://c.invalid/i"], 30, 1, lambda *a: None)
+    assert len(tries) == sle.OSM_TIMEOUTS_BEFORE_SPLIT, tries
+
+
+def test_an_informational_remark_is_not_treated_as_an_error(monkeypatch, tmp_path):
+    monkeypatch.setattr(sle, "CACHE_DIR", str(tmp_path))
+    body = {"elements": [{"type": "node", "id": 1, "lat": 1, "lon": 1}],
+            "remark": "improve your query"}
+    monkeypatch.setattr("urllib.request.urlopen",
+                        lambda req, timeout=None, context=None: FakeHTTP(body))
+    els, _c, _f = sle._overpass_tile((0.0, 0.0, 1.0, 1.0), ["https://a.invalid/i"],
+                                     30, 1, lambda *a: None)
+    assert [e["id"] for e in els] == [1]
+
+
+def test_a_cache_write_failure_does_not_throw_away_a_good_response(
+        monkeypatch, tmp_path):
+    """An unwritable ~/.cache is routine on Android. It used to discard a
+    response that had already been fetched correctly and blame the mirror."""
+    monkeypatch.setattr(sle, "CACHE_DIR", str(tmp_path))
+    monkeypatch.setattr("urllib.request.urlopen",
+                        lambda req, timeout=None, context=None: FakeHTTP(
+                            {"elements": [{"type": "node", "id": 7,
+                                           "lat": 1, "lon": 1}]}))
+
+    def no_write(*a, **kw):
+        raise OSError(30, "Read-only file system")
+
+    monkeypatch.setattr(sle, "_write_cache", no_write)
+    said = []
+    els, from_cache, _f = sle._overpass_tile((0.0, 0.0, 1.0, 1.0),
+                                             ["https://a.invalid/i"], 30, 1,
+                                             said.append)
+    assert [e["id"] for e in els] == [7] and not from_cache
+    assert any("could not cache" in m for m in said), said
+
+
+def test_self_contention_is_not_reported_as_a_mirror_failure(monkeypatch, tmp_path):
+    """Blaming the mirrors for our own scheduling sends the user to wait out a
+    rate limit that was never hit - and splits a tile for no reason."""
+    import threading
+    monkeypatch.setattr(sle, "CACHE_DIR", str(tmp_path))
+    mirrors = ["https://a.invalid/i"]
+    locks = {mirrors[0]: threading.Lock()}
+    locks[mirrors[0]].acquire()                     # someone else holds it
+
+    def never(*a, **kw):
+        raise AssertionError("asked a mirror we could not acquire")
+
+    monkeypatch.setattr("urllib.request.urlopen", never)
+    with pytest.raises(sle.MirrorsBusy):
+        sle._overpass_tile((0.0, 0.0, 1.0, 1.0), mirrors, 5, 1, lambda *a: None,
+                           deadline=sle.Deadline(2), locks=locks)
+
+
+def test_a_busy_mirror_is_skipped_before_it_is_waited_for(monkeypatch, tmp_path):
+    """With --osm-attempts 1 the fast-skip used to be dead code, so every tile
+    blocked up to 30s on a mirror its own siblings were using."""
+    import threading
+    monkeypatch.setattr(sle, "CACHE_DIR", str(tmp_path))
+    mirrors = ["https://busy.invalid/i", "https://free.invalid/i"]
+    locks = {u: threading.Lock() for u in mirrors}
+    locks[mirrors[0]].acquire()                     # first choice is taken
+    asked = []
+
+    def fake(req, timeout=None, context=None):
+        asked.append(req.full_url)
+        return FakeHTTP({"elements": []})
+
+    monkeypatch.setattr("urllib.request.urlopen", fake)
+    sle._overpass_tile((0.0, 0.0, 1.0, 1.0), mirrors, 5, 1, lambda *a: None,
+                       locks=locks, deadline=sle.Deadline(60))
+    assert asked == [mirrors[1]], asked          # went straight to the free one
+
+
+def test_the_default_job_count_is_actually_concurrent(monkeypatch, tmp_path):
+    """Setting OSM_JOBS = 1 - which makes every real run serial again, undoing
+    the whole change - used to leave all 290 tests green."""
+    import threading
+    import time
+    monkeypatch.setattr(sle, "CACHE_DIR", str(tmp_path))
+    live, peak, lock = [0], [0], threading.Lock()
+
+    def tile(t, m, to, at, log, deadline=None, locks=None, start=0, **kw):
+        with lock:
+            live[0] += 1
+            peak[0] = max(peak[0], live[0])
+        time.sleep(0.02)
+        with lock:
+            live[0] -= 1
+        return ([], False, TODAY)
+
+    monkeypatch.setattr(sle, "_overpass_tile", tile)
+    sle.fetch_osm("MN", bbox=(0.0, 0.0, 9.0, 9.0), log=lambda *a: None)
+    assert sle.OSM_JOBS > 1
+    assert peak[0] > 1, "the DEFAULT job count fetches one tile at a time"
+
+
+def test_the_cli_flags_actually_reach_fetch_osm(monkeypatch, tmp_path):
+    """--jobs, --no-split and --refresh-shapes could each be unwired from main
+    without a single test failing."""
+    monkeypatch.setattr(sle, "CSV_PATH", str(tmp_path / "le.csv"))
+    seen = {}
+    monkeypatch.setattr(sle, "county_shapes",
+                        lambda sfp, log=print, with_names=False, **kw:
+                        (seen.setdefault("refresh", kw.get("refresh")),
+                         _fake_shapes("27025")(sfp, with_names=with_names))[1])
+
+    def spy(st, **kw):
+        seen.update(kw)
+        return []
+
+    monkeypatch.setattr(sle, "fetch_osm", spy)
+    sle.main(["--state", "MN", "--source", "osm", "--jobs", "2", "--no-split",
+              "--refresh-shapes", "--deadline", "77", "--osm-timeout", "11"])
+    assert seen["jobs"] == 2
+    assert seen["split"] is False
+    assert seen["deadline_s"] == 77
+    assert seen["timeout"] == 11
+    assert seen["refresh"] is True
+
+
+def test_the_socket_gets_more_time_than_the_server(monkeypatch, tmp_path):
+    """Cutting the socket at exactly the server's own timeout would abandon a
+    server that is about to answer - the slack is the point."""
+    monkeypatch.setattr(sle, "CACHE_DIR", str(tmp_path))
+    seen = []
+
+    def fake(req, timeout=None, context=None):
+        seen.append(timeout)
+        return FakeHTTP({"elements": []})
+
+    monkeypatch.setattr("urllib.request.urlopen", fake)
+    sle._overpass_tile((0.0, 0.0, 1.0, 1.0), ["https://a.invalid/i"], 30, 1,
+                       lambda *a: None)
+    assert seen == [30 + sle.OSM_SOCKET_SLACK], seen
+    assert sle.OSM_SOCKET_SLACK > 0

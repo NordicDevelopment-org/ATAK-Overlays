@@ -522,6 +522,11 @@ def main(argv=None):
     added = skipped = failures = 0
     for st in targets:
         sfp = STATE_FIPS[st]
+        # Bound OUTSIDE the branch: --gaps reads them unconditionally, and the
+        # hifld path never entered the branch that used to define them - so
+        # `--source hifld --gaps` died with a NameError after a successful
+        # fetch, throwing the whole run away at the last step.
+        shapes, cnames, coverage = [], {}, {}
         try:
             if use_osm or use_usgs:
                 # Fetched ONCE and handed to both the bounding box and the
@@ -535,13 +540,21 @@ def main(argv=None):
                     raise RuntimeError(
                         f"county boundaries could not be fetched, so no agency "
                         f"can be placed in a county: {redact_err(ex)}") from ex
-                raw = _fetch_raw(st, use_osm, use_usgs, a, layer_id, shapes=shapes)
+                raw = _fetch_raw(st, use_osm, use_usgs, a, layer_id, shapes=shapes,
+                                 gaps_out=coverage)
                 if use_osm:
-                    vintage = today_iso()
+                    # The date the DATA was fetched, which for a cached tile is
+                    # not today. Rows carry their own tile's date; this is only
+                    # the fallback and the headline.
+                    dates = sorted({r.get("loaddate") for r in raw
+                                    if r.get("loaddate")})
+                    vintage = dates[0] if dates else today_iso()
                     source_name = OSM["name"]
                     withph = sum(1 for r in raw if r.get("phone"))
+                    span = (f"fetched {vintage}" if len(dates) < 2
+                            else f"fetched {dates[0]} to {dates[-1]}")
                     print(f"[*] {st}: {len(raw)} OSM police features, "
-                          f"{withph} with a phone number (fetched {vintage})")
+                          f"{withph} with a phone number ({span})")
                 else:
                     vintage = usgs_vintage(raw)
                     source_name = f"{USGS['name']} (no phone numbers)"
@@ -557,7 +570,10 @@ def main(argv=None):
                                     "phone": r.get("phone", ""),
                                     "website": r.get("website", ""),
                                     "address": r["address"],
-                                    "type": r["admintype"]})
+                                    "type": r["admintype"],
+                                    # this record's own tile date, not the
+                                    # date the CSV happens to be written
+                                    "vintage": r.get("loaddate", "")})
                 if unplaced:
                     # The Overpass box is a RECTANGLE around the state, so it
                     # necessarily covers slices of the neighbours. Those points
@@ -585,14 +601,20 @@ def main(argv=None):
                 continue
             existing[geoid] = {"geoid": geoid, "agency": r["agency"],
                                "phone": r["phone"], "source": source_name,
-                               "vintage": vintage}
+                               # this row's own fetch date where it has one
+                               "vintage": r.get("vintage") or vintage}
             added += 1
         withphone = sum(1 for r in chosen.values() if r["phone"])
         print(f"[*] {st}: {len(records)} LE records -> {len(chosen)} counties "
               f"({withphone} with a phone number)")
         if a.gaps:
-            report_gaps(st, [g for g, _polys in shapes], cnames, records,
-                        chosen, a.match)
+            if shapes:
+                report_gaps(st, [g for g, _polys in shapes], cnames, records,
+                            chosen, a.match,
+                            uncovered=coverage.get("uncovered") or ())
+            else:
+                print("    --gaps needs the county boundaries, which only the "
+                      "osm and usgs sources fetch; nothing to report here")
         if records and not chosen:
             # Data arrived and every record was discarded. That is a filter
             # problem, not an absence of sheriffs, and saying nothing here reads
@@ -884,6 +906,10 @@ OSM_SOCKET_SLACK = 15
 # A fast failure (504, connection refused) is a mirror problem, not a size
 # problem, so it does not count towards this.
 OSM_TIMEOUTS_BEFORE_SPLIT = 2
+# A cached tile is dated and expires. Without this a months-old cache was
+# served silently while every row it produced was stamped with today's date -
+# a fetch date invented for data that was not fetched today.
+OSM_CACHE_TTL_DAYS = 30
 
 # ISO 3166-2 subdivision codes are what Overpass indexes US states by.
 # A bbox query, NOT an area lookup. `area["ISO3166-2"=...]` makes Overpass
@@ -999,111 +1025,213 @@ def _is_timeout(ex):
         getattr(ex, "reason", None), TimeoutError)
 
 
+class MirrorsBusy(RuntimeError):
+    """Nothing was asked: our own other tiles were holding every mirror.
+
+    Distinct from a server failure because it means the opposite thing. There
+    is no evidence the box is too big, so splitting it is wasted work, and
+    telling the user the mirrors are rate-limiting them is false - the mirrors
+    were never asked.
+    """
+
+
+def _cache_fresh(fetched, ttl_days):
+    """Is a cache entry dated `fetched` still inside its TTL?
+
+    An entry with no date is from before tiles carried one. It is not trusted:
+    its age cannot be established, and an unknown age must not pass as a fresh
+    one.
+    """
+    if not fetched:
+        return False
+    try:
+        age = (dt.date.today() - dt.date.fromisoformat(fetched)).days
+    except ValueError:
+        return False
+    return 0 <= age <= ttl_days
+
+
+def _read_bounded(resp, deadline, chunk=65536):
+    """Read a response body in chunks, checking the budget between them.
+
+    A socket timeout is a per-read inactivity timer, not a transfer cap: every
+    byte that arrives resets it, so a mirror trickling one byte at a time never
+    trips it and the wall-clock budget would not bound the run at all. Reading
+    in chunks gives the deadline somewhere to be enforced.
+    """
+    out = []
+    while True:
+        if deadline is not None and deadline.expired():
+            raise TimeoutError("deadline reached while reading the response")
+        b = resp.read(chunk)
+        if not b:
+            return b"".join(out)
+        out.append(b)
+
+
+def _overpass_error(doc):
+    """The error inside an HTTP 200, or None.
+
+    Overpass does NOT signal a server-side timeout with an HTTP error. It
+    answers 200 with a normal-looking JSON body carrying a "remark" like
+    `runtime error: Query timed out in "query" at line 3 after 30 seconds.`
+    and an elements list that is empty or truncated. Taking that at face value
+    caches "this part of the state has no police stations" forever - a missing
+    answer stored as a negative one, which is the exact failure this project
+    exists to avoid. Lowering the server timeout to 30s made it likelier, so it
+    has to be detected, not hoped about.
+    """
+    remark = str(doc.get("remark") or doc.get("error") or "").strip()
+    if not remark:
+        return None
+    if re.search(r"tim(ed|e)[ -]?out|timeout", remark, re.I):
+        return TimeoutError(f"Overpass: {remark}")
+    if re.search(r"error|exceed|abort|refus", remark, re.I):
+        return RuntimeError(f"Overpass: {remark}")
+    return None                          # a purely informational remark
+
+
+def _cache_read(path):
+    """(elements, fetched_iso) from a tile cache file, or None.
+
+    Accepts the older bare-list payload as well, reporting its date as unknown
+    rather than inventing one.
+    """
+    try:
+        with open(path, encoding="utf-8") as fh:
+            doc = json.load(fh)
+    except (OSError, ValueError):
+        return None                      # corrupt or unreadable: just refetch
+    if isinstance(doc, list):
+        return doc, ""                   # written before tiles carried a date
+    if isinstance(doc, dict) and isinstance(doc.get("elements"), list):
+        return doc["elements"], str(doc.get("fetched") or "")
+    return None
+
+
 def _overpass_tile(tile, mirrors, timeout, attempts, log, deadline=None,
-                   locks=None, start=0):
-    """One tile, cached on disk. Returns (elements, came_from_cache).
+                   locks=None, start=0, ttl_days=OSM_CACHE_TTL_DAYS):
+    """One tile. Returns (elements, came_from_cache, fetched_iso).
 
     A tile that has already been fetched is not fetched again: the public
     mirrors time out under load, and without a cache every retry throws away
-    the tiles that did work.
+    the tiles that did work. The cache entry carries the date it was fetched,
+    because the row written from it is stamped with that date - not with the
+    date the CSV happened to be written.
 
-    Mirrors are tried in an order ROTATED by `start`, so concurrent tiles do
-    not all queue behind the same mirror, and `locks` holds each mirror to one
-    in-flight request at a time. There is no sleep between attempts: rotating
-    to another mirror IS the retry, and sleeping only spends the budget.
+    Mirrors are tried in an order ROTATED by `start`, and `locks` holds each
+    mirror to one in-flight request at a time. Within one pass every mirror is
+    first tried WITHOUT waiting; only if all of them are busy with our own
+    other tiles does it wait for one. Reporting a tile as failed because we
+    were busy ourselves would blame the mirrors for our own scheduling.
     """
     import urllib.parse
     import urllib.request
 
-    path = _tile_cache_path(tile)
-    if os.path.exists(path):
-        try:
-            with open(path, encoding="utf-8") as fh:
-                return json.load(fh), True
-        except (OSError, ValueError):
-            pass                         # a corrupt cache file just gets refetched
+    hit = _cache_read(_tile_cache_path(tile))
+    if hit and _cache_fresh(hit[1], ttl_days):
+        return hit[0], True, hit[1]
 
     # A tile that was served as quarters last time is still fully cached - just
     # under four keys instead of one. Without this the parent gets asked for
     # again on every run, and it is exactly the tile the mirrors would not
     # serve, so every run pays for it. Edge duplicates are dropped downstream.
-    quarters = [_tile_cache_path(q) for q in split_tile(tile)]
-    if all(os.path.exists(q) for q in quarters):
-        try:
-            els = []
-            for q in quarters:
-                with open(q, encoding="utf-8") as fh:
-                    els.extend(json.load(fh))
-            return els, True
-        except (OSError, ValueError):
-            pass
+    quarters = [_cache_read(_tile_cache_path(x)) for x in split_tile(tile)]
+    if all(quarters) and all(_cache_fresh(h[1], ttl_days) for h in quarters):
+        els = [e for h in quarters for e in h[0]]
+        dates = [h[1] for h in quarters if h[1]]
+        return els, True, (min(dates) if dates else "")
 
     if not mirrors:
         raise RuntimeError("no Overpass mirror to ask")
     w, s_, e, n = tile
     q = OSM_QUERY.format(timeout=timeout, s=s_, w=w, n=n, e=e)
     order = list(mirrors)
-    if order:
-        k = start % len(order)
-        order = order[k:] + order[:k]
-    last, timeouts = None, 0
-    # One pass over the mirrors by default. A second pass would ask the same
-    # large question of the same busy mirrors; splitting the tile is the retry
-    # that actually changes the question.
+    k = start % len(order)
+    order = order[k:] + order[:k]
+    state = {"last": None, "timeouts": 0}
+
+    def ask(url):
+        """Returns elements, or None having recorded why not."""
+        # The server is told to give up at `timeout`; the socket allows that
+        # plus slack to send the answer back.
+        want = timeout + OSM_SOCKET_SLACK
+        sock = (max(5, min(want, int(deadline.left()))) if deadline is not None
+                else want)
+        try:
+            data = urllib.parse.urlencode({"data": q}).encode()
+            req = urllib.request.Request(url, data=data, headers=UA)
+            with urllib.request.urlopen(req, timeout=sock, context=SSL_CTX) as r:
+                doc = json.loads(
+                    _read_bounded(r, deadline).decode("utf-8", "replace"))
+            bad = _overpass_error(doc)
+            if bad is not None:
+                raise bad
+            return doc.get("elements") or []
+        except Exception as ex:                     # noqa: BLE001
+            state["last"] = ex
+            if _is_timeout(ex):
+                state["timeouts"] += 1
+            return None
+
     for _attempt in range(max(1, attempts)):
-        for url in order:
-            # The server is told to give up at `timeout`; the socket allows
-            # that plus slack to send the answer back.
-            want = timeout + OSM_SOCKET_SLACK
-            if deadline is not None:
-                if deadline.expired():
-                    raise TimeoutError("deadline reached")
-                # never wait longer than the budget has left
-                sock = max(5, min(want, int(deadline.left())))
-            else:
-                sock = want
-            lock = (locks or {}).get(url)
-            if lock is not None:
-                # If this mirror is already serving one of our tiles, move on
-                # to the next one rather than queueing behind ourselves. On the
-                # LAST pass, wait for a mirror instead: reporting a tile as
-                # failed because our own other tiles were busy would be a lie.
-                if _attempt >= max(1, attempts) - 1:
-                    wait = (30 if deadline is None
-                            else max(1, min(30, deadline.left())))
-                    if not lock.acquire(timeout=wait):
-                        continue
-                elif not lock.acquire(blocking=False):
-                    continue
-            try:
-                data = urllib.parse.urlencode({"data": q}).encode()
-                req = urllib.request.Request(url, data=data, headers=UA)
-                with urllib.request.urlopen(req, timeout=sock, context=SSL_CTX) as r:
-                    doc = json.loads(r.read().decode("utf-8", "replace"))
-                els = doc.get("elements") or []
-                _write_cache(path, els)
-                return els, False
-            except Exception as ex:                 # noqa: BLE001
-                last = ex
-                if _is_timeout(ex):
-                    timeouts += 1
-            finally:
+        # Pass 1: every mirror that is free right now. Pass 2: wait for one,
+        # but only for the mirrors we skipped - never re-ask one that answered
+        # with a failure, since that is the same question again.
+        busy = []
+        for phase in (0, 1):
+            for url in (order if phase == 0 else busy):
+                if deadline is not None:
+                    if deadline.expired():
+                        raise TimeoutError("deadline reached")
+                lock = (locks or {}).get(url)
                 if lock is not None:
-                    lock.release()
-            if timeouts >= OSM_TIMEOUTS_BEFORE_SPLIT:
-                # Two mirrors could not answer this box in time. A third will
-                # not tell us anything new; the caller splits it instead.
-                raise RuntimeError(
-                    f"timed out on {timeouts} mirrors at {timeout}s: "
-                    f"{redact_err(last)}") from last
-    if last is None:
-        # every mirror was busy on every pass and nothing was ever attempted
-        raise RuntimeError("no mirror was free to take this tile")
-    # EVERY failure leaves here as a RuntimeError, deliberately. The only
-    # TimeoutError this function raises is the shared deadline, above - which
-    # is what lets the caller tell "out of budget" (do not split, do not retry)
-    # apart from "this box was too much" (split it) with a plain isinstance.
-    raise RuntimeError(redact_err(last)) from last
+                    if phase == 0:
+                        if not lock.acquire(blocking=False):
+                            busy.append(url)
+                            continue
+                    else:
+                        wait = (30 if deadline is None
+                                else max(1, min(30, deadline.left())))
+                        if not lock.acquire(timeout=wait):
+                            continue
+                try:
+                    els = ask(url)
+                finally:
+                    if lock is not None:
+                        lock.release()
+                if els is not None:
+                    # The cache write is OUTSIDE the request's error handling
+                    # on purpose. An unwritable ~/.cache used to discard a
+                    # response that had already been fetched correctly and
+                    # report it as a mirror failure - losing real data, and
+                    # blaming the wrong thing for it.
+                    fetched = today_iso()
+                    try:
+                        _write_cache(_tile_cache_path(tile), els, fetched)
+                    except OSError as ex:
+                        log(f"      (fetched, but could not cache this tile: "
+                            f"{redact_err(ex)})")
+                    return els, False, fetched
+                if state["timeouts"] >= OSM_TIMEOUTS_BEFORE_SPLIT:
+                    # Two mirrors could not answer this box in time. A third
+                    # will not tell us anything new; the caller splits it.
+                    raise RuntimeError(
+                        f"timed out on {state['timeouts']} mirrors at "
+                        f"{timeout}s: {redact_err(state['last'])}"
+                    ) from state["last"]
+
+    if state["last"] is None:
+        # Nothing was ever asked: every mirror was serving one of our own other
+        # tiles for the whole wait. That is our scheduling, not a mirror
+        # failure, and it must not be reported as one or split as if the box
+        # were too big.
+        raise MirrorsBusy("every mirror was busy with this run's other tiles")
+    # EVERY server failure leaves here as a RuntimeError, deliberately. The
+    # only TimeoutError this function raises is the shared deadline, above -
+    # which is what lets the caller tell "out of budget" (do not split, do not
+    # retry) apart from "this box was too much" (split it) with an isinstance.
+    raise RuntimeError(redact_err(state["last"])) from state["last"]
 
 
 def _write_json_atomic(path, payload):
@@ -1127,15 +1255,20 @@ def _write_json_atomic(path, payload):
                 pass
 
 
-def _write_cache(path, els):
-    """One tile's elements, atomically."""
-    _write_json_atomic(path, els)
+def _write_cache(path, els, fetched=None):
+    """One tile's elements and the date they were fetched, atomically.
+
+    The date is the point: the CSV row built from this tile is stamped with
+    it, so a row can never claim a fetch date the data does not have.
+    """
+    _write_json_atomic(path, {"fetched": fetched or today_iso(),
+                              "elements": els})
 
 
 def _run_tiles(items, mirrors, timeout, attempts, log, clock, jobs, locks):
     """Fetch `items` ([(key, tile)]) concurrently. Returns (ok, bad).
 
-    ok  = {key: (elements, from_cache)}
+    ok  = {key: (elements, from_cache, fetched_iso)}
     bad = {key: exception}
 
     Results are keyed, never appended, so the caller can reassemble them in
@@ -1154,7 +1287,8 @@ def _run_tiles(items, mirrors, timeout, attempts, log, clock, jobs, locks):
         return _overpass_tile(tile, mirrors, timeout, attempts, say,
                               deadline=clock, locks=locks, start=i)
 
-    with ThreadPoolExecutor(max_workers=max(1, jobs)) as pool:
+    pool = ThreadPoolExecutor(max_workers=max(1, jobs))
+    try:
         futures = {}
         for i, (key, tile) in enumerate(items):
             futures[pool.submit(work, i, key, tile)] = (key, tile)
@@ -1171,16 +1305,23 @@ def _run_tiles(items, mirrors, timeout, attempts, log, clock, jobs, locks):
                 else:
                     say(f"    {key}: FAILED - {redact_err(ex)}")
                 continue
-            els, from_cache = ok[key]
+            els, from_cache, _fetched = ok[key]
             say(f"    {key}: {len(els)} feature(s)"
                 f"{' (cached)' if from_cache else ''}"
                 f"   [{clock.elapsed():.0f}s used, {max(0, clock.left()):.0f}s left]")
+    except BaseException:
+        # Ctrl-C must actually stop. Without cancel_futures the pool drains
+        # every queued tile on the way out, so the interrupt appears to hang
+        # and the mirrors get hit for work nobody is waiting for any more.
+        pool.shutdown(wait=False, cancel_futures=True)
+        raise
+    pool.shutdown(wait=True)
     return ok, bad
 
 
 def fetch_osm(state_abbr, mirrors=None, log=print, bbox=None, timeout=30,
               attempts=1, allow_partial=False, deadline_s=OSM_DEADLINE_S,
-              jobs=OSM_JOBS, shapes=None, split=True):
+              jobs=OSM_JOBS, shapes=None, split=True, gaps_out=None):
     """[{name, phone, address, city, admintype, lon, lat}] inside `bbox`.
 
     Queried as a grid of tiles rather than one statewide request, because the
@@ -1216,8 +1357,11 @@ def fetch_osm(state_abbr, mirrors=None, log=print, bbox=None, timeout=30,
     # real failures are split - running out of budget is not a tile the mirrors
     # refused, and splitting it would just spend a budget that is already gone.
     parts = {}
+    # Split only what a SERVER refused. Running out of budget is not evidence
+    # the box is too big, and neither is our own scheduling holding the
+    # mirrors - splitting either just spends what is already gone.
     retry = [(k, t) for k, t in items
-             if k in bad and not isinstance(bad[k], TimeoutError)]
+             if k in bad and not isinstance(bad[k], (TimeoutError, MirrorsBusy))]
     if split and retry and not clock.expired():
         log(f"    retrying {len(retry)} failed tile(s) as quarters - a smaller "
             f"box is a cheaper question than the same one again")
@@ -1236,21 +1380,42 @@ def fetch_osm(state_abbr, mirrors=None, log=print, bbox=None, timeout=30,
                                   bad[k])
 
     failed = [(k, t) for k, t in items if k in bad]
-    cached = sum(1 for k, _ in items if k in ok and ok[k][1])
+    # A tile satisfied through the split path lives in `parts`, and its
+    # quarters can just as well have come off disk - counting only whole-tile
+    # keys under-reports the cache every time a split has ever happened.
+    cached = (sum(1 for k, _ in items if k in ok and ok[k][1])
+              + sum(1 for k in parts if all(p[1] for p in parts[k])))
+
+    # Every county under a tile we could not fetch. Returned to the caller, not
+    # just logged: without it the gap report calls these counties "no
+    # law-enforcement record at all - not in the source", which is a statement
+    # about the source that this run has no evidence for.
+    uncovered = sorted({g for _k, t in failed
+                        for g in counties_in_tile(shapes or [], t)})
+    if isinstance(gaps_out, dict):
+        gaps_out["uncovered"] = uncovered
+        gaps_out["failed_tiles"] = len(failed)
 
     if failed:
         out_of_time = sum(1 for k, _ in failed if isinstance(bad[k], TimeoutError))
+        busy = sum(1 for k, _ in failed if isinstance(bad[k], MirrorsBusy))
+        why = []
+        if out_of_time:
+            why.append(f"{out_of_time} ran out of the {deadline_s}s budget - "
+                       f"raise it with --deadline")
+        if busy:
+            why.append(f"{busy} never reached a mirror because this run's own "
+                       f"other tiles were holding them - lower --jobs")
         msg = (f"{len(failed)} of {len(tiles)} tiles failed"
-               + (f" ({out_of_time} ran out of the {deadline_s}s budget; raise it "
-                  f"with --deadline)" if out_of_time else "")
+               + (f" ({'; '.join(why)})" if why else "")
                + f". {len(tiles) - len(failed)} succeeded and are CACHED, so running "
-               f"this again will only refetch the failures - the public mirrors "
-               f"are rate-limited, not broken. Wait a minute and retry.")
-        if shapes:
-            hit = sorted({g for k, t in failed for g in counties_in_tile(shapes, t)})
-            msg += (f" {len(hit)} count{'y' if len(hit) == 1 else 'ies'} sit under "
-                    f"those tiles and would come back empty: "
-                    f"{', '.join(hit[:12])}{' ...' if len(hit) > 12 else ''}.")
+               f"this again will only refetch the failures.")
+        if uncovered:
+            msg += (f" {len(uncovered)} count"
+                    f"{'y' if len(uncovered) == 1 else 'ies'} sit under those "
+                    f"tiles and would come back empty: "
+                    f"{', '.join(uncovered[:12])}"
+                    f"{' ...' if len(uncovered) > 12 else ''}.")
         if not allow_partial:
             raise RuntimeError(msg + " Use --allow-partial to accept an "
                                      "incomplete result anyway.")
@@ -1261,21 +1426,26 @@ def fetch_osm(state_abbr, mirrors=None, log=print, bbox=None, timeout=30,
     if cached:
         log(f"    {cached} of {len(tiles)} tiles came from the local cache")
 
-    # Reassemble in TILE ORDER, not completion order. Threads finish in
-    # whatever order the mirrors answer, and pick_sheriffs keeps the first
-    # match per county - so an unordered list would pick a different agency
-    # from one run to the next with no data having changed.
+    # Collect with each element's own fetch date, then sort into a CANONICAL
+    # order by (type, id). Tile order is not enough: the same box served as
+    # four quarters yields a different sequence than the same box served whole,
+    # and a tile read back from four cache files yields a third. pick_sheriffs
+    # breaks ties on first-seen, so those three would pick different agencies
+    # from identical data. (type, id) is the source's own identity and does not
+    # depend on how the fetch happened to be carved up.
     elements = []
     for k, _t in items:
         if k in parts:
-            for els, _c in parts[k]:
-                elements.extend(els)
+            for els, _c, fetched in parts[k]:
+                elements.extend((e, fetched) for e in els)
         elif k in ok:
-            elements.extend(ok[k][0])
+            elements.extend((e, ok[k][2]) for e in ok[k][0])
+    elements.sort(key=lambda p: (str(p[0].get("type") or ""),
+                                 str(p[0].get("id") or "")))
 
     # Tiles overlap at their edges and a way can be returned by two of them.
     seen, out = set(), []
-    for el in elements:
+    for el, fetched in elements:
         key = (el.get("type"), el.get("id"))
         if key in seen:
             continue
@@ -1300,7 +1470,10 @@ def fetch_osm(state_abbr, mirrors=None, log=print, bbox=None, timeout=30,
             "city": (t.get("addr:city") or "").strip(),
             # operator:type is how OSM records that an agency is county-run
             "admintype": (t.get("operator:type") or t.get("operator") or "").strip(),
-            "loaddate": "",
+            # The date THIS element's tile was fetched, which is what the row
+            # is stamped with. A cached tile is not "fetched today" just
+            # because the CSV is written today.
+            "loaddate": fetched,
             "lon": float(lon), "lat": float(lat),
         })
     return out
@@ -1387,7 +1560,8 @@ def suggest_widening(unmatched, match, hints=COUNTY_LE_HINTS):
     return sorted(out, key=lambda t: (-t[1], t[0]))
 
 
-def report_gaps(state, geoids, names, records, chosen, match, log=print):
+def report_gaps(state, geoids, names, records, chosen, match, log=print,
+                uncovered=()):
     """Say exactly WHY each county came back without a sheriff.
 
     "52 of 87" is a number, not a diagnosis. A county with no row is either a
@@ -1409,8 +1583,15 @@ def report_gaps(state, geoids, names, records, chosen, match, log=print):
     def label(g):
         return f"{g} {names.get(g, '')}".strip()
 
+    # A county whose tile could not be fetched is NOT evidence about the
+    # source. Calling it "no law-enforcement record at all - not in the source"
+    # states something this run never established, and points at the wrong fix.
+    lost = set(uncovered or ())
     unmatched = sorted(g for g in geoids if g not in chosen and by_county.get(g))
-    empty = sorted(g for g in geoids if g not in chosen and not by_county.get(g))
+    empty = sorted(g for g in geoids
+                   if g not in chosen and not by_county.get(g) and g not in lost)
+    notfetched = sorted(g for g in geoids
+                        if g not in chosen and not by_county.get(g) and g in lost)
     withphone = sum(1 for r in chosen.values() if r.get("phone"))
     withsite = sum(1 for r in chosen.values() if r.get("website"))
 
@@ -1420,7 +1601,9 @@ def report_gaps(state, geoids, names, records, chosen, match, log=print):
     # pushes every number out of its column and the report stops being
     # scannable, which is the only thing it is for.
     log(f"  filter: /{match}/i")
-    log(f"  matched and written                   : {len(chosen)}")
+    # "written" would be a lie: the write loop skips counties already in the
+    # CSV unless --overwrite is given, and this is coverage, not a write count.
+    log(f"  counties with an agency               : {len(chosen)}")
     log(f"    ...of those carrying a phone number : {withphone}")
     log(f"    ...of those carrying a website      : {withsite}")
     log(f"  have records, none matched the filter : {len(unmatched)}"
@@ -1444,6 +1627,13 @@ def report_gaps(state, geoids, names, records, chosen, match, log=print):
         wider = "|".join([match] + [h for h, _n in helps])
         log(f"    python3 seed_le_contacts.py --state {state} --gaps \\")
         log(f"        --match '{wider}'")
+    if notfetched:
+        log(f"  NOT FETCHED - their tile failed        : {len(notfetched)}"
+            f"  <- unknown, not absent; re-run to fill")
+        for i in range(0, min(len(notfetched), 12), 3):
+            log("      " + "  ".join(f"{label(g):26s}" for g in notfetched[i:i + 3]))
+        if len(notfetched) > 12:
+            log(f"      ... and {len(notfetched) - 12} more")
     log(f"  no law-enforcement record at all      : {len(empty)}"
         f"{'  <- not in the source; no filter fixes this' if empty else ''}")
     for i in range(0, min(len(empty), 24), 3):
@@ -1463,13 +1653,15 @@ def today_iso():
     return _dt.date.today().isoformat()
 
 
-def _fetch_raw(state_abbr, use_osm, use_usgs, args, layer_id, shapes=None):
+def _fetch_raw(state_abbr, use_osm, use_usgs, args, layer_id, shapes=None,
+               gaps_out=None):
     """Whichever source is selected, in one place, returning one record shape."""
     if use_osm:
         return fetch_osm(state_abbr, allow_partial=args.allow_partial,
                          timeout=args.osm_timeout, attempts=args.osm_attempts,
                          deadline_s=args.deadline, jobs=args.jobs,
-                         shapes=shapes, split=not args.no_split)
+                         shapes=shapes, split=not args.no_split,
+                         gaps_out=gaps_out)
     if use_usgs:
         return fetch_usgs(state_abbr, args.usgs_layer)
     return fetch_state(STATE_FIPS[state_abbr], layer_id, args.endpoint)
