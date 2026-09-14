@@ -416,10 +416,11 @@ def main(argv=None):
                          f"spatial match instead of reusing the cached copy "
                          f"(cache expires after {SHAPES_TTL_DAYS} days)")
     ap.add_argument("--deadline", type=int, default=OSM_DEADLINE_S,
-                    help=f"wall-clock budget in seconds for the WHOLE Overpass "
+                    help=f"wall-clock budget in seconds for one STATE's Overpass "
                          f"fetch, tiles and retries included (default "
-                         f"{OSM_DEADLINE_S}). Tiles already fetched are cached, "
-                         f"so re-running resumes rather than starting over.")
+                         f"{OSM_DEADLINE_S}); --all gets this budget per state, "
+                         f"not in total. Tiles already fetched are cached, so "
+                         f"re-running resumes rather than starting over.")
     ap.add_argument("--osm-attempts", type=int, default=1,
                     help="how many times to cycle the Overpass mirrors per tile "
                          "(default 1). Asking a busy mirror the same large "
@@ -786,7 +787,8 @@ def county_shapes(state_fips, log=print, refresh=False, ttl_days=SHAPES_TTL_DAYS
                                       "vintage": vintage, "shapes": out,
                                       "names": names})
         except OSError as ex:            # a cache that cannot be written is
-            log(f"    (could not cache county shapes: {ex})")   # not an error
+            log(f"    (could not cache county shapes: "     # not an error
+                f"{redact_err(ex)})")
     return (out, names) if with_names else out
 
 
@@ -925,6 +927,21 @@ OSM_QUERY = """
 nwr["amenity"="police"]({s:.4f},{w:.4f},{n:.4f},{e:.4f});
 out center tags;
 """
+
+
+def _element_key(el):
+    """The source's own identity for an element, as a sortable key.
+
+    OSM ids are integers, so this sorts numerically - which is the order
+    Overpass itself returns, meaning a whole-tile fetch is already in canonical
+    order and the sort changes nothing. A non-integer id (nothing in OSM, but
+    the type is not ours to promise) still sorts deterministically rather than
+    raising on a mixed comparison.
+    """
+    i = el.get("id")
+    return (str(el.get("type") or ""),
+            i if isinstance(i, int) else 0,
+            "" if isinstance(i, int) else str(i))
 
 
 def bbox_of_shapes(shapes, pad=0.02):
@@ -1330,9 +1347,11 @@ def fetch_osm(state_abbr, mirrors=None, log=print, bbox=None, timeout=30,
     lands is CACHED, and a tile the mirrors will not serve is SPLIT into
     quarters and retried small instead of asked for again unchanged.
 
-    The whole fetch runs against ONE wall-clock budget (`deadline_s`). It stops
-    new requests; a request already in flight can still overrun it by up to
-    `timeout` seconds, because a socket read cannot be cancelled from here.
+    The whole fetch runs against ONE wall-clock budget (`deadline_s`), per
+    state - `--all` gets this budget for each state, not in total. It stops new
+    requests, and the response body is read in chunks with the budget checked
+    between them, so a mirror that trickles bytes cannot outlive it either. The
+    overrun is bounded by one chunk read, not by `timeout`.
 
     If any tile is still missing at the end, this RAISES rather than returning
     what it has: a partial set would put a sheriff in some counties and none in
@@ -1440,8 +1459,7 @@ def fetch_osm(state_abbr, mirrors=None, log=print, bbox=None, timeout=30,
                 elements.extend((e, fetched) for e in els)
         elif k in ok:
             elements.extend((e, ok[k][2]) for e in ok[k][0])
-    elements.sort(key=lambda p: (str(p[0].get("type") or ""),
-                                 str(p[0].get("id") or "")))
+    elements.sort(key=lambda p: _element_key(p[0]))
 
     # Tiles overlap at their edges and a way can be returned by two of them.
     seen, out = set(), []
@@ -1657,6 +1675,11 @@ def _fetch_raw(state_abbr, use_osm, use_usgs, args, layer_id, shapes=None,
                gaps_out=None):
     """Whichever source is selected, in one place, returning one record shape."""
     if use_osm:
+        if shapes is None and getattr(args, "refresh_shapes", False):
+            # --show went straight to fetch_osm, which fetches its own shapes
+            # with refresh defaulted off - so --refresh-shapes did nothing on
+            # the one path people use when they suspect the cache.
+            shapes = county_shapes(STATE_FIPS[state_abbr.upper()], refresh=True)
         return fetch_osm(state_abbr, allow_partial=args.allow_partial,
                          timeout=args.osm_timeout, attempts=args.osm_attempts,
                          deadline_s=args.deadline, jobs=args.jobs,
@@ -1680,7 +1703,8 @@ def dump_raw(state_abbr, use_osm, use_usgs, args, layer_id):
         # The same tiled, cached, deadline-bounded path the real fetch uses -
         # NOT a fresh whole-state query. A statewide box is what the mirrors
         # 504 on, and it would ignore tiles already sitting in the cache.
-        shapes = county_shapes(STATE_FIPS[state_abbr.upper()])
+        shapes = county_shapes(STATE_FIPS[state_abbr.upper()],
+                               refresh=getattr(args, "refresh_shapes", False))
         tiles = tile_bbox(bbox_of_shapes(shapes))
         clock = Deadline(getattr(args, "deadline", OSM_DEADLINE_S))
         w, s_, e, n = tiles[0]

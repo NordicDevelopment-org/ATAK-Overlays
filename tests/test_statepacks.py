@@ -1768,9 +1768,54 @@ def test_a_corrupt_cache_file_is_refetched_not_read_as_empty(monkeypatch, tmp_pa
 
 
 def test_the_cache_is_written_atomically_leaving_no_temp_files(monkeypatch, tmp_path):
+    """Asserting 'no .tmp files afterwards' is satisfied by a plain open() that
+    never made one. The claim is that the reader can never see a half-written
+    file, so the test is that the final name only ever appears via rename."""
     monkeypatch.setattr(sle, "CACHE_DIR", str(tmp_path))
-    sle._write_cache(sle._tile_cache_path((0.0, 0.0, 1.0, 1.0)), [{"id": 1}])
+    target = sle._tile_cache_path((0.0, 0.0, 1.0, 1.0))
+    renamed, opened = [], []
+    real_replace, real_open = os.replace, open
+
+    def spy_replace(src, dst):
+        renamed.append((src, dst))
+        return real_replace(src, dst)
+
+    def spy_open(path, mode="r", *a, **kw):
+        if "w" in mode or "a" in mode:
+            opened.append(str(path))
+        return real_open(path, mode, *a, **kw)
+
+    monkeypatch.setattr(os, "replace", spy_replace)
+    monkeypatch.setattr("builtins.open", spy_open)
+    sle._write_cache(target, [{"id": 1}])
+    monkeypatch.undo()
+
+    assert target not in opened, "the live cache file was written in place"
+    assert renamed and renamed[0][1] == target, renamed
     assert not [p for p in os.listdir(str(tmp_path)) if p.endswith(".tmp")]
+
+
+def test_a_failed_atomic_write_leaves_no_temp_file_behind(monkeypatch, tmp_path):
+    monkeypatch.setattr(sle, "CACHE_DIR", str(tmp_path))
+    monkeypatch.setattr(os, "replace",
+                        lambda *a: (_ for _ in ()).throw(OSError("nope")))
+    with pytest.raises(OSError):
+        sle._write_cache(sle._tile_cache_path((0.0, 0.0, 1.0, 1.0)), [{"id": 1}])
+    assert os.listdir(str(tmp_path)) == []
+
+
+def test_gaps_does_not_kill_a_run_that_has_no_boundaries(monkeypatch, tmp_path, capsys):
+    """--source hifld --gaps died with a NameError AFTER a successful fetch,
+    throwing the whole run away at the very last step."""
+    monkeypatch.setattr(sle, "CSV_PATH", str(tmp_path / "le.csv"))
+    monkeypatch.setattr(sle, "resolve_layer", lambda *a, **k: (1, "2025"))
+    monkeypatch.setattr(sle, "fetch_state", lambda *a, **k: [
+        {"geoid": "27025", "agency": "Chisago County Sheriff",
+         "phone": "651-555-0100", "address": "", "type": "county"}])
+    assert sle.main(["--state", "MN", "--source", "hifld", "--gaps"]) == 0
+    out = capsys.readouterr().out
+    assert "--gaps needs the county boundaries" in out, out
+    assert "1 row(s) written" in out, out
 
 
 def test_a_partial_result_names_the_counties_it_costs(monkeypatch, tmp_path):
@@ -2193,14 +2238,36 @@ def test_self_contention_is_not_reported_as_a_mirror_failure(monkeypatch, tmp_pa
                            deadline=sle.Deadline(2), locks=locks)
 
 
+class RecordingLock:
+    """A lock that remembers HOW it was acquired, not just whether.
+
+    Asserting on elapsed time would be measuring the machine; asserting that a
+    busy mirror was asked with blocking=False is the actual claim.
+    """
+
+    def __init__(self, held=False, log=None):
+        self.held = held
+        self.log = log if log is not None else []
+
+    def acquire(self, blocking=True, timeout=-1):
+        self.log.append(("blocking" if blocking else "nonblocking", timeout))
+        if self.held:
+            return False
+        self.held = True
+        return True
+
+    def release(self):
+        self.held = False
+
+
 def test_a_busy_mirror_is_skipped_before_it_is_waited_for(monkeypatch, tmp_path):
     """With --osm-attempts 1 the fast-skip used to be dead code, so every tile
-    blocked up to 30s on a mirror its own siblings were using."""
-    import threading
+    blocked for up to 30s on a mirror its own siblings were using."""
     monkeypatch.setattr(sle, "CACHE_DIR", str(tmp_path))
     mirrors = ["https://busy.invalid/i", "https://free.invalid/i"]
-    locks = {u: threading.Lock() for u in mirrors}
-    locks[mirrors[0]].acquire()                     # first choice is taken
+    calls = []
+    locks = {mirrors[0]: RecordingLock(held=True, log=calls),
+             mirrors[1]: RecordingLock(log=calls)}
     asked = []
 
     def fake(req, timeout=None, context=None):
@@ -2211,6 +2278,114 @@ def test_a_busy_mirror_is_skipped_before_it_is_waited_for(monkeypatch, tmp_path)
     sle._overpass_tile((0.0, 0.0, 1.0, 1.0), mirrors, 5, 1, lambda *a: None,
                        locks=locks, deadline=sle.Deadline(60))
     assert asked == [mirrors[1]], asked          # went straight to the free one
+    # and the busy one was never waited on
+    assert calls[0][0] == "nonblocking", calls
+    assert not any(kind == "blocking" for kind, _t in calls), calls
+
+
+def test_an_expired_tile_cache_is_refetched_not_served(monkeypatch, tmp_path):
+    """A months-old tile served silently, while the row built from it is
+    stamped with a fetch date, is a date invented for data nobody fetched."""
+    monkeypatch.setattr(sle, "CACHE_DIR", str(tmp_path))
+    tile = (0.0, 0.0, 1.0, 1.0)
+    sle._write_cache(sle._tile_cache_path(tile),
+                     [{"type": "node", "id": 1, "lat": 1, "lon": 1}],
+                     fetched="2000-01-01")
+    fetched_now = []
+
+    def fake(req, timeout=None, context=None):
+        fetched_now.append(req.full_url)
+        return FakeHTTP({"elements": [{"type": "node", "id": 2,
+                                       "lat": 1, "lon": 1}]})
+
+    monkeypatch.setattr("urllib.request.urlopen", fake)
+    els, from_cache, fetched = sle._overpass_tile(
+        tile, ["https://a.invalid/i"], 5, 1, lambda *a: None)
+    assert fetched_now, "served a cache entry from the year 2000"
+    assert not from_cache and [e["id"] for e in els] == [2]
+    assert fetched == TODAY
+
+    # a fresh entry IS still served
+    fetched_now.clear()
+    els, from_cache, fetched = sle._overpass_tile(
+        tile, ["https://a.invalid/i"], 5, 1, lambda *a: None)
+    assert from_cache and not fetched_now
+
+
+def test_an_undated_cache_entry_is_not_trusted_as_fresh(monkeypatch, tmp_path):
+    """The older format stored a bare list. Its age cannot be established, and
+    an unknown age must not pass as a fresh one."""
+    monkeypatch.setattr(sle, "CACHE_DIR", str(tmp_path))
+    tile = (0.0, 0.0, 1.0, 1.0)
+    os.makedirs(str(tmp_path), exist_ok=True)
+    with open(sle._tile_cache_path(tile), "w", encoding="utf-8") as fh:
+        json.dump([{"type": "node", "id": 1, "lat": 1, "lon": 1}], fh)
+    hit = []
+    monkeypatch.setattr("urllib.request.urlopen",
+                        lambda req, timeout=None, context=None:
+                        (hit.append(1), FakeHTTP({"elements": []}))[1])
+    sle._overpass_tile(tile, ["https://a.invalid/i"], 5, 1, lambda *a: None)
+    assert hit, "an undated cache entry was served as if it were current"
+
+
+def test_the_same_data_gives_the_same_order_however_it_was_carved_up(
+        monkeypatch, tmp_path):
+    """A box served whole, served as four quarters, and read back from four
+    cache files produced three different sequences. pick_sheriffs breaks ties
+    on first-seen, so that is the same data choosing different agencies."""
+    monkeypatch.setattr(sle, "CACHE_DIR", str(tmp_path))
+    bbox = (0.0, 0.0, 9.0, 9.0)
+    tiles = sle.tile_bbox(bbox)
+    # Overpass returns ascending id within type; give the tiles the reverse so
+    # a tile-order concatenation and a canonical sort cannot agree by accident.
+    def els_for(i):
+        return [{"type": "node", "id": 100 - i, "lat": 1.0, "lon": 1.0,
+                 "tags": {"name": f"PD {100 - i}"}}]
+
+    whole = {t: els_for(i) for i, t in enumerate(tiles)}
+    monkeypatch.setattr(sle, "_overpass_tile",
+                        lambda t, m, to, at, log, deadline=None, locks=None,
+                        start=0, **kw: (whole[t], False, TODAY))
+    a = [r["name"] for r in sle.fetch_osm("MN", bbox=bbox, log=lambda *x: None)]
+
+    # now the same elements, but every tile arrives as four quarters instead
+    quarters = {}
+    for t in tiles:
+        qs = sle.split_tile(t)
+        for j, q in enumerate(qs):
+            quarters[q] = whole[t] if j == 3 else []      # all in the LAST one
+    def split_stub(t, m, to, at, log, deadline=None, locks=None, start=0, **kw):
+        if t in quarters:
+            return (quarters[t], False, TODAY)
+        raise RuntimeError("HTTP Error 504: Gateway Timeout")   # forces a split
+
+    monkeypatch.setattr(sle, "_overpass_tile", split_stub)
+    b = [r["name"] for r in sle.fetch_osm("MN", bbox=bbox, log=lambda *x: None)]
+    assert a == b, "the same data ordered differently depending on the carve-up"
+    # and that order is the source's own: ascending id, which is what a
+    # whole-box Overpass response already gives
+    assert a == sorted(a, key=lambda n: int(n.split()[1])), a
+
+
+def test_main_reports_a_counties_lost_tile_as_unknown_not_as_absent(
+        monkeypatch, tmp_path, capsys):
+    """End to end: the uncovered list has to survive fetch_osm -> main ->
+    report_gaps, or --gaps tells the user the source has no sheriff there."""
+    monkeypatch.setattr(sle, "CSV_PATH", str(tmp_path / "le.csv"))
+    monkeypatch.setattr(sle, "CACHE_DIR", str(tmp_path / "cache"))
+    shapes = [("27001", [[[[0.1, 0.1], [1.0, 0.1], [1.0, 1.0], [0.1, 1.0], [0.1, 0.1]]]])]
+    monkeypatch.setattr(sle, "county_shapes",
+                        lambda sfp, log=print, with_names=False, **kw:
+                        ((shapes, {"27001": "Aitkin County"}) if with_names
+                         else shapes))
+    monkeypatch.setattr(sle, "_overpass_tile",
+                        lambda *a, **kw: (_ for _ in ()).throw(
+                            RuntimeError("HTTP Error 504: Gateway Timeout")))
+    sle.main(["--state", "MN", "--source", "osm", "--gaps", "--allow-partial",
+              "--no-split"])
+    out = capsys.readouterr().out
+    assert "NOT FETCHED" in out and "Aitkin County" in out, out
+    assert "no law-enforcement record at all      : 0" in out, out
 
 
 def test_the_default_job_count_is_actually_concurrent(monkeypatch, tmp_path):
