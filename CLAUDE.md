@@ -81,7 +81,21 @@ the syntax and standard-library usage compatible with the oldest of those.
 
 The catalog was assembled in September 2026 from documentation and
 search-verified endpoints; the data hosts were unreachable from the build
-environment, so nothing has been confirmed live. `docs/SOURCES.md` records
+environment, so almost nothing has been confirmed live.
+
+**Confirmed live 2026-09-14, on an Android device via Termux** (the build
+environment still cannot reach these):
+- TIGERweb `State_County/MapServer/1` - 87 Minnesota counties, carrying GEOID,
+  NAME, BASENAME, AREALAND, AREAWATER. The service stacks four vintages
+  (top level = Current, plus groups "BAS 2026", "ACS 2025", "Census 2020") and
+  repeats each at seven generalization levels, which is why "Counties" appears
+  28 times. `statepacks/tiger_diagnose.py` prints the tree and tests each one.
+- A full MN county pack built from it renders correctly in ATAK-CIV: boundaries
+  follow the real county lines, the metadata popup shows every field with its
+  vintage, and ALAND-derived land area checks out (Kanabec 521.6 sq mi).
+- `api.census.gov` ACS 5-year returned a non-JSON body from the same device;
+  population and housing are unresolved. `statepacks/acs_diagnose.py` is the
+  next step. `docs/SOURCES.md` records
 per-source confidence and 2026 status. Run
 `overlaybuilder doctor --aoi <aoi> [--include-disabled]` on a connected
 machine before trusting a pack.
