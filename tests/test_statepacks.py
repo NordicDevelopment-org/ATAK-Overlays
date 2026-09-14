@@ -5,6 +5,7 @@ MN_PACK = "MN_Counties__2024.kmz"
 No network: every fetch is monkeypatched. What is being proved here is that the
 builder never invents a value and never mangles a shape.
 """
+import html
 import importlib.util
 import json
 import os
@@ -2728,3 +2729,104 @@ def test_the_socket_outlives_the_server_timeout_by_the_slack(monkeypatch, tmp_pa
     sle._overpass_tile((0.0, 0.0, 1.0, 1.0), ["https://a.invalid/i"],
                        sle.OSM_SERVER_TIMEOUT_S, 1, lambda *a: None)
     assert seen == [sle.OSM_SERVER_TIMEOUT_S + sle.OSM_SOCKET_SLACK], seen
+
+
+# --------------------------------------------------------------------------
+# Two mutations to build_county_pack.py that left the whole suite green.
+# "Either find the data or delete the empty parts" was the rule, and nothing
+# was checking the second half of it.
+# --------------------------------------------------------------------------
+def _popup_of(monkeypatch, tmp_path, props, meta_over=None, csvs=None):
+    """Build a one-county pack and return its popup CDATA, unescaped."""
+    data = tmp_path / "data"
+    data.mkdir(exist_ok=True)
+    for name, text in (csvs or {}).items():
+        (data / name).write_text(text, encoding="utf-8")
+    monkeypatch.setattr(bcp, "DATA_DIR", str(data))
+    monkeypatch.setattr(bcp, "fetch_acs", lambda *a, **k: (meta_over or {}))
+    monkeypatch.setattr(bcp, "fetch_counties", lambda sfp, ep=None, alts=None,
+                        log=print: ([{
+                            "properties": props,
+                            "geometry": {"type": "Polygon", "coordinates": [[
+                                [-93.0, 45.0], [-92.0, 45.0], [-92.0, 46.0],
+                                [-93.0, 46.0], [-93.0, 45.0]]]}}],
+                            "https://tigerweb/1", "Current"))
+    r = bcp.build_state("MN", str(tmp_path), log=lambda *a: None,
+                        today="2026-09-16")
+    kml = zipfile.ZipFile(r["path"]).read("doc.kml").decode()
+    # The FIRST CDATA is the Document description; the county's popup is the
+    # one carrying its identity row.
+    blocks = re.findall(r"<!\[CDATA\[(.*?)\]\]>", kml, re.S)
+    for b in blocks:
+        if "FIPS (GEOID)" in b:
+            return html.unescape(b)
+    raise AssertionError(f"no county popup among {len(blocks)} CDATA blocks")
+
+
+def test_a_field_with_no_value_is_left_out_of_the_popup_entirely(
+        monkeypatch, tmp_path):
+    """The rule is "if no sheriff phone, then don't" - not "show it blank".
+    A rendered "LE non-emergency: [OpenStreetMap 2026-09-14]" with nothing in
+    front of the bracket reads as a number that failed to load."""
+    body = _popup_of(monkeypatch, tmp_path,
+                     {"GEOID": "27065", "NAME": "Kanabec County",
+                      "AREALAND": 1351000000},
+                     csvs={"le_contacts.local.csv":
+                           "geoid,agency,phone,source,vintage\n"
+                           "27065,Kanabec County Sheriff,,OpenStreetMap,2026-09-14\n"})
+    assert "Sheriff / primary LE:" in body          # the name IS there
+    assert "Kanabec County Sheriff" in body
+    # ...and the phone line is not rendered at all
+    assert "LE non-emergency:" not in body, body
+    # it is accounted for, once, at the bottom
+    assert "No data for:" in body and "LE non-emergency" in body
+    # and no field is rendered with an empty value
+    assert "<b></b>" not in body and ": <b> " not in body
+
+
+def test_no_popup_line_is_ever_rendered_with_an_empty_value(monkeypatch, tmp_path):
+    """The general form of the same rule: every rendered row has a value."""
+    body = _popup_of(monkeypatch, tmp_path,
+                     {"GEOID": "27065", "NAME": "Kanabec County"})
+    # Only the field rows. Everything after <hr/> is the provenance footer,
+    # which is prose and a URL, not label/value pairs.
+    for line in body.split("<hr/>")[0].split("<br/>"):
+        if ":" not in line or "No data for" in line:
+            continue
+        value = line.split(":", 1)[1]
+        assert re.search(r"<b>\s*\S", value), f"empty value rendered: {line!r}"
+
+
+def test_land_area_comes_from_aland_not_the_projected_shape_area(
+        monkeypatch, tmp_path):
+    """Shape__Area is in the service's projection and is off by about a factor
+    of two at Minnesota's latitude. ALAND is real square metres, which is why
+    Kanabec checks out at 521.6 sq mi against the published figure."""
+    body = _popup_of(monkeypatch, tmp_path, {
+        "GEOID": "27065", "NAME": "Kanabec County",
+        "AREALAND": 1351000000,          # 521.6 sq mi
+        "Shape__Area": 2900000000,       # projected, ~2x
+    })
+    assert "521.6 sq mi" in body, body
+    assert "TIGER AREALAND" in body or "TIGER ALAND" in body, body
+    # the projected figure must not appear at all
+    assert "1,119" not in body and "1119" not in body
+
+
+def test_the_pack_filename_keeps_its_identity_version_boundary(
+        monkeypatch, tmp_path):
+    """atak-install.sh retires an older edition by splitting on "__". Without
+    it a rebuild leaves the previous pack drawing underneath this one."""
+    monkeypatch.setattr(bcp, "fetch_acs", lambda *a, **k: {})
+    monkeypatch.setattr(bcp, "fetch_counties", lambda sfp, ep=None, alts=None,
+                        log=print: ([{
+                            "properties": {"GEOID": "27065", "NAME": "Kanabec County"},
+                            "geometry": {"type": "Polygon", "coordinates": [[
+                                [-93.0, 45.0], [-92.0, 45.0], [-92.0, 46.0],
+                                [-93.0, 46.0], [-93.0, 45.0]]]}}],
+                            "https://tigerweb/1", "Current"))
+    r = bcp.build_state("MN", str(tmp_path), log=lambda *a: None, today="2026-09-16")
+    name = os.path.basename(r["path"])
+    assert name.count("__") == 1, name
+    family, _, edition = name.partition("__")
+    assert family == "MN_Counties" and edition.endswith(".kmz") and edition != ".kmz"

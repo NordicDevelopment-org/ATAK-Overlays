@@ -653,3 +653,31 @@ type is a new builder next to `build_county_pack.py` that emits
 Planned next: municipal boundaries, PSAP/dispatch zones, public-safety
 infrastructure. The critical-infrastructure sector packs (power, water, comms,
 emergency) already exist in the parent repo — see the top-level `README.md`.
+
+### Where this is now
+
+Verified end to end on an Android device, 2026-09-14, for Minnesota:
+
+| | |
+|---|---|
+| `./make-state-pack.sh MN --install` | runs clean, pack renders in ATAK-CIV |
+| Boundary, FIPS, land/water area | 87 of 87 |
+| Population, housing (ACS, needs a key) | 87 of 87 |
+| County seat (Wikidata) | 87 of 87 |
+| Sheriff / primary LE (OSM) | 65 of 87 |
+| LE non-emergency phone | 4 of 87 — this is the ceiling, see §7 |
+
+Untried, and the most likely places for the next surprise:
+
+- **Any state other than MN.** Nothing is MN-specific by design, and LA / PR /
+  DC / AK packs build correctly offline, but no other state has been fetched
+  live. Alaska is the interesting one: it is the only state that straddles the
+  antimeridian, and the two-bounding-box path has never met real data.
+- **`--all-states`.** Each state gets its own `--deadline`, so 52 states is 52
+  budgets, and the Overpass mirrors will rate-limit long before the end. Run
+  states in small batches until that is measured.
+- **A state much bigger than MN** (TX, CA). The tile grid is a fixed 3x3, so
+  those tiles are far larger; they will lean on the split-on-timeout path much
+  harder than Minnesota does.
+- **`--per-county`** builds one KMZ per county. It works, but 87 files has not
+  been installed into ATAK in anger.

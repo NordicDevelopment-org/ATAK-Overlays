@@ -52,7 +52,22 @@ overlaybuilder demo                  # sample pack still builds and parses
 ```
 
 CI runs the suite on Python 3.10-3.13 (the versions actually tested), so keep
-the syntax and standard-library usage compatible with the oldest of those.
+the syntax and standard-library usage compatible with the oldest of those. Run
+all four before pushing - a green 3.11 is not a green gate.
+
+**A green suite is not the same as a tested behaviour.** After fixing anything
+that a test should have caught, add it to `statepacks/tools/mutation_check.py`
+and run it:
+
+```bash
+python3 statepacks/tools/mutation_check.py    # break each rule, expect a failure
+```
+
+It breaks one behaviour at a time and checks that some test notices. Six
+entries survived when they were first written - including "if no sheriff phone,
+then don't" and `OSM_JOBS = 1`, which silently undoes concurrent tile fetching.
+It reverts with `git checkout --`, so commit first; it refuses to run against a
+dirty tree because it has eaten uncommitted work once.
 
 ## Conventions that bite
 
@@ -132,7 +147,7 @@ environment still cannot reach these):
   caches an Overpass response has to check for that or it stores "there is
   nothing here" permanently.
   **`[timeout:90]` serves all nine MN tiles; `[timeout:30]` fails five of
-  them** - measured 2026-09-15, same tiles, same mirrors. Lowering it to make
+  them** - measured 2026-09-14, same tiles, same mirrors. Lowering it to make
   failures arrive sooner turned successes into failures, and each failure then
   split into four more requests, which earned an HTTP 429. Do not lower the
   server timeout without evidence from a real run.
