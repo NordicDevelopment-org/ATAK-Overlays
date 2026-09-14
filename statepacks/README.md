@@ -270,26 +270,54 @@ If you came here from a script that hit one state's GIS server directly:
 
 ## 10. When an endpoint will not connect
 
-`--probe` does not just pass or fail — it **prints each MapServer's layer list
-with ids and names**, so you can read the right layer straight off:
+### First: find the right layer
+
+The TIGERweb State_County service holds **several vintages side by side** —
+Current, ACS 2025, Census 2020, BAS 2026 — each with its own States and
+Counties layer. A flat listing shows "Counties" a dozen times and tells you
+nothing about which one you are querying. Run this before anything else:
+
+```bash
+python3 tiger_diagnose.py --state MN
+```
+
+It prints the layer tree (which group each layer belongs to), then runs a real
+county query against every Counties-looking layer and reports the row count,
+the field names, and whether the fields the builder needs are present. It ends
+with the exact `--endpoint` to use.
+
+> The output below is an **example of what you will see** — do not paste it
+> into the shell.
+
+<pre>
+LAYER TREE
+    0        States                      under: -
+    1        Counties                    under: -
+   17  GROUP  BAS 2026                   under: -
+   19        Counties                    under: BAS 2026
+
+TESTING 12 county layer(s) with a real query for MN (expect 87 counties)
+
+  layer   1  (under (top level))  87 rows  OK
+       fields: OID, GEOID, STATE, COUNTY, BASENAME, NAME, AREALAND, AREAWATER ...
+       builder needs: have ['GEOID', 'NAME', 'BASENAME', 'AREALAND', ...]
+       sample: {'GEOID': '27025', 'NAME': 'Chisago County', 'AREALAND': 1072...}
+
+==============================================================
+USE THIS:  --endpoint https://.../State_County/MapServer/1
+           (87 MN counties, group: (top level))
+</pre>
+
+### Then check the rest
 
 ```bash
 python3 build_county_pack.py --probe
 ```
 
-```
-BOUNDARIES (county polygons)
-  OK    https://tigerweb.geo.census.gov/.../State_County/MapServer/1
-        name='Counties'  geometryType='esriGeometryPolygon'
-        vintage reported: 2024
-        layers at .../State_County/MapServer:
-            0  States
-            1  Counties  <-- counties?
-```
-
-| What probe says | What to do |
+| What you see | What to do |
 |---|---|
-| A different id is marked `<-- counties?` | `--endpoint https://.../MapServer/<that id>` |
+| `tiger_diagnose.py` names a layer | use its `--endpoint` line verbatim |
+| Row count is wrong for your state | that layer is a different vintage or geography — try the next one it lists |
 | All three boundary URLs DEAD, everything else OK | the service moved. Browse `https://tigerweb.geo.census.gov/arcgis/rest/services?f=pjson` and find the current county service. |
 | Everything DEAD | you are offline, or on a network that blocks Census. Try mobile data. |
 | Boundaries OK, ACS DEAD | build anyway — population/housing render `not in dataset` and you can rerun later |
