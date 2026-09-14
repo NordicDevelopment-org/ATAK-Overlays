@@ -15,6 +15,7 @@ Everything you need, and nothing else:
 
 | What | Why | Installed by |
 |---|---|---|
+| **Census API key** | population + housing. **Required** — a keyless request returns an HTML page, not data | you, free + instant: [api.census.gov/data/key_signup.html](https://api.census.gov/data/key_signup.html) |
 | **Termux** | the shell this all runs in | [F-Droid](https://f-droid.org/packages/com.termux/) — **not** the Play Store version, it is stale |
 | **python** (3.8+) | runs the builders | `atak-setup.sh` |
 | **git** | clone / update this repo | `atak-setup.sh` |
@@ -51,9 +52,27 @@ Open ATAK once before continuing, so it creates its folders.
 
 ```bash
 cd ~/atak-packs/ATAK-Overlays/statepacks
+export CENSUS_API_KEY=your_key_here
 python3 build_county_pack.py --probe
 python3 build_county_pack.py --state MN --out ~/atak-packs/out
 ```
+
+Make the key stick across Termux sessions:
+
+```bash
+echo 'export CENSUS_API_KEY=your_key_here' >> ~/.bashrc
+```
+
+Or save it once, outside the repo so it can never be committed:
+
+```bash
+mkdir -p ~/.config/atak-statepacks
+echo your_key_here > ~/.config/atak-statepacks/census_key
+```
+
+**Without a key the pack still builds** — boundaries, FIPS and land/water area
+all come from TIGERweb, which needs no key. Only population and housing read
+`not in dataset`.
 
 Swap `MN` for any state. `--probe` first is worth the ten seconds: it checks
 the Census endpoints are answering before you spend a download on them.
@@ -321,6 +340,8 @@ python3 build_county_pack.py --probe
 | All three boundary URLs DEAD, everything else OK | the service moved. Browse `https://tigerweb.geo.census.gov/arcgis/rest/services?f=pjson` and find the current county service. |
 | Everything DEAD | you are offline, or on a network that blocks Census. Try mobile data. |
 | Boundaries OK, ACS DEAD | build anyway — population/housing render `not in dataset` and you can rerun later |
+| `NO KEY` / `MISSING KEY` | the Census API needs a key: [get one free](https://api.census.gov/data/key_signup.html), then `export CENSUS_API_KEY=...` |
+| `INVALID KEY` | the key was sent but rejected — check for a stray space or newline |
 | `CONNECT tunnel failed, 403` | a proxy is blocking it, not the server |
 
 Inspect any service by hand — this is just a URL:

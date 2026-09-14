@@ -90,12 +90,21 @@ TIGERWEB_ALTERNATES = [
     "https://tigerweb.geo.census.gov/arcgis/rest/services/Basemaps/CBSA/MapServer/6",
 ]
 
-# ACS 5-year detailed tables. Keyless use is allowed at low volume.
+# ACS 5-year detailed tables.
 #   B01003_001E = total population
 #   B25001_001E = total housing units
+#
+# A KEY IS REQUIRED. Verified on-device 2026-09-14: a keyless request returns
+# HTTP 200 with an HTML page titled "Missing Key", not an error status and not
+# JSON - which is why it first surfaced as a json decode failure. The key is
+# free and instant: https://api.census.gov/data/key_signup.html
 ACS_YEAR = 2023
 ACS_BASE = "https://api.census.gov/data/{year}/acs/acs5"
 ACS_VARS = {"population": "B01003_001E", "housing_units": "B25001_001E"}
+ACS_KEY_SIGNUP = "https://api.census.gov/data/key_signup.html"
+# Kept outside the repo so a key can never be committed by accident.
+KEY_FILE = os.path.join(os.path.expanduser("~"), ".config",
+                        "atak-statepacks", "census_key")
 
 # The boundary vintage is READ FROM THE SERVICE at build time (see
 # service_vintage). This is only the fallback label used when the service does
@@ -170,6 +179,41 @@ def http_get(url, params=None, tries=4, timeout=120):
 
 def get_json(url, params=None, **kw):
     return json.loads(http_get(url, params, **kw).decode("utf-8", "replace"))
+
+
+def census_key(explicit=None):
+    """The Census API key: --census-key, then $CENSUS_API_KEY, then the key file.
+
+    Returns "" when there is none, so the caller can say so plainly rather than
+    firing off a request that comes back as an HTML page.
+    """
+    if explicit:
+        return explicit.strip()
+    env = os.environ.get("CENSUS_API_KEY", "").strip()
+    if env:
+        return env
+    try:
+        with open(KEY_FILE, encoding="utf-8") as fh:
+            return fh.read().strip()
+    except OSError:
+        return ""
+
+
+class MissingCensusKey(RuntimeError):
+    """Raised with instructions, not a stack trace, when no key is configured."""
+
+    def __init__(self):
+        super().__init__(
+            "the Census API requires a key (a keyless request returns an HTML "
+            f'page titled "Missing Key").\n'
+            f"    Get one free, instantly: {ACS_KEY_SIGNUP}\n"
+            f"    Then either:\n"
+            f"      export CENSUS_API_KEY=your_key_here\n"
+            f"      (add that line to ~/.bashrc to make it stick)\n"
+            f"    or save it once:\n"
+            f"      mkdir -p {os.path.dirname(KEY_FILE)} && "
+            f"echo your_key_here > {KEY_FILE}\n"
+            f"    or pass it per run:  --census-key your_key_here")
 
 
 # --------------------------------------------------------------------------
@@ -332,21 +376,45 @@ def fetch_counties(state_fips, endpoint=TIGERWEB, alternates=None, log=print):
 # --------------------------------------------------------------------------
 # Fetch: population and housing units, with an explicit vintage
 # --------------------------------------------------------------------------
-def fetch_acs(state_fips, year=ACS_YEAR, log=print):
+def fetch_acs(state_fips, year=ACS_YEAR, log=print, key=None):
     """{county_fips3: {"population": Sourced, "housing_units": Sourced}}.
 
     Returns {} and logs if ACS will not answer - the pack is still worth
     building with the boundaries and land areas, it just says so in the popup.
     """
+    k = census_key(key)
+    if not k:
+        log(f"    [!] {MissingCensusKey()}")
+        log("    population and housing will read 'not in dataset'")
+        return {}
+
     url = ACS_BASE.format(year=year)
+    params = {
+        "get": "NAME," + ",".join(ACS_VARS.values()),
+        "for": "county:*",
+        "in": f"state:{state_fips}",
+        "key": k,
+    }
     try:
-        rows = get_json(url, {
-            "get": "NAME," + ",".join(ACS_VARS.values()),
-            "for": "county:*",
-            "in": f"state:{state_fips}",
-        })
+        raw = http_get(url, params).decode("utf-8", "replace")
     except Exception as e:                          # noqa: BLE001
         log(f"    [!] ACS {year} unavailable ({e}); population/housing omitted")
+        return {}
+
+    # The API answers a bad or missing key with HTTP 200 and an HTML page, so a
+    # plain json.loads would report a decode error and hide the real cause.
+    head = raw.lstrip()[:400].lower()
+    if head.startswith("<"):
+        why = ("the key was rejected" if "invalid key" in head
+               else "no key reached the API" if "missing key" in head
+               else "the API returned an HTML page instead of data")
+        log(f"    [!] ACS {year}: {why}. Check CENSUS_API_KEY, or get one at "
+            f"{ACS_KEY_SIGNUP}")
+        return {}
+    try:
+        rows = json.loads(raw)
+    except ValueError as e:
+        log(f"    [!] ACS {year} returned unparseable data ({e}); omitted")
         return {}
 
     # The docstring promises this degrades rather than kills the pack, so the
@@ -532,7 +600,8 @@ def safe(name):
 # Build one state
 # --------------------------------------------------------------------------
 def build_state(state_abbr, out_dir, acs_year=ACS_YEAR, per_county=False,
-                endpoint=TIGERWEB, precision=6, log=print, today=None):
+                endpoint=TIGERWEB, precision=6, log=print, today=None,
+                census_api_key=None):
     import datetime as _dt
     built = today or _dt.date.today().isoformat()
     sfp = STATE_FIPS[state_abbr]
@@ -542,7 +611,7 @@ def build_state(state_abbr, out_dir, acs_year=ACS_YEAR, per_county=False,
     log(f"    {len(feats)} counties (boundary vintage: {vintage})")
 
     log(f"[*] {state_abbr}: fetching ACS {acs_year} population + housing ...")
-    acs = fetch_acs(sfp, acs_year, log=log)
+    acs = fetch_acs(sfp, acs_year, log=log, key=census_api_key)
     log(f"    {len(acs)} county records")
 
     seats = load_csv_table("county_seats.csv")
@@ -684,14 +753,32 @@ def probe(log=print):
 
     log("")
     log(f"POPULATION + HOUSING (ACS 5-year {ACS_YEAR})")
-    try:
-        rows = get_json(ACS_BASE.format(year=ACS_YEAR),
-                        {"get": "NAME," + ACS_VARS["population"],
-                         "for": "county:*", "in": "state:27"}, tries=1, timeout=30)
-        log(f"  OK    {len(rows) - 1} Minnesota county rows returned")
-    except Exception as e:                          # noqa: BLE001
+    k = census_key()
+    if not k:
         ok = False
-        log(f"  DEAD  ACS {ACS_YEAR}\n        {e}")
+        log("  NO KEY  the Census API requires one; a keyless request comes back")
+        log("          as an HTML page, not an error.")
+        log(f"          Free and instant: {ACS_KEY_SIGNUP}")
+        log("          then: export CENSUS_API_KEY=your_key_here")
+    else:
+        src = ("--census-key" if False else
+               "$CENSUS_API_KEY" if os.environ.get("CENSUS_API_KEY") else KEY_FILE)
+        log(f"  key found via {src} (...{k[-4:]})")
+        try:
+            raw = http_get(ACS_BASE.format(year=ACS_YEAR),
+                           {"get": "NAME," + ACS_VARS["population"],
+                            "for": "county:*", "in": "state:27", "key": k},
+                           tries=1, timeout=30).decode("utf-8", "replace")
+            if raw.lstrip().startswith("<"):
+                ok = False
+                log("  DEAD  key was rejected - the API returned an HTML page.")
+                log(f"        Check the key, or request a new one: {ACS_KEY_SIGNUP}")
+            else:
+                rows = json.loads(raw)
+                log(f"  OK    {len(rows) - 1} Minnesota county rows returned")
+        except Exception as e:                      # noqa: BLE001
+            ok = False
+            log(f"  DEAD  ACS {ACS_YEAR}\n        {e}")
 
     log("")
     log("OPTIONAL ENRICHMENT (packs build without these)")
@@ -735,6 +822,9 @@ def main(argv=None):
     ap.add_argument("--endpoint", default=TIGERWEB, help="override the boundary endpoint")
     ap.add_argument("--precision", type=int, default=6,
                     help="coordinate decimals; 5 is about 1 m and makes smaller files")
+    ap.add_argument("--census-key", help="Census API key (or set CENSUS_API_KEY, "
+                                         f"or save it in {KEY_FILE}). "
+                                         f"Free: {ACS_KEY_SIGNUP}")
     ap.add_argument("--probe", action="store_true", help="check endpoints and exit")
     args = ap.parse_args(argv)
 
@@ -758,7 +848,8 @@ def main(argv=None):
     for st in targets:
         try:
             done.append(build_state(st, args.out, args.acs_year, args.per_county,
-                                    args.endpoint, args.precision))
+                                    args.endpoint, args.precision,
+                                    census_api_key=args.census_key))
         except Exception as e:                      # noqa: BLE001 - keep going
             failed.append((st, e))
             print(f"[!] {st}: {e}", file=sys.stderr)

@@ -6,6 +6,7 @@ No network: every fetch is monkeypatched. What is being proved here is that the
 builder never invents a value and never mangles a shape.
 """
 import importlib.util
+import json
 import os
 import sys
 import zipfile
@@ -128,7 +129,7 @@ def stubbed(monkeypatch):
     monkeypatch.setattr(bcp, "fetch_counties",
                         lambda sfp, ep=None, alts=None, log=print:
                         (_fake_counties(), "https://tigerweb.example/County/MapServer/1", "2024"))
-    monkeypatch.setattr(bcp, "fetch_acs", lambda sfp, year=2023, log=print: {
+    monkeypatch.setattr(bcp, "fetch_acs", lambda sfp, year=2023, log=print, **kw: {
         "000": {"population": bcp.Sourced(15900, "ACS 5-year", str(year)),
                 "housing_units": bcp.Sourced(11000, "ACS 5-year", str(year))},
         "001": {"population": bcp.Sourced(372000, "ACS 5-year", str(year)),
@@ -177,7 +178,7 @@ def test_missing_acs_still_builds_and_says_so(monkeypatch, tmp_path):
     monkeypatch.setattr(bcp, "fetch_counties",
                         lambda sfp, ep=None, alts=None, log=print:
                         (_fake_counties(1), "https://tigerweb.example/x/1", "2024"))
-    monkeypatch.setattr(bcp, "fetch_acs", lambda sfp, year=2023, log=print: {})
+    monkeypatch.setattr(bcp, "fetch_acs", lambda sfp, year=2023, log=print, **kw: {})
     r = bcp.build_state("MN", str(tmp_path), log=lambda *a: None, today="2026-09-14")
     assert r["counties"] == 1 and r["with_population"] == 0 and r["acs_year"] is None
     kml = _doc(tmp_path / MN_PACK)
@@ -399,11 +400,28 @@ def test_paging_cannot_loop_forever_when_offset_is_ignored(monkeypatch):
 def test_acs_degrades_instead_of_killing_the_pack(monkeypatch):
     """The docstring promises degradation, so the PARSE must be guarded too -
     not just the fetch."""
-    for bad in ([], [["NAME", "state", "county"]], [{"not": "a list"}], "nonsense"):
-        monkeypatch.setattr(bcp, "get_json", lambda url, params=None, _b=bad, **kw: _b)
+    monkeypatch.setenv("CENSUS_API_KEY", "abc123")
+    for bad in ('[]', '[["NAME","state","county"]]', '[{"not": "a list"}]', '"nonsense"'):
+        monkeypatch.setattr(bcp, "http_get",
+                            lambda url, params=None, _b=bad, **kw: _b.encode())
         msgs = []
         assert bcp.fetch_acs("27", 2023, log=msgs.append) == {}
-        assert any("unexpected shape" in m or "unavailable" in m for m in msgs)
+        assert any("unexpected shape" in m for m in msgs), (bad, msgs)
+
+    # and a body that is not JSON at all
+    monkeypatch.setattr(bcp, "http_get",
+                        lambda url, params=None, **kw: b"\x00not json")
+    msgs = []
+    assert bcp.fetch_acs("27", 2023, log=msgs.append) == {}
+    assert any("unparseable" in m for m in msgs)
+
+    # and a transport failure
+    def boom(*a, **k):
+        raise RuntimeError("socket died")
+    monkeypatch.setattr(bcp, "http_get", boom)
+    msgs = []
+    assert bcp.fetch_acs("27", 2023, log=msgs.append) == {}
+    assert any("unavailable" in m for m in msgs)
 
 
 def test_vintage_is_the_layers_own_group_not_a_guess(monkeypatch):
@@ -437,7 +455,7 @@ def test_a_vintage_with_no_year_still_dates_the_filename(monkeypatch, tmp_path):
     monkeypatch.setattr(bcp, "fetch_counties",
                         lambda sfp, ep=None, alts=None, log=print:
                         (_fake_counties(1), "http://e/1", "Current"))
-    monkeypatch.setattr(bcp, "fetch_acs", lambda sfp, year=2023, log=print: {})
+    monkeypatch.setattr(bcp, "fetch_acs", lambda sfp, year=2023, log=print, **kw: {})
     r = bcp.build_state("MN", str(tmp_path), log=lambda *a: None, today="2026-09-14")
     assert os.path.basename(r["path"]) == "MN_Counties_Current_2026_09_14.kmz"
 
@@ -455,7 +473,7 @@ def test_unknown_vintage_is_never_shown_as_a_year(monkeypatch, tmp_path):
     monkeypatch.setattr(bcp, "fetch_counties",
                         lambda sfp, ep=None, alts=None, log=print:
                         (_fake_counties(1), "http://e/1", bcp.TIGER_VINTAGE_UNKNOWN))
-    monkeypatch.setattr(bcp, "fetch_acs", lambda sfp, year=2023, log=print: {})
+    monkeypatch.setattr(bcp, "fetch_acs", lambda sfp, year=2023, log=print, **kw: {})
     r = bcp.build_state("MN", str(tmp_path), log=lambda *a: None, today="2026-09-14")
     assert os.path.basename(r["path"]) == "MN_Counties_built2026_09_14.kmz"
     kml = _doc(r["path"])
@@ -587,9 +605,108 @@ def test_seeded_rows_flow_into_the_popup_with_their_vintage(tmp_path, monkeypatc
     monkeypatch.setattr(bcp, "fetch_counties",
                         lambda sfp, ep=None, alts=None, log=print:
                         (_fake_counties(1), "http://e/1", "2024"))
-    monkeypatch.setattr(bcp, "fetch_acs", lambda sfp, year=2023, log=print: {})
+    monkeypatch.setattr(bcp, "fetch_acs", lambda sfp, year=2023, log=print, **kw: {})
     bcp.build_state("MN", str(tmp_path), log=lambda *a: None, today="2026-09-14")
     kml = _doc(tmp_path / MN_PACK)
     assert "County0 Sheriff&#39;s Office  [HIFLD LE Locations (frozen snapshot) 2025]" in kml \
         or "County0 Sheriff's Office  [HIFLD LE Locations (frozen snapshot) 2025]" in kml
     assert "651-555-0100  [HIFLD LE Locations (frozen snapshot) 2025]" in kml
+
+
+# --------------------------------------------------------------------------
+# Census API key. A keyless request returns HTTP 200 with an HTML page titled
+# "Missing Key", so the failure has to be recognised by body, not status.
+# --------------------------------------------------------------------------
+MISSING_KEY_HTML = ('<html style="font-size: 14px;">\n\n<head>\n'
+                    '    <title>Missing Key</title>\n')
+INVALID_KEY_HTML = '<html><head><title>Invalid Key</title></head></html>'
+
+
+def test_key_is_found_in_priority_order(monkeypatch, tmp_path):
+    keyfile = tmp_path / "census_key"
+    keyfile.write_text("from_file\n")
+    monkeypatch.setattr(bcp, "KEY_FILE", str(keyfile))
+
+    monkeypatch.delenv("CENSUS_API_KEY", raising=False)
+    assert bcp.census_key() == "from_file"
+
+    monkeypatch.setenv("CENSUS_API_KEY", "from_env")
+    assert bcp.census_key() == "from_env"            # env beats the file
+    assert bcp.census_key("explicit") == "explicit"  # the flag beats both
+
+    monkeypatch.setattr(bcp, "KEY_FILE", str(tmp_path / "nope"))
+    monkeypatch.delenv("CENSUS_API_KEY", raising=False)
+    assert bcp.census_key() == ""                    # absent, not an exception
+
+
+def test_no_key_says_exactly_what_to_do(monkeypatch, tmp_path):
+    monkeypatch.delenv("CENSUS_API_KEY", raising=False)
+    monkeypatch.setattr(bcp, "KEY_FILE", str(tmp_path / "nope"))
+    msgs = []
+    assert bcp.fetch_acs("27", 2023, log=msgs.append) == {}
+    blob = "\n".join(msgs)
+    assert "requires a key" in blob
+    assert bcp.ACS_KEY_SIGNUP in blob
+    assert "CENSUS_API_KEY" in blob
+    assert "not in dataset" in blob                  # says what the pack will show
+
+
+def test_html_refusal_is_reported_as_a_key_problem_not_a_parse_error(monkeypatch):
+    """A keyless request answers 200 + HTML, so json.loads reported
+    "Expecting value: line 1 column 1" and buried the real cause."""
+    monkeypatch.setenv("CENSUS_API_KEY", "abc123")
+    monkeypatch.setattr(bcp, "http_get",
+                        lambda url, params=None, **kw: MISSING_KEY_HTML.encode())
+    msgs = []
+    assert bcp.fetch_acs("27", 2023, log=msgs.append) == {}
+    blob = "\n".join(msgs)
+    assert "no key reached the API" in blob
+    assert "Expecting value" not in blob
+
+    monkeypatch.setattr(bcp, "http_get",
+                        lambda url, params=None, **kw: INVALID_KEY_HTML.encode())
+    msgs = []
+    assert bcp.fetch_acs("27", 2023, log=msgs.append) == {}
+    assert "key was rejected" in "\n".join(msgs)
+
+
+def test_the_key_is_actually_sent(monkeypatch):
+    seen = {}
+
+    def capture(url, params=None, **kw):
+        seen.update(params or {})
+        return json.dumps([
+            ["NAME", "B01003_001E", "B25001_001E", "state", "county"],
+            ["Chisago County, Minnesota", "58241", "23110", "27", "025"],
+        ]).encode()
+
+    monkeypatch.setenv("CENSUS_API_KEY", "secret-key")
+    monkeypatch.setattr(bcp, "http_get", capture)
+    got = bcp.fetch_acs("27", 2023, log=lambda *a: None)
+    assert seen.get("key") == "secret-key"
+    assert got["025"]["population"].value == 58241
+    assert got["025"]["population"].vintage == "2023"
+    assert got["025"]["housing_units"].value == 23110
+
+
+def test_key_flows_from_build_state_into_the_popup(monkeypatch, tmp_path):
+    monkeypatch.setattr(bcp, "fetch_counties",
+                        lambda sfp, ep=None, alts=None, log=print:
+                        (_fake_counties(1), "http://e/1", "Current"))
+    seen = {}
+
+    def capture(url, params=None, **kw):
+        seen.update(params or {})
+        return json.dumps([
+            ["NAME", "B01003_001E", "B25001_001E", "state", "county"],
+            ["County0, Minnesota", "15900", "11000", "27", "000"],
+        ]).encode()
+
+    monkeypatch.setattr(bcp, "http_get", capture)
+    monkeypatch.delenv("CENSUS_API_KEY", raising=False)
+    bcp.build_state("MN", str(tmp_path), log=lambda *a: None, today="2026-09-14",
+                    census_api_key="passed-through")
+    assert seen.get("key") == "passed-through"
+    kml = _doc(tmp_path / "MN_Counties_Current_2026_09_14.kmz")
+    assert "15,900  [ACS 5-year 2023]" in kml
+    assert "11,000  [ACS 5-year 2023]" in kml

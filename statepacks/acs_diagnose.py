@@ -64,8 +64,18 @@ def attempt(label, url, timeout=45):
     try:
         data = json.loads(body)
     except ValueError as e:
-        print(f"    NOT JSON: {e}")
-        print(f"    body[:300]: {body[:300]!r}")
+        low = body.lstrip()[:400].lower()
+        if low.startswith("<"):
+            if "missing key" in low:
+                print("    HTML: **MISSING KEY** - the API needs a key and none was sent")
+            elif "invalid key" in low:
+                print("    HTML: **INVALID KEY** - the key was sent but rejected")
+            else:
+                print("    HTML page returned instead of data")
+            print(f"    get one free: https://api.census.gov/data/key_signup.html")
+        else:
+            print(f"    NOT JSON: {e}")
+        print(f"    body[:200]: {body[:200]!r}")
         return None
     if isinstance(data, list) and data:
         print(f"    OK - {len(data) - 1} data rows")
@@ -84,11 +94,29 @@ def main(argv=None):
     a = ap.parse_args(argv)
     sfp = STATE_FIPS.get(a.state.upper(), "27")
 
+    import os
+    key = (os.environ.get("CENSUS_API_KEY") or "").strip()
+    if not key:
+        try:
+            with open(os.path.join(os.path.expanduser("~"), ".config",
+                                   "atak-statepacks", "census_key")) as fh:
+                key = fh.read().strip()
+        except OSError:
+            key = ""
+    print(f"KEY: {'found (...' + key[-4:] + ')' if key else 'NONE CONFIGURED'}")
+    if not key:
+        print("     The Census API requires one. Free and instant:")
+        print("       https://api.census.gov/data/key_signup.html")
+        print("     then:  export CENSUS_API_KEY=your_key_here")
+    print()
+
     print("=" * 66)
     print("A. ENCODING - same query, four ways of building the URL (year 2023)")
     print("=" * 66)
     base = BASE.format(year=2023)
     params = {"get": GET, "for": "county:*", "in": f"state:{sfp}"}
+    if key:
+        params["key"] = key
 
     winners = []
     v = attempt("1. urlencode() - what the builder does now",
@@ -96,7 +124,7 @@ def main(argv=None):
     if v:
         winners.append("urlencode")
     v = attempt("2. raw, nothing escaped",
-                f"{base}?get={GET}&for=county:*&in=state:{sfp}")
+                f"{base}?get={GET}&for=county:*&in=state:{sfp}" + (f"&key={key}" if key else ""))
     if v:
         winners.append("raw")
     v = attempt("3. urlencode with ':' and '*' left alone",
@@ -104,7 +132,7 @@ def main(argv=None):
     if v:
         winners.append("safe-colon-star")
     v = attempt("4. explicit wildcard spelling for=county:%2A",
-                f"{base}?get={GET}&for=county:%2A&in=state:{sfp}")
+                f"{base}?get={GET}&for=county:%2A&in=state:{sfp}" + (f"&key={key}" if key else ""))
     if v:
         winners.append("pct-star")
 
@@ -115,7 +143,7 @@ def main(argv=None):
     good_years = []
     for y in a.years:
         if attempt(f"ACS 5-year {y}",
-                   f"{BASE.format(year=y)}?get={GET}&for=county:*&in=state:{sfp}"):
+                   f"{BASE.format(year=y)}?get={GET}&for=county:*&in=state:{sfp}" + (f"&key={key}" if key else "")):
             good_years.append(y)
 
     print()
