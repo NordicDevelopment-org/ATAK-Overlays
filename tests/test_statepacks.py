@@ -2146,6 +2146,9 @@ WI_SHAPED = {
     "55139": ["Winnebago County Communications Center"],
     "55101": ["Racine Police Department"],        # city only - must stay empty
 }
+WI_NAMES = {"55025": "Dane County", "55079": "Milwaukee County",
+            "55133": "Waukesha County", "55139": "Winnebago County",
+            "55101": "Racine County"}
 
 
 def test_a_word_minnesota_never_uses_is_still_found():
@@ -2153,30 +2156,69 @@ def test_a_word_minnesota_never_uses_is_still_found():
     and is in no curated hint, so suggest_widening cannot propose it."""
     assert not any("communications" in h
                    for h, _n in sle.suggest_widening(WI_SHAPED, "sherr?iff"))
-    found = dict(sle.discover_terms(WI_SHAPED, "sherr?iff"))
+    found = dict(sle.discover_terms(WI_SHAPED, "sherr?iff", WI_NAMES))
     assert any("communications center" in t for t in found)
     assert found[next(t for t in found if "communications center" in t)] == 2
 
 
 def test_a_discovered_term_never_reaches_a_city_police_department():
-    """The maintainer's standing decision (README §11): a city PD is never
-    written as a county's primary LE, so no term may be offered that gets
-    there - at any count."""
-    for term, _n in sle.discover_terms(WI_SHAPED, "sherr?iff"):
+    """The maintainer's standing decision (README section 11): a city PD is
+    never written as a county's primary LE, so no term may be offered that
+    gets there - at any count."""
+    for term, _n in sle.discover_terms(WI_SHAPED, "sherr?iff", WI_NAMES):
         for city in ("Madison Police Department", "Racine Police Department"):
             assert not re.search(re.escape(term), city, re.I), term
 
 
+def test_a_city_pds_words_are_never_read_as_county_vocabulary():
+    """Two city PDs share 'police department'. Reading their names for terms
+    would offer it as reaching two counties."""
+    only_cities = {"55025": ["Madison Police Department"],
+                   "55101": ["Racine Police Department"]}
+    assert not sle.discover_terms(only_cities, "sherr?iff", WI_NAMES)
+
+
+def test_a_city_pd_never_counts_toward_a_real_terms_reach():
+    """'communications center' genuinely reaches one county here. A municipal
+    record in a second county must not inflate that to two and make it look
+    like vocabulary."""
+    one_real = {"55133": ["Waukesha County Communications Center"],
+                "55101": ["Racine Police Communications Center"]}
+    assert not sle.discover_terms(one_real, "sherr?iff", WI_NAMES)
+
+
+def test_a_county_police_department_is_still_offered():
+    """Some states run county PDs (Nassau County, Baltimore County). 'police
+    department' is not the municipal discriminator it looks like, and testing
+    for it would cost those states their real term."""
+    county_pds = {"36059": ["Nassau County Police Department",
+                            "Hempstead Police Department"],
+                  "24005": ["Baltimore County Police Department"]}
+    names = {"36059": "Nassau County", "24005": "Baltimore County"}
+    terms = [t for t, _n in sle.discover_terms(county_pds, "sherr?iff", names)]
+    assert any("county police department" in t for t in terms), terms
+
+
+def test_the_descriptor_comes_from_the_source_not_a_word_list():
+    """Louisiana has parishes and Puerto Rico municipios. Reading the county's
+    own TIGER name means those cost nothing (README section 8)."""
+    la = {"22001": ["Acadia Parish Law Enforcement Center"],
+          "22003": ["Allen Parish Law Enforcement Center"]}
+    names = {"22001": "Acadia Parish", "22003": "Allen Parish"}
+    terms = [t for t, _n in sle.discover_terms(la, "sherr?iff", names)]
+    assert any("law enforcement center" in t for t in terms), terms
+
+
 def test_a_phrase_reaching_one_county_is_that_countys_name_not_vocabulary():
     assert not sle.discover_terms({"55025": ["Dane County Jail Annex"]},
-                                  "sherr?iff")
+                                  "sherr?iff", WI_NAMES)
 
 
 def test_one_phrase_per_term_not_every_window_onto_it():
     """'public safety building' already reaches every county 'public safety'
     does; listing both, plus 'safety building' and 'county public', is four
     spellings of one finding."""
-    terms = [t for t, _n in sle.discover_terms(WI_SHAPED, "sherr?iff")]
+    terms = [t for t, _n in sle.discover_terms(WI_SHAPED, "sherr?iff", WI_NAMES)]
     assert "public safety building" in terms
     for narrower in ("safety building", "public safety", "county public"):
         assert narrower not in terms
@@ -2185,14 +2227,14 @@ def test_one_phrase_per_term_not_every_window_onto_it():
 def test_discovery_adds_no_noise_to_minnesota():
     """Minnesota is verified end to end; discovery must not start printing
     suggestions over the top of the curated list that already works there."""
-    mn = {
-        "27131": ["Rice County Public Safety Center"],
-        "27007": ["Beltrami County Law Enforcement Center"],
-        "27005": ["Becker County Jail"],
-        "27001": ["Hill City Police Department"],
-    }
+    mn = {"27131": ["Rice County Public Safety Center"],
+          "27007": ["Beltrami County Law Enforcement Center"],
+          "27005": ["Becker County Jail"],
+          "27001": ["Hill City Police Department"]}
+    names = {"27131": "Rice County", "27007": "Beltrami County",
+             "27005": "Becker County", "27001": "Aitkin County"}
     assert sle.suggest_widening(mn, "sherr?iff")      # curated list still leads
-    assert not sle.discover_terms(mn, "sherr?iff")    # and nothing is added
+    assert not sle.discover_terms(mn, "sherr?iff", names)   # nothing added
 
 
 def test_the_report_offers_a_discovered_term_when_the_curated_list_misses(capsys):
@@ -2529,6 +2571,27 @@ def test_the_cli_flags_actually_reach_fetch_osm(monkeypatch, tmp_path):
     assert seen["deadline_s"] == 77
     assert seen["timeout"] == 11
     assert seen["refresh"] is True
+
+
+def test_gaps_dump_reaches_report_gaps_from_the_command_line(monkeypatch,
+                                                             tmp_path):
+    """--gaps-dump could be parsed and then never passed on, and the flag
+    would look like it worked: the run is quiet either way."""
+    monkeypatch.setattr(sle, "CSV_PATH", str(tmp_path / "le.csv"))
+    monkeypatch.setattr(sle, "county_shapes", _fake_shapes("27025"))
+    monkeypatch.setattr(sle, "fetch_osm", lambda st, **kw: [
+        {"lon": 1.0, "lat": 1.0, "name": "Test County Jail", "phone": "",
+         "website": "", "address": "", "admintype": "",
+         "loaddate": "2026-09-14"}])
+    seen = {}
+    real = sle.report_gaps
+    monkeypatch.setattr(sle, "report_gaps",
+                        lambda *a, **kw: (seen.update(kw), real(*a, **kw))[1])
+    dest = tmp_path / "gaps.json"
+    sle.main(["--state", "MN", "--source", "osm", "--gaps",
+              "--gaps-dump", str(dest)])
+    assert seen.get("dump") == str(dest)
+    assert json.loads(dest.read_text())["state"] == "MN"
 
 
 def test_the_socket_gets_more_time_than_the_server(monkeypatch, tmp_path):

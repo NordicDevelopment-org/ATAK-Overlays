@@ -1766,22 +1766,38 @@ def suggest_widening(unmatched, match, hints=COUNTY_LE_HINTS):
     return sorted(out, key=lambda t: (-t[1], t[0]))
 
 
-# A name with one of these in it is a municipal force, not the county's. The
-# maintainer's standing decision is that a city PD is never written as a
-# county's primary LE, so a term reachable only through one of these is not a
-# candidate at any count - see README §11 "Decisions that are the maintainer's".
-MUNICIPAL_RX = re.compile(
-    r"\b(?:city|village|township|town|campus|university|tribal|park|school|"
-    r"metro|airport|transit|capitol|state)\b|\bpolice\s+(?:department|dept)\b",
-    re.I)
-
 # Tokens that carry no vocabulary on their own. A phrase made only of these
 # describes nothing; one containing them alongside a real word is fine.
 _FILLER = frozenset(("the", "of", "and", "at", "for", "a", "an", "county",
                      "co", "dept", "department", "office", "offices"))
 
 
-def discover_terms(unmatched, match, min_counties=2, max_terms=8):
+def is_county_level(agency, county_name):
+    """Does this agency name say it belongs to the county, in the county's own
+    words?
+
+    There is no reliable way to spot a MUNICIPAL force from its name. City
+    names are unbounded, and "police department" is not the discriminator it
+    looks like - Nassau County and Baltimore County both run one. Testing the
+    negative gets both answers wrong.
+
+    So test the positive, the way the rest of this builder does: read the
+    descriptor back out of TIGER's own NAME rather than pluralising a word
+    from a table (README §8, "Fifteen states do not call them counties"). An
+    agency is county-level when it carries the county's own name - "Waukesha
+    County ...", "Acadia Parish ...", "Nome Census Area ..." - and that costs
+    nothing to get right in Louisiana or Puerto Rico.
+
+    The cost is conservative: "Prairie Justice Center" really is Nobles
+    County's, and does not say so. It is skipped as a SOURCE of candidate
+    terms, which is a missed suggestion, not a wrong one - and the report
+    still prints it among the unmatched names for a human to read.
+    """
+    return bool(county_name) and county_name.lower() in agency.lower()
+
+
+def discover_terms(unmatched, match, county_names, min_counties=2,
+                   max_terms=8):
     """[(phrase, counties_it_would_reach)] mined from THIS state's own names.
 
     `COUNTY_LE_HINTS` is Minnesota's vocabulary, read off Minnesota's gap
@@ -1803,35 +1819,31 @@ def discover_terms(unmatched, match, min_counties=2, max_terms=8):
         records. Widening onto a city PD would relabel it as the county's
         primary LE, which is the one mistake this seeder must not make.
     """
+    # Only county-level records are read, and only they count toward a term's
+    # reach. A city PD's words never become a candidate, and a city PD never
+    # inflates a real term's count into looking like vocabulary.
+    county_level = {
+        geoid: [a for a in agencies
+                if is_county_level(a, county_names.get(geoid, ""))]
+        for geoid, agencies in unmatched.items()
+    }
     counties_with = {}
-    banned = set()
-    for agencies in unmatched.values():
+    for agencies in county_level.values():
         for a in agencies:
             toks = [t for t in re.split(r"[^a-z0-9']+", a.lower()) if len(t) > 1]
             grams = {" ".join(toks[i:i + n])
                      for n in (2, 3) for i in range(len(toks) - n + 1)}
-            grams = {g for g in grams
-                     if not all(t in _FILLER for t in g.split())}
-            if MUNICIPAL_RX.search(a):
-                # Every phrase in a municipal name is disqualified outright,
-                # not merely down-ranked: offering it at all invites the wrong
-                # widening, and this state may spell "city" in the county
-                # agency's name too.
-                banned |= grams
-            else:
-                for g in grams:
+            for g in grams:
+                if not all(t in _FILLER for t in g.split()):
                     counties_with.setdefault(g, set())
-    for geoid, agencies in unmatched.items():
+    for geoid, agencies in county_level.items():
         for a in agencies:
-            if MUNICIPAL_RX.search(a):
-                continue
             low = a.lower()
             for g in counties_with:
                 if g in low:
                     counties_with[g].add(geoid)
     out = [(g, len(cs)) for g, cs in counties_with.items()
-           if g not in banned
-           and len(cs) >= min_counties
+           if len(cs) >= min_counties
            and not re.search(re.escape(g), match, re.I)]
     # Longest phrase wins a tie so the report offers "law enforcement center"
     # rather than the vaguer "law enforcement" at the same reach.
@@ -1946,7 +1958,8 @@ def report_gaps(state, geoids, names, records, chosen, match, log=print,
     # filter fixes this" when the truth is that nobody has looked at this
     # state's vocabulary yet. These come from the names in front of us.
     found = discover_terms(
-        {g: [r["agency"] for r in by_county[g]] for g in unmatched}, match)
+        {g: [r["agency"] for r in by_county[g]] for g in unmatched},
+        match, names)
     found = [(t, n) for t, n in found
              if not any(re.search(re.escape(t), h, re.I)
                         or re.search(re.escape(h), t, re.I) for h, _n in helps)]
