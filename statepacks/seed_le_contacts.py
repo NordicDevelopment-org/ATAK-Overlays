@@ -331,6 +331,10 @@ def main(argv=None):
     ap.add_argument("--source", choices=["auto", "hifld", "usgs"], default="auto",
                     help="auto (default) tries HIFLD for phone numbers and falls "
                          "back to USGS for names only; hifld or usgs force one")
+    ap.add_argument("--show", type=int, metavar="N",
+                    help="dump the first N raw source records and exit - use this "
+                         "when the filter matches nothing, to see how the names "
+                         "and fields are actually spelled")
     ap.add_argument("--usgs-layer", type=int, default=18,
                     help="USGS Police Stations feature layer (18 or 53; 17 and 52 "
                          "are group layers with no fields)")
@@ -366,6 +370,33 @@ def main(argv=None):
         targets = [a.state.upper()]
     else:
         ap.error("give --state XX or --all (or --probe)")
+
+    if a.show:
+        st = targets[0]
+        try:
+            raw = (fetch_usgs(st, a.usgs_layer) if use_usgs
+                   else fetch_state(STATE_FIPS[st], layer_id, a.endpoint))
+        except Exception as e:                      # noqa: BLE001
+            print(f"[!] {st}: {redact_err(e)}", file=sys.stderr)
+            return 2
+        print(f"\n{len(raw)} record(s) from {st}; first {min(a.show, len(raw))}:\n")
+        for r in raw[:a.show]:
+            for k, v in r.items():
+                print(f"    {k:12} {v!r}")
+            print()
+        names = [str(r.get("name") or r.get("agency") or "") for r in raw]
+        hits = [n for n in names if re.search(a.match, n, re.I)]
+        print(f"names matching /{a.match}/i : {len(hits)} of {len(names)}")
+        for n in hits[:10]:
+            print(f"    {n}")
+        if not hits:
+            print(f"    (none - try a different --match, or --all-agencies)")
+        # what distinct values do the classifying columns take?
+        for key in ("type", "admintype"):
+            vals = sorted({str(r.get(key) or "") for r in raw})
+            if any(vals):
+                print(f"\ndistinct {key}: {', '.join(v or '(blank)' for v in vals[:12])}")
+        return 0
 
     existing, comments = read_existing(CSV_PATH)
     kept = set(existing)
@@ -416,6 +447,16 @@ def main(argv=None):
         withphone = sum(1 for r in chosen.values() if r["phone"])
         print(f"[*] {st}: {len(records)} LE records -> {len(chosen)} counties "
               f"({withphone} with a phone number)")
+        if records and not chosen:
+            # Data arrived and every record was discarded. That is a filter
+            # problem, not an absence of sheriffs, and saying nothing here reads
+            # as "this state has none".
+            print(f"    [!] {len(records)} record(s) came back but none matched "
+                  f"/{a.match}/i.")
+            print(f"        See how the names are actually spelled:")
+            print(f"          python3 seed_le_contacts.py --state {st} --show 5")
+            print(f"        Then widen it, e.g. --match 'sheriff|county' , "
+                  f"or take everything with --all-agencies")
 
     if a.dry_run:
         for g in sorted(existing):

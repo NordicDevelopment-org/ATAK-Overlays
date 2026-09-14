@@ -958,3 +958,46 @@ def test_module_defines_everything_main_needs_before_the_entrypoint():
     for name in ("fetch_usgs", "county_shapes", "assign_county", "usgs_vintage",
                  "point_in_polygon", "redact_err"):
         assert src.index(f"def {name}") < guard, f"{name} is defined too late"
+
+
+def test_records_that_all_fail_the_filter_are_reported_not_silently_zero(
+        monkeypatch, tmp_path, capsys):
+    """448 records in and 0 rows out is a filter problem, not an absence of
+    sheriffs. Saying nothing reads as 'this state has none'."""
+    monkeypatch.setattr(sle, "CSV_PATH", str(tmp_path / "le.csv"))
+
+    def dead(*a, **k):
+        raise RuntimeError("gone")
+    monkeypatch.setattr(sle, "resolve_layer", dead)
+    monkeypatch.setattr(sle, "fetch_usgs", lambda st, lid, log=print: [
+        {"name": "MINNEAPOLIS POLICE DEPT", "address": "", "city": "",
+         "admintype": "Local", "loaddate": "", "lon": 1.0, "lat": 1.0},
+        {"name": "ST PAUL POLICE", "address": "", "city": "",
+         "admintype": "Local", "loaddate": "", "lon": 2.0, "lat": 2.0},
+    ])
+    monkeypatch.setattr(sle, "county_shapes", lambda sfp, log=print: [
+        ("27053", [[[[0, 0], [5, 0], [5, 5], [0, 5], [0, 0]]]])])
+
+    sle.main(["--state", "MN"])
+    out = capsys.readouterr().out
+    assert "none matched" in out
+    assert "--show 5" in out                    # tells you how to look
+    assert "--all-agencies" in out              # and how to widen
+
+
+def test_show_dumps_records_and_reports_what_the_filter_would_match(
+        monkeypatch, capsys):
+    monkeypatch.setattr(sle, "resolve_layer",
+                        lambda *a, **k: (_ for _ in ()).throw(RuntimeError("gone")))
+    monkeypatch.setattr(sle, "fetch_usgs", lambda st, lid, log=print: [
+        {"name": "Chisago County Sheriff", "address": "1 Main", "city": "X",
+         "admintype": "County", "loaddate": "2024-01-01", "lon": 1.0, "lat": 1.0},
+        {"name": "Center City Police", "address": "2 Main", "city": "Y",
+         "admintype": "Local", "loaddate": "", "lon": 2.0, "lat": 2.0},
+    ])
+    assert sle.main(["--state", "MN", "--show", "2"]) == 0
+    out = capsys.readouterr().out
+    assert "Chisago County Sheriff" in out
+    assert "admintype" in out
+    assert "1 of 2" in out                      # the match count
+    assert "distinct admintype" in out          # the classifying column's values
