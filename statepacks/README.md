@@ -17,7 +17,7 @@ Everything you need, and nothing else:
 |---|---|---|
 | **Census API key** | population + housing. **Required** — a keyless request returns an HTML page, not data | you, free + instant: [api.census.gov/data/key_signup.html](https://api.census.gov/data/key_signup.html) |
 | **Termux** | the shell this all runs in | [F-Droid](https://f-droid.org/packages/com.termux/) — **not** the Play Store version, it is stale |
-| **python** (3.8+) | runs the builders | `atak-setup.sh` |
+| **python** (3.10+) | runs the builders — 3.10 to 3.13 are what CI actually tests | `atak-setup.sh` |
 | **git** | clone / update this repo | `atak-setup.sh` |
 | **curl** | download prebuilt packs | `atak-setup.sh` |
 | **Storage permission** | lets Termux write to the ATAK folder | `atak-setup.sh` (Android will prompt — **Allow**) |
@@ -49,6 +49,36 @@ Open ATAK once before continuing, so it creates its folders.
 ---
 
 ## 3. Build your state — paste this whole block
+
+**One command does all of it:**
+
+```bash
+cd ~/atak-packs/ATAK-Overlays/statepacks/termux
+chmod +x *.sh
+./make-state-pack.sh MN --install
+```
+
+That runs the four steps in the order their data depends on — county seats
+(Wikidata), sheriff / primary LE (OpenStreetMap), the pack itself (TIGERweb +
+ACS), then the install and the force stop. Swap `MN` for any state.
+
+| flag | |
+|---|---|
+| `--install` | copy into ATAK and force-stop it afterwards |
+| `--gaps` | also print the per-county gap report (§7) |
+| `--skip-le` | skip the OpenStreetMap step |
+| `--skip-seats` | skip the Wikidata step |
+| `MATCH='...'` | override the LE name filter for this run |
+
+**Every step is resumable.** Boundaries, OSM tiles and both CSVs are cached or
+written locally, so re-running after a failure picks up where it stopped. A
+step that fails stops the run — a pack built on half-fetched data would look
+complete.
+
+It only installs **that state's** pack, so a staging folder with ten states in
+it does not get reinstalled every time.
+
+### Or run the steps yourself
 
 ```bash
 cd ~/atak-packs/ATAK-Overlays/statepacks
@@ -82,9 +112,12 @@ Run these once per state, then rebuild:
 
 ```bash
 python3 fetch_county_seats.py --state MN     # county seats, from Wikidata
-python3 seed_le_contacts.py --state MN       # sheriff + non-emergency, from HIFLD
+python3 seed_le_contacts.py --state MN       # sheriff / primary LE, from OpenStreetMap
 python3 build_county_pack.py --state MN --out ~/atak-packs/out
 ```
+
+(HIFLD Open shut down in August 2025 and its NASA re-host is gone from DNS, so
+the LE step reads OpenStreetMap. See §7 for exactly how much of it is there.)
 
 Both write their own source and year into every row, so the popup shows where
 each value came from. Neither overwrites a row you edited by hand.
@@ -425,13 +458,14 @@ FeatureServer with its layers, marking ones whose name matches `--pattern`
 (default `law|police|sheriff|emergency`). Pass `--pattern ''` to list
 everything. Point `--endpoint` at whatever you find.
 
-**Read this before dialling anything it writes.** HIFLD Open shut down in
-August 2025; this is a **frozen final snapshot** re-hosted by NASA NCCS, and
-nobody maintains it. Agencies consolidate, dispatch moves to a regional PSAP,
-numbers get reassigned. That is exactly why every row carries its vintage:
+**Read this before dialling anything it writes.** OpenStreetMap is edited by
+volunteers: a number there is as current as whoever last touched it, and
+nobody is checking. Agencies consolidate, dispatch moves to a regional PSAP,
+numbers get reassigned. That is exactly why every row carries the date its
+tile was fetched — not the date the CSV was written:
 
 ```
-LE non-emergency: 651-555-0100  [HIFLD LE Locations (frozen snapshot) 2025]
+LE non-emergency: 651-257-4100  [OpenStreetMap (Overpass) 2026-09-14]
 ```
 
 Treat those as a starting point to verify, not as verified. When you confirm
@@ -439,7 +473,7 @@ one, edit the row with your own source and the current year — the seeder will
 not overwrite it on a later run (only `--overwrite` does):
 
 ```bash
-nano data/le_contacts.csv
+nano data/le_contacts.local.csv
 ```
 
 ```csv
