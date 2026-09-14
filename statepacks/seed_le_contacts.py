@@ -347,6 +347,11 @@ def main(argv=None):
     ap.add_argument("--overwrite", action="store_true",
                     help="replace rows that are already in the CSV (default: keep yours)")
     ap.add_argument("--dry-run", action="store_true", help="print, write nothing")
+    ap.add_argument("--gaps", action="store_true",
+                    help="after writing, report per county WHY it has no "
+                         "sheriff: no record in the source at all, or records "
+                         "whose names the filter did not match (with their "
+                         "actual spellings)")
     ap.add_argument("--endpoint", default=HIFLD_LE, help="override the FeatureServer URL")
     ap.add_argument("--source", choices=["auto", "hifld", "usgs", "osm"],
                     default="auto",
@@ -487,7 +492,8 @@ def main(argv=None):
                 # Fetched ONCE and handed to both the bounding box and the
                 # spatial match. It used to be downloaded twice per run.
                 try:
-                    shapes = county_shapes(sfp, refresh=a.refresh_shapes)
+                    shapes, cnames = county_shapes(sfp, refresh=a.refresh_shapes,
+                                                   with_names=True)
                 except Exception as ex:             # noqa: BLE001
                     # Say which thing failed. Without this it reads as "no LE
                     # source answered", which would be the wrong diagnosis.
@@ -514,11 +520,17 @@ def main(argv=None):
                         continue
                     records.append({"geoid": geoid, "agency": r["name"],
                                     "phone": r.get("phone", ""),
+                                    "website": r.get("website", ""),
                                     "address": r["address"],
                                     "type": r["admintype"]})
                 if unplaced:
-                    print(f"    {unplaced} point(s) fell outside every county "
-                          f"boundary and were dropped, not guessed")
+                    # The Overpass box is a RECTANGLE around the state, so it
+                    # necessarily covers slices of the neighbours. Those points
+                    # are real, they are just not this state's.
+                    print(f"    {unplaced} point(s) fell outside every {st} "
+                          f"county and were dropped, not guessed - the query "
+                          f"box is a rectangle, so it reaches into the "
+                          f"neighbouring states")
             else:
                 records = fetch_state(sfp, layer_id, a.endpoint)
                 source_name = SOURCE
@@ -543,6 +555,9 @@ def main(argv=None):
         withphone = sum(1 for r in chosen.values() if r["phone"])
         print(f"[*] {st}: {len(records)} LE records -> {len(chosen)} counties "
               f"({withphone} with a phone number)")
+        if a.gaps:
+            report_gaps(st, cnames if (use_osm or use_usgs) else {}, records,
+                        chosen, a.match)
         if records and not chosen:
             # Data arrived and every record was discarded. That is a filter
             # problem, not an absence of sheriffs, and saying nothing here reads
@@ -647,9 +662,14 @@ def _shapes_cache_path(state_fips):
     return os.path.join(CACHE_DIR, f"county_shapes_{state_fips}.json")
 
 
-def county_shapes(state_fips, log=print, refresh=False, ttl_days=SHAPES_TTL_DAYS):
+def county_shapes(state_fips, log=print, refresh=False, ttl_days=SHAPES_TTL_DAYS,
+                  with_names=False):
     """[(geoid, [rings, ...])] for one state, from the same TIGERweb layer the
     builder uses - so an agency lands in the county the pack actually draws.
+
+    with_names=True returns (shapes, {geoid: name}) instead. The names ride
+    along in the same download and the same cache - a gap report that says
+    "27007" instead of "Beltrami County" is a gap report nobody reads.
 
     Cached on disk for `ttl_days`. This was being downloaded TWICE per run -
     once for the Overpass bounding box, once for the spatial match - and 87
@@ -669,17 +689,24 @@ def county_shapes(state_fips, log=print, refresh=False, ttl_days=SHAPES_TTL_DAYS
             if 0 <= age <= ttl_days and shapes:
                 log(f"    {len(shapes)} county shapes from the local cache "
                     f"(fetched {doc['fetched']}; --refresh-shapes to redownload)")
-                return [(g, polys) for g, polys in shapes]
+                out = [(g, polys) for g, polys in shapes]
+                # A cache written before names were stored has none; that is a
+                # missing name, not a wrong one, so it stays missing.
+                return (out, dict(doc.get("names") or {})) if with_names else out
         except (OSError, ValueError, KeyError, TypeError):
             pass                         # missing, stale or corrupt: refetch
     import build_county_pack as bcp                      # noqa: PLC0415
     feats, url, vintage = bcp.fetch_counties(state_fips, log=log)
-    out = []
+    out, names = [], {}
     for f in feats:
-        geoid = bcp.county_geoid(f.get("properties"))
+        props = f.get("properties") or {}
+        geoid = bcp.county_geoid(props)
         geom = f.get("geometry") or {}
         if not geoid or not geom:
             continue
+        label = bcp.county_label(props)
+        if label:
+            names[geoid] = label
         c = geom.get("coordinates") or []
         if geom.get("type") == "Polygon":
             polys = [[r for r in c if r]]
@@ -693,10 +720,11 @@ def county_shapes(state_fips, log=print, refresh=False, ttl_days=SHAPES_TTL_DAYS
         try:
             _write_json_atomic(path, {"fetched": dt.date.today().isoformat(),
                                       "state": state_fips, "source": url,
-                                      "vintage": vintage, "shapes": out})
+                                      "vintage": vintage, "shapes": out,
+                                      "names": names})
         except OSError as ex:            # a cache that cannot be written is
             log(f"    (could not cache county shapes: {ex})")   # not an error
-    return out
+    return (out, names) if with_names else out
 
 
 def fetch_usgs(state_abbr, layer_id, log=print):
@@ -1223,6 +1251,10 @@ def fetch_osm(state_abbr, mirrors=None, log=print, bbox=None, timeout=30,
             "name": (t.get("name") or t.get("official_name") or "").strip(),
             # phone and contact:phone are both in use; neither is preferred by OSM
             "phone": (t.get("phone") or t.get("contact:phone") or "").strip(),
+            # same two spellings for the website. A county sheriff page is a
+            # real, checkable destination; it is not a substitute for a phone
+            # number, but it is better than an empty field.
+            "website": (t.get("website") or t.get("contact:website") or "").strip(),
             "address": street.strip(),
             "city": (t.get("addr:city") or "").strip(),
             # operator:type is how OSM records that an agency is county-run
@@ -1292,6 +1324,50 @@ def discover_arcgis(root, pattern="", log=print):
         log("  Nothing matched the filter. To see everything this server has:")
         log(f"    python3 seed_le_contacts.py --discover {root} --pattern ''")
     return found
+
+
+def report_gaps(state, names, records, chosen, match, log=print):
+    """Say exactly WHY each county came back without a sheriff.
+
+    "52 of 87" is a number, not a diagnosis. A county with no row is either a
+    county whose agencies are all named something this filter does not match -
+    which is fixable by widening it - or a county with no law-enforcement
+    record in the source at all, which is not. Those two need opposite
+    responses, so the report separates them and prints what the unmatched
+    records are actually called.
+    """
+    geoids = sorted(names) or sorted({r["geoid"] for r in records})
+    by_county = {}
+    for r in records:
+        by_county.setdefault(r["geoid"], []).append(r)
+
+    def label(g):
+        return f"{g} {names.get(g, '')}".strip()
+
+    unmatched = sorted(g for g in geoids if g not in chosen and by_county.get(g))
+    empty = sorted(g for g in geoids if g not in chosen and not by_county.get(g))
+    withphone = sum(1 for r in chosen.values() if r.get("phone"))
+    withsite = sum(1 for r in chosen.values() if r.get("website"))
+
+    log(f"\nGAP REPORT for {state} - {len(geoids)} count"
+        f"{'y' if len(geoids) == 1 else 'ies'}")
+    log(f"  matched /{match}/i and written        : {len(chosen)}")
+    log(f"    ...of those carrying a phone number : {withphone}")
+    log(f"    ...of those carrying a website      : {withsite}")
+    log(f"  have records, none matched the filter : {len(unmatched)}"
+        f"{'  <- widening --match may fix these' if unmatched else ''}")
+    for g in unmatched[:20]:
+        got = ", ".join(sorted({r["agency"] for r in by_county[g] if r["agency"]})[:4])
+        log(f"      {label(g):34s} {got}")
+    if len(unmatched) > 20:
+        log(f"      ... and {len(unmatched) - 20} more")
+    log(f"  no law-enforcement record at all      : {len(empty)}"
+        f"{'  <- not in the source; no filter fixes this' if empty else ''}")
+    for i in range(0, min(len(empty), 24), 3):
+        log("      " + "  ".join(f"{label(g):26s}" for g in empty[i:i + 3]))
+    if len(empty) > 24:
+        log(f"      ... and {len(empty) - 24} more")
+    log("")
 
 
 def today_iso():

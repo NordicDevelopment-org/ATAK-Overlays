@@ -266,6 +266,44 @@ names the current `--match` would hit, and lists the distinct values of the
 classifying columns. A run that writes zero rows is usually a filter that does
 not match how that dataset spells its names — not an absence of sheriffs.
 
+**`--gaps` says why each county came back empty.** A count like "52 of 87" is
+not a diagnosis. A county with no row is either one whose agencies are all
+named something the filter missed — fixable by widening `--match` — or one with
+no law-enforcement record in the source at all, which no filter fixes. Those
+need opposite responses, so the report separates them and prints what the
+unmatched records are actually called:
+
+```bash
+python3 seed_le_contacts.py --state MN --gaps
+```
+
+```
+GAP REPORT for MN - 87 counties
+  matched /sheriff/i and written        : 52
+    ...of those carrying a phone number : 3
+    ...of those carrying a website      : 11
+  have records, none matched the filter : 12  <- widening --match may fix these
+      27003 Anoka County                 Blaine Police Department, Coon Rapids Police Dept
+  no law-enforcement record at all      : 23  <- not in the source; no filter fixes this
+      27005 Becker County         27009 Benton County         ...
+```
+
+### What OSM actually has for Minnesota, measured 2026-09-14
+
+| | |
+|---|---|
+| police features in the state box | 517 |
+| ...carrying a phone number | **32** |
+| sheriff offices matched to a county | 52 of 87 |
+| ...carrying a phone number | **3 of 87** |
+
+So the phone column **does not fill from any public source**. It is not a bug
+and no amount of widening fixes it: the numbers are on 87 separate county
+websites and nowhere machine-readable. The popup omits the field entirely for
+a county that has none rather than showing a blank or a guess, and
+`data/le_contacts.local.csv` is there for the ones you verify by hand — the
+seeder never overwrites a row you edited.
+
 ### How the OSM fetch is made fast
 
 OSM is read from the public Overpass mirrors, which rate-limit hard and time

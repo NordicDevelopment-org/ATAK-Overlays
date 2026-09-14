@@ -534,6 +534,18 @@ def test_a_feature_with_no_identity_shows_no_fips(stubbed, tmp_path, monkeypatch
 sle = _load("seed_le_contacts")
 
 
+def _fake_shapes(*geoids, name="Test County"):
+    """A county_shapes stub that honours with_names, like the real one."""
+    shapes = [(g, [[[[0, 0], [5, 0], [5, 5], [0, 5], [0, 0]]]]) for g in geoids]
+    names = {g: name for g in geoids}
+
+    def stub(sfp, log=print, with_names=False, **kw):
+        return (shapes, names) if with_names else shapes
+
+    return stub
+
+
+
 def test_layer_is_found_by_name_not_by_a_hardcoded_index(monkeypatch):
     """A re-host can renumber its layers. Matching the name survives that;
     an index would silently query whatever sits at 0."""
@@ -633,14 +645,13 @@ def test_auto_prefers_osm_because_it_is_the_only_source_with_phone_numbers(
         {"name": "Elsewhere Sheriff", "phone": "", "address": "", "city": "",
          "admintype": "", "loaddate": "", "lon": 99.0, "lat": 99.0},
     ])
-    monkeypatch.setattr(sle, "county_shapes", lambda sfp, log=print, **kw: [
-        ("27025", [[[[0, 0], [5, 0], [5, 5], [0, 5], [0, 0]]]])])
+    monkeypatch.setattr(sle, "county_shapes", _fake_shapes("27025"))
 
     assert sle.main(["--state", "MN"]) == 0
     out = capsys.readouterr().out
     assert "OSM police features" in out
     assert "1 with a phone number" in out
-    assert "fell outside every county" in out          # the unplaced one
+    assert "fell outside every MN county" in out          # the unplaced one
 
     rows, _ = sle.read_existing(str(tmp_path / "le.csv"))
     assert rows["27025"]["phone"] == "651-257-4100"    # a real phone, at last
@@ -712,8 +723,7 @@ def test_every_source_down_writes_nothing_and_exits_nonzero(monkeypatch, tmp_pat
     monkeypatch.setattr(sle, "resolve_layer", dead)
     monkeypatch.setattr(sle, "fetch_usgs", dead)
     monkeypatch.setattr(sle, "fetch_osm", dead)
-    monkeypatch.setattr(sle, "county_shapes", lambda sfp, log=print, **kw: [
-        ("27025", [[[[0, 0], [5, 0], [5, 5], [0, 5], [0, 0]]]])])
+    monkeypatch.setattr(sle, "county_shapes", _fake_shapes("27025"))
     assert sle.main(["--state", "MN"]) == 2
     err = capsys.readouterr().err
     assert "no source answered" in err and "stay empty" in err
@@ -1066,8 +1076,7 @@ def test_records_that_all_fail_the_filter_are_reported_not_silently_zero(
         {"name": "ST PAUL POLICE", "phone": "", "address": "", "city": "",
          "admintype": "Local", "loaddate": "", "lon": 2.0, "lat": 2.0},
     ])
-    monkeypatch.setattr(sle, "county_shapes", lambda sfp, log=print, **kw: [
-        ("27053", [[[[0, 0], [5, 0], [5, 5], [0, 5], [0, 0]]]])])
+    monkeypatch.setattr(sle, "county_shapes", _fake_shapes("27053"))
 
     sle.main(["--state", "MN"])
     out = capsys.readouterr().out
@@ -1860,3 +1869,99 @@ def test_only_the_budget_ever_escapes_as_a_timeouterror(monkeypatch, tmp_path):
             sle._overpass_tile((0.0, 0.0, 1.0, 1.0), ["https://a.invalid/i"],
                                5, 1, lambda *a: None)
         assert not isinstance(ex.value, TimeoutError), err
+
+
+# --------------------------------------------------------------------------
+# The gap report. "52 of 87" is a number, not a diagnosis: a county with no
+# sheriff is either a filter problem or an absence, and those need opposite
+# responses.
+# --------------------------------------------------------------------------
+def _gap_lines(capsys, **kw):
+    sle.report_gaps(**kw)
+    return capsys.readouterr().out
+
+
+def test_gap_report_separates_a_filter_problem_from_an_absence(capsys):
+    names = {"27001": "Aitkin County", "27003": "Anoka County",
+             "27005": "Becker County"}
+    records = [
+        {"geoid": "27001", "agency": "Aitkin County Sheriff", "phone": "1",
+         "website": ""},
+        # has agencies, but none of them say "sheriff" - widening --match helps
+        {"geoid": "27003", "agency": "Blaine Police Department", "phone": "",
+         "website": ""},
+        {"geoid": "27003", "agency": "Coon Rapids Police Dept", "phone": "",
+         "website": ""},
+        # 27005 has nothing at all - no filter fixes that
+    ]
+    chosen = {"27001": records[0]}
+    out = _gap_lines(capsys, state="MN", names=names, records=records,
+                     chosen=chosen, match="sheriff")
+    assert "have records, none matched the filter : 1" in out
+    assert "Blaine Police Department" in out          # what they are REALLY called
+    assert "Anoka County" in out
+    assert "no law-enforcement record at all      : 1" in out
+    assert "Becker County" in out
+    assert "widening --match" in out
+
+
+def test_gap_report_counts_phone_and_website_separately(capsys):
+    names = {"27001": "A County", "27003": "B County", "27005": "C County"}
+    records = [
+        {"geoid": "27001", "agency": "A County Sheriff", "phone": "651-555-0100",
+         "website": "https://example.gov/sheriff"},
+        {"geoid": "27003", "agency": "B County Sheriff", "phone": "",
+         "website": "https://example.gov/b"},
+        {"geoid": "27005", "agency": "C County Sheriff", "phone": "", "website": ""},
+    ]
+    chosen = {r["geoid"]: r for r in records}
+    out = _gap_lines(capsys, state="MN", names=names, records=records,
+                     chosen=chosen, match="sheriff")
+    assert "carrying a phone number : 1" in out
+    assert "carrying a website      : 2" in out
+    assert "none matched the filter : 0" in out
+    assert "record at all      : 0" in out
+
+
+def test_gap_report_names_counties_it_has_no_name_for_by_geoid(capsys):
+    """A shape cache written before names were stored has none. A missing name
+    is a missing name - it must not turn into a wrong one or a crash."""
+    records = [{"geoid": "27999", "agency": "Somewhere PD", "phone": "",
+                "website": ""}]
+    out = _gap_lines(capsys, state="MN", names={}, records=records,
+                     chosen={}, match="sheriff")
+    assert "27999" in out
+
+
+def test_osm_keeps_the_website_tag_in_both_spellings(monkeypatch, tmp_path):
+    monkeypatch.setattr(sle, "CACHE_DIR", str(tmp_path))
+    els = [
+        {"type": "node", "id": 1, "lat": 1.0, "lon": 1.0,
+         "tags": {"name": "A", "website": "https://a.example"}},
+        {"type": "node", "id": 2, "lat": 1.1, "lon": 1.1,
+         "tags": {"name": "B", "contact:website": "https://b.example"}},
+        {"type": "node", "id": 3, "lat": 1.2, "lon": 1.2, "tags": {"name": "C"}},
+    ]
+    monkeypatch.setattr(sle, "_overpass_tile",
+                        lambda tile, m, t, a, log, deadline=None, locks=None,
+                        start=0: (els, False))
+    got = sle.fetch_osm("MN", bbox=(0.0, 0.0, 9.0, 9.0), log=lambda *a: None)
+    assert [r["website"] for r in got] == ["https://a.example",
+                                           "https://b.example", ""]
+
+
+def test_the_shape_cache_carries_the_county_names(monkeypatch, tmp_path):
+    monkeypatch.setattr(sle, "CACHE_DIR", str(tmp_path))
+    import build_county_pack as _bcp
+    monkeypatch.setattr(_bcp, "fetch_counties", lambda sfp, ep=None, alts=None,
+                        log=print: ([{
+                            "properties": {"GEOID": "27025", "NAME": "Chisago County"},
+                            "geometry": {"type": "Polygon",
+                                         "coordinates": [[[0, 0], [5, 0], [5, 5],
+                                                          [0, 5], [0, 0]]]}}],
+                                    "http://e/1", "Current"))
+    shapes, names = sle.county_shapes("27", log=lambda *a: None, with_names=True)
+    assert names == {"27025": "Chisago County"}
+    # and it survives the round trip through the cache
+    shapes2, names2 = sle.county_shapes("27", log=lambda *a: None, with_names=True)
+    assert names2 == names and shapes2 == shapes
