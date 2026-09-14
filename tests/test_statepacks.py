@@ -2514,3 +2514,67 @@ def test_a_straddling_state_is_tiled_across_both_boxes(monkeypatch, tmp_path):
     assert len(asked) == 2 * 9, len(asked)       # two boxes, nine tiles each
     # and no tile is the impossible one that spans the planet
     assert all(t[2] - t[0] < 180 for t in asked), asked
+
+
+# --------------------------------------------------------------------------
+# 15 states do not call them counties. The pack title should not either.
+# --------------------------------------------------------------------------
+@pytest.mark.parametrize("names,want", [
+    (["Chisago County", "Kanabec County"], "County"),
+    (["Acadia Parish", "Allen Parish", "Ascension Parish"], "Parish"),
+    (["Adjuntas Municipio", "Aguada Municipio"], "Municipio"),
+    (["Nome Census Area", "Bethel Census Area"], "Census Area"),
+    (["Juneau City and Borough", "Sitka City and Borough"], "City and Borough"),
+    # Alaska really does mix them, so there is no shared descriptor
+    (["Aleutians West Census Area", "Anchorage Municipality"], ""),
+    # one name shares a suffix with itself - that is not a pattern
+    (["District of Columbia"], ""),
+    (["Chisago County"], ""),
+    ([], ""),
+    (["", None], ""),
+])
+def test_shared_descriptor_reads_the_word_the_source_used(names, want):
+    assert bcp.shared_descriptor(names) == want
+
+
+def test_a_descriptor_never_swallows_a_whole_name():
+    """Two counties named only "Alpha" and "Beta" share nothing to strip."""
+    assert bcp.shared_descriptor(["Alpha", "Beta"]) == ""
+    # and a name that IS the descriptor cannot contribute one
+    assert bcp.shared_descriptor(["County", "Acadia County"]) == ""
+
+
+def _title_of(monkeypatch, tmp_path, st, counties):
+    monkeypatch.setattr(bcp, "fetch_acs", lambda *a, **k: {})
+    monkeypatch.setattr(bcp, "fetch_counties", lambda sfp, ep=None, alts=None,
+                        log=print: ([{
+                            "properties": {"GEOID": g, "NAME": n, "AREALAND": 10 ** 9},
+                            "geometry": {"type": "Polygon", "coordinates": [[
+                                [-92.4, 30.2], [-92.0, 30.2], [-92.0, 30.6],
+                                [-92.4, 30.6], [-92.4, 30.2]]]}}
+                            for g, n in counties], "https://tigerweb/1", "Current"))
+    r = bcp.build_state(st, str(tmp_path), log=lambda *a: None, today="2026-09-16")
+    kml = zipfile.ZipFile(r["path"]).read("doc.kml").decode()
+    return re.findall(r"<name>([^<]+)</name>", kml)[0]
+
+
+def test_a_parish_pack_is_not_titled_counties(monkeypatch, tmp_path):
+    t = _title_of(monkeypatch, tmp_path, "LA",
+                  [("22001", "Acadia Parish"), ("22003", "Allen Parish")])
+    assert t.startswith("LA Parish boundaries"), t
+
+
+def test_a_single_county_state_is_not_titled_after_its_one_county(
+        monkeypatch, tmp_path):
+    """"District of Columbia" shares "of Columbia" with itself, which titled
+    the pack "DC of Columbia boundaries and reference data"."""
+    t = _title_of(monkeypatch, tmp_path, "DC", [("11001", "District of Columbia")])
+    assert t == "DC boundaries and reference data (Current)", t
+
+
+def test_a_state_that_mixes_descriptors_falls_back_to_the_layers_own_name(
+        monkeypatch, tmp_path):
+    t = _title_of(monkeypatch, tmp_path, "AK",
+                  [("02016", "Aleutians West Census Area"),
+                   ("02020", "Anchorage Municipality")])
+    assert t.startswith("AK County boundaries"), t

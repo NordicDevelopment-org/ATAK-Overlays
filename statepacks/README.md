@@ -471,6 +471,25 @@ If you came here from a script that hit one state's GIS server directly:
 
 ---
 
+### Fifteen states do not call them counties
+
+Louisiana has parishes, Puerto Rico municipios, Alaska boroughs and census
+areas. The pack reads the descriptor back out of TIGER's own `NAME` instead of
+pluralising a word from a table, so the overlay is titled with whatever the
+source actually says:
+
+```
+MN County boundaries and reference data (Current)
+LA Parish boundaries and reference data (Current)
+PR Municipio boundaries and reference data (Current)
+DC boundaries and reference data (Current)
+AK County boundaries and reference data (Current)   <- AK genuinely mixes them
+```
+
+The **filename** stays `<ST>_Counties__<edition>.kmz` for every state on
+purpose: it is the identity the installer matches on when it retires an older
+edition, so it has to be predictable rather than descriptive.
+
 ## 9. Troubleshooting
 
 | Symptom | Fix |

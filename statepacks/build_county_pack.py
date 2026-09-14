@@ -322,6 +322,34 @@ def service_vintage(url, log=print):
     return TIGER_VINTAGE_UNKNOWN
 
 
+def shared_descriptor(names):
+    """The word every name ends with, or "" when they do not share one.
+
+    Louisiana has parishes, Puerto Rico municipios, Alaska boroughs and census
+    areas. Titling all of them "Counties" states something the source does not:
+    TIGER spells the descriptor out in NAME, and this reads it back rather than
+    pluralising a word from a table of what states are supposed to call things.
+
+    The descriptor must be a SUFFIX of every name and must never be the whole
+    of any name. TWO DISTINCT names are required: one name shares a suffix with
+    itself trivially, which is how "District of Columbia" alone yielded the
+    descriptor "of Columbia" and a pack titled "DC of Columbia boundaries".
+    """
+    uniq = sorted({str(n).strip() for n in names if str(n or "").strip()})
+    if len(uniq) < 2:
+        return ""                        # one sample establishes no pattern
+    parts = [n.split() for n in uniq]
+    tail = []
+    for i in range(1, min(len(p) for p in parts) + 1):
+        word = parts[0][-i]
+        if any(p[-i] != word for p in parts):
+            break
+        if any(len(p) <= i for p in parts):   # would swallow a whole name
+            break
+        tail.insert(0, word)
+    return " ".join(tail)
+
+
 def county_geoid(props):
     """The 5-digit state+county FIPS of a returned feature, or None.
 
@@ -800,7 +828,14 @@ def build_state(state_abbr, out_dir, acs_year=ACS_YEAR, per_county=False,
     # names a year ("Census 2020") is enough; one that does not ("Current") gets
     # the build date appended, because "Current" ages the moment it is written.
     stamp = stamp_for_files
-    title = f"{state_abbr} Counties - boundaries and reference data ({vintage})"
+    # What the source calls them, when it calls all of them the same thing.
+    # With nothing in common it falls back to TIGER's own name for the layer;
+    # with a single feature there is nothing to pluralise at all (DC).
+    kind = shared_descriptor(m["name"] for m in built_rows)
+    if not kind:
+        kind = "" if len(built_rows) == 1 else "County"
+    title = (f"{state_abbr} {kind} boundaries and reference data ({vintage})"
+             .replace("  ", " "))
     kml = state_kml(state_abbr, placemarks, {
         "title": title, "boundary_source": boundary_source, "boundary_url": used_url,
         "acs_label": acs_label, "tiger_vintage": vintage, "built": built})
