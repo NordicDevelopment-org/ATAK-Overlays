@@ -100,6 +100,37 @@ environment still cannot reach these):
   https://api.census.gov/data/key_signup.html
 - Wikidata county seats: 87 of 87 Minnesota counties resolved, spot-checked
   correct (Chisago/Center City, Kanabec/Mora, St. Louis/Duluth).
+- **OpenStreetMap sheriff / primary LE, measured for MN** (`seed_le_contacts.py
+  --gaps`). This is the ceiling, not a work in progress:
+
+  | | |
+  |---|---|
+  | police features in the state box | 517 |
+  | ...carrying a phone number | 32 |
+  | counties with an agency, filter `sherr?iff` | 53 of 87 |
+  | ...plus `law enforcement cent\|county jail` | 63 |
+  | ...plus `county public safety\|justice cent` | **65** |
+  | ...of those carrying a phone number | **4 of 87** |
+  | counties whose only records are city PDs | 20 - left empty on purpose |
+  | counties with no LE record at all | 2 (Cottonwood, Kanabec) |
+
+  The phone column does not fill from any public source and no wider filter
+  changes that: the numbers are on 87 separate county websites. MN files
+  several sheriffs as "<County> Law Enforcement Center", "<County> Jail" or
+  "<County> Public Safety Center", and OSM spells one "Sherriff" - hence the
+  default `sherr?iff`. Writing a CITY police department as a county's primary
+  LE would be wrong, so those counties stay empty. `--gaps` reports each empty
+  county as one of three things: filter missed it, source has nothing, or its
+  tile was never fetched - which need different responses and must not be
+  conflated.
+- Overpass mirrors: `overpass-api.de`, `overpass.kumi.systems` and
+  `overpass.private.coffee` all answer; a whole-state box gets HTTP 504 under
+  load but a 3x3 tile does not. `overpass.osm.jp` serves a certificate that is
+  invalid for its own hostname and is deliberately not in the list.
+  **Overpass reports its own server-side timeout as HTTP 200** with an empty
+  `elements` list and a `remark` - never as an error status. Anything that
+  caches an Overpass response has to check for that or it stores "there is
+  nothing here" permanently.
 - Boundary detail: layers 1/3/5/7/9/11/13 all return an identical 1906 vertices
   for the same county, so the repeats within a vintage are not generalization
   levels and there is no sharper layer to switch to. Layer 67 has 1928 (+1.2%)
