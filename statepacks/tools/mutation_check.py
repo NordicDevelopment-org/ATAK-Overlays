@@ -38,6 +38,7 @@ SEED = "statepacks/seed_le_contacts.py"
 BUILD = "statepacks/build_county_pack.py"
 INV = "statepacks/atak_inventory.py"
 RPT = "statepacks/repeater_diagnose.py"
+NWR = "statepacks/build_nwr_pack.py"
 
 MUTATIONS = {
     SEED: [
@@ -117,6 +118,21 @@ MUTATIONS = {
          "        if parse is not None:", "        if False:"),
         ("unwire --gaps-dump",
          "                            dump=a.gaps_dump)", "                            dump=None)"),
+    ],
+    NWR: [
+        ("find the first bracket instead of the cclData assignment",
+         r'    m = re.search(r"var\s+cclData\s*=\s*(\[.*\])\s*;?\s*$", text,',
+         r'    m = re.search(r"(\[.*\])", text,'),
+        ("print the site twice when the source repeats itself",
+         "    if nm and loc and nm.lower() != loc.lower():",
+         "    if nm and loc:"),
+        ("place a transmitter that has no coordinate",
+         "    except (TypeError, ValueError):\n"
+         "        return None                       # no coordinate, no point. Not guessed.",
+         "    except (TypeError, ValueError):\n        lat, lon = 0.0, 0.0"),
+        ("hide an out-of-service transmitter among the working ones",
+         '        status = str(s.get("status") or "UNKNOWN").strip().upper() or "UNKNOWN"',
+         '        status = "NORMAL"'),
     ],
     RPT: [
         ("anchor the query on a parent key the data does not carry",

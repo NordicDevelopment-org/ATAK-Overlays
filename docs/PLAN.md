@@ -40,9 +40,27 @@ tone that opens it.
 | 1.2 | Decide sources from 1.1's numbers | `DONE` no redistributable source exists |
 | 1.3 | `MN_Repeaters__<vintage>.kmz` from a public source | `BLOCKED` on permission, see below |
 | 1.3b | Bring-your-own-data repeater layer | `OPEN` the only unblocked path |
-| 1.4 | NOAA Weather Radio transmitters | `OPEN` licence clean, coordinates missing |
+| 1.4 | NOAA Weather Radio transmitters | `BUILT` 37 MN, coordinates found |
 
-**1.4 NOAA Weather Radio.** The licence is genuinely clean and settled:
+**1.4 UNBLOCKED and built 2026-09-14.** The coordinates exist after all, in
+`https://www.weather.gov/source/nwr/JS/ccl-data.js` - the county-coverage file
+that backs the station pages. It is JavaScript (`var cclData = [...];`), not
+JSON, which is why a search for a structured download found nothing. It carries
+callsign, frequency, power, status, lat/lon, site, WFO and the full SAME county
+list for all 1,036 US transmitters, so it scales to 50 states by one filter.
+
+`build_nwr_pack.py` builds it: 37 transmitters sited in MN, or 49 with
+`--coverage` (adding border stations in ND/WI/IA/SD whose alerts reach MN).
+Those two counts were derived independently here and match the supplied data
+exactly. One folder per status, because an OUT OF SERVICE transmitter is
+something a folder should say out loud - KXI45 Gunflint Lake is currently the
+one, which independently reproduces the standing notice on weather.gov/nwr.
+
+**The data confirmed the SAME-code rule empirically.** Four MN counties appear
+as both a whole-county code and one or more partial codes - Hennepin is 027053
+AND 127053 AND 327053. Partial County Alerting adds; it does not replace.
+
+**1.4 NOAA Weather Radio, the licence.** Genuinely clean and settled:
 <https://www.weather.gov/disclaimer> puts NWS web content in the public domain,
 subject to three conditions an attributed KMZ satisfies. It is not a repeater
 layer - NWR is one-way broadcast, so there is no input frequency, no offset and

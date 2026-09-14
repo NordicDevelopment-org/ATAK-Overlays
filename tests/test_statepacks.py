@@ -14,6 +14,7 @@ import sys
 import time
 import zipfile
 import xml.dom.minidom as minidom
+import xml.etree.ElementTree as ET
 
 import pytest
 
@@ -3440,3 +3441,108 @@ def test_a_bbox_is_parsed_as_four_numbers_or_refused():
                        capture_output=True, text=True)
     assert r.returncode != 0
     assert "W,S,E,N" in (r.stderr + r.stdout)
+
+
+# ============================================================================
+# build_nwr_pack - NOAA Weather Radio. One-way broadcast: no input frequency,
+# no offset, no access tone, and the 1050 Hz alert is not CTCSS.
+# ============================================================================
+
+nwr = _load("build_nwr_pack")
+
+_STATION = {
+    "callsign": "WXM99", "freq": "162.425", "power": "1000",
+    "lat": "47.555833", "lon": "-94.801361", "status": "NORMAL",
+    "sitename": "Bemidji", "siteloc": "Bemidji", "sitestate": "MN",
+    "wfo": "Grand Forks|ND",
+    "counties": [{"same": "027007", "county": "Beltrami", "st": "MN"},
+                 {"same": "227021", "county": "Cass", "st": "MN"}],
+}
+
+
+def test_the_js_assignment_is_parsed_not_the_first_bracket():
+    """The file is generated. A comment or a second variable before the data
+    would make 'find the first [' pick up the wrong thing in silence."""
+    js = '// a note [not data]\nvar other = [1,2];\nvar cclData = [{"a":1}];\n'
+    assert nwr.parse_ccl(js) == [{"a": 1}]
+
+
+def test_an_unparseable_file_says_what_it_actually_saw():
+    with pytest.raises(ValueError) as ex:
+        nwr.parse_ccl("<!DOCTYPE html><html>404 not found</html>")
+    assert "DOCTYPE" in str(ex.value)        # not just "could not parse"
+
+
+def test_the_popup_carries_no_input_frequency_offset_or_tone():
+    """NWR is broadcast. A tone row would be read as a CTCSS access tone and
+    programmed into a radio, where it does nothing."""
+    pm = nwr.placemark(_STATION, "MN", {"url": "u", "built": "2026-09-14"})
+    low = pm.lower()
+    for absent in ("offset", "ctcss", "dcs", "tone", "transmit", "input"):
+        assert absent not in low, absent
+    assert "Listen: <b>162.425 MHz</b>" in pm
+
+
+def test_a_station_with_no_coordinate_is_dropped_not_placed():
+    s = dict(_STATION, lat="", lon="")
+    assert nwr.placemark(s, "MN", {"url": "u", "built": "d"}) is None
+
+
+def test_site_is_not_printed_twice_when_the_source_repeats_itself():
+    """sitename == siteloc on 440 of 1036 records."""
+    rows, _ = nwr.station_rows(_STATION, "MN")
+    site = dict(rows)["Site"]
+    assert site == "Bemidji"
+
+
+def test_a_differing_sitename_and_siteloc_both_survive():
+    """They mean different things: the town served, and the hill it is on."""
+    s = dict(_STATION, sitename="Alamosa", siteloc="Agua Ramon Mountain")
+    rows, _ = nwr.station_rows(s, "MN")
+    assert dict(rows)["Site"] == "Alamosa (Agua Ramon Mountain)"
+
+
+def test_a_partial_county_same_code_never_replaces_the_whole_county_one():
+    """Partial County Alerting ADDS sub-area codes. Hennepin is 027053 AND
+    127053 AND 327053 in this very file; treating a partial as a substitute
+    drops the whole-county code and most of the alerting with it."""
+    s = dict(_STATION, counties=[
+        {"same": "027053", "county": "Hennepin", "st": "MN"},
+        {"same": "127053", "county": "Hennepin", "st": "MN"},
+        {"same": "327053", "county": "Hennepin", "st": "MN"}])
+    codes = [c for c, _n, _st in nwr.same_pairs(s)]
+    assert codes == ["027053", "127053", "327053"]
+
+
+def test_sited_in_and_covers_are_different_questions():
+    nd = dict(_STATION, sitestate="ND",
+              counties=[{"same": "027007", "county": "Beltrami", "st": "MN"}])
+    assert not nwr.in_state(nd, "MN")                      # not sited here
+    assert nwr.in_state(nd, "MN", coverage=True)           # but alerts here
+
+
+def test_out_of_service_gets_its_own_folder(tmp_path):
+    """'The weather radio you were counting on is down' is a thing a folder
+    should say, not a flag buried in a popup."""
+    dead = dict(_STATION, callsign="KXI45", status="OUT OF SERVICE")
+    kml = nwr.pack_kml("MN", [_STATION, dead],
+                       {"title": "t", "url": "u", "built": "2026-09-14"})
+    assert "<name>NORMAL (1)</name>" in kml
+    assert "<name>OUT OF SERVICE (1)</name>" in kml
+    ET.fromstring(kml)
+
+
+def test_the_pack_parses_as_xml_and_states_its_licence_and_read_date():
+    kml = nwr.pack_kml("MN", [_STATION],
+                       {"title": "t", "url": "u", "built": "2026-09-14"})
+    ET.fromstring(kml)
+    assert "public domain (NOAA/NWS)" in kml
+    assert "Status read: 2026-09-14" in kml       # status is live data
+    assert "not CTCSS or DCS" in kml             # said once, where it matters
+
+
+def test_the_filename_keeps_the_identity_version_boundary(tmp_path):
+    path, n = nwr.build("MN", str(tmp_path), [_STATION], log=lambda *a: None)
+    assert "__" in os.path.basename(path)
+    assert os.path.basename(path).startswith("MN_WeatherRadio__")
+    assert n == 1
