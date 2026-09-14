@@ -648,7 +648,9 @@ def test_osm_reads_both_phone_spellings_and_a_way_centre(monkeypatch):
         return FakeResp(payload)
 
     monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
-    got = sle.fetch_osm("MN", log=lambda *a: None)
+    # an explicit bbox, so nothing reaches out for county shapes
+    got = sle.fetch_osm("MN", log=lambda *a: None,
+                        bbox=(-97.3, 43.4, -89.4, 49.4))
 
     assert [r["name"] for r in got] == ["A PD", "B Sheriff"]
     assert got[0]["phone"] == "111"
@@ -658,9 +660,11 @@ def test_osm_reads_both_phone_spellings_and_a_way_centre(monkeypatch):
     assert got[1]["admintype"] == "county"
     import urllib.parse
     body = urllib.parse.unquote_plus(captured["body"])
-    assert 'ISO3166-2"="US-MN' in body                 # queried the right state
     assert 'amenity"="police' in body
     assert "out center tags" in body                   # centres for ways/relations
+    # a bbox, NOT an area lookup - the area form 504'd on every public mirror
+    assert "area[" not in body
+    assert "(43.4000,-97.3000,49.4000,-89.4000)" in body   # s,w,n,e order
 
 
 def test_every_source_down_writes_nothing_and_exits_nonzero(monkeypatch, tmp_path, capsys):
@@ -1048,3 +1052,55 @@ def test_show_dumps_records_and_reports_what_the_filter_would_match(
     assert "admintype" in out
     assert "1 of 2" in out                      # the match count
     assert "distinct admintype" in out          # the classifying column's values
+
+
+def test_bbox_comes_from_the_real_boundaries_not_a_typed_in_envelope():
+    """The Overpass bbox is derived from the county shapes already downloaded,
+    so no envelope is carried in this file to drift out of date."""
+    shapes = [
+        ("27001", [[[[-93.0, 45.0], [-92.0, 45.0], [-92.0, 46.0], [-93.0, 45.0]]]]),
+        ("27003", [[[[-95.0, 44.0], [-94.0, 44.0], [-94.0, 44.5], [-95.0, 44.0]]]]),
+    ]
+    w, s_, e, n = sle.bbox_of_shapes(shapes, pad=0.0)
+    assert (w, s_, e, n) == (-95.0, 44.0, -92.0, 46.0)
+
+    w2, s2, e2, n2 = sle.bbox_of_shapes(shapes, pad=0.5)
+    assert (w2, s2, e2, n2) == (-95.5, 43.5, -91.5, 46.5)
+
+    with pytest.raises(ValueError, match="no county geometry"):
+        sle.bbox_of_shapes([])
+
+
+def test_discovery_looks_inside_services_whose_own_name_does_not_match(monkeypatch, capsys):
+    """A service called "mn_structures" can hold a law-enforcement LAYER.
+    Filtering on the service name alone means never opening it - which is how a
+    29-service server reported 'nothing matched'."""
+    root = "http://gis.example/arcgis/rest/services"
+
+    def fake(url, params=None, **kw):
+        if url == root:
+            return {"folders": [], "services": [
+                {"name": "mn_structures", "type": "MapServer"},
+                {"name": "mn_hydro", "type": "MapServer"},
+            ]}
+        if url.endswith("mn_structures/MapServer"):
+            return {"layers": [{"id": 0, "name": "Schools"},
+                               {"id": 7, "name": "Law Enforcement Locations"}]}
+        return {"layers": [{"id": 0, "name": "Lakes"}]}
+
+    monkeypatch.setattr(sle, "http_json", fake)
+    found = sle.discover_arcgis(root, "law|police|sheriff", log=lambda *a: None)
+    assert found == [(f"{root}/mn_structures/MapServer", 7, "Law Enforcement Locations")]
+
+
+def test_discovery_with_an_empty_pattern_lists_everything(monkeypatch):
+    root = "http://gis.example/arcgis/rest/services"
+
+    def fake(url, params=None, **kw):
+        if url == root:
+            return {"folders": [], "services": [{"name": "a", "type": "MapServer"}]}
+        return {"layers": [{"id": 0, "name": "Anything"}, {"id": 1, "name": "Else"}]}
+
+    monkeypatch.setattr(sle, "http_json", fake)
+    found = sle.discover_arcgis(root, "", log=lambda *a: None)
+    assert len(found) == 2

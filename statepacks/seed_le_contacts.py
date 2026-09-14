@@ -401,6 +401,11 @@ def main(argv=None):
 
     if a.show:
         st = targets[0]
+        if a.raw:
+            # Print what the server sends, before any field mapping. The mapped
+            # view showed every USGS attribute as '' - which cannot distinguish
+            # "the server sent nothing" from "the mapping looked at wrong keys".
+            return dump_raw(st, use_osm, use_usgs, a, layer_id)
         try:
             raw = _fetch_raw(st, use_osm, use_usgs, a, layer_id)
         except Exception as e:                      # noqa: BLE001
@@ -678,19 +683,47 @@ OSM = SOURCES[2]
 OVERPASS_MIRRORS = [
     "https://overpass-api.de/api/interpreter",
     "https://overpass.kumi.systems/api/interpreter",
+    "https://overpass.osm.jp/api/interpreter",
+    "https://overpass.private.coffee/api/interpreter",
 ]
 
 # ISO 3166-2 subdivision codes are what Overpass indexes US states by.
+# A bbox query, NOT an area lookup. `area["ISO3166-2"=...]` makes Overpass
+# resolve the state boundary first, and both public mirrors answered that with
+# HTTP 504 for Minnesota. A bounding box needs no resolution and is cheap.
+#
+# The box is computed from the TIGERweb county shapes this script already
+# downloads for the spatial match, so it is derived from real boundaries rather
+# than a table of envelopes typed in from somewhere. Overpass wants
+# (south, west, north, east).
 OSM_QUERY = """
-[out:json][timeout:180];
-area["ISO3166-2"="US-{st}"]->.a;
-nwr["amenity"="police"](area.a);
+[out:json][timeout:{timeout}];
+nwr["amenity"="police"]({s:.4f},{w:.4f},{n:.4f},{e:.4f});
 out center tags;
 """
 
 
-def fetch_osm(state_abbr, mirrors=None, log=print):
-    """[{name, phone, address, city, admintype, lon, lat}] for one state.
+def bbox_of_shapes(shapes, pad=0.02):
+    """(w, s, e, n) around every county in `shapes`, with a small pad.
+
+    Derived from the boundaries actually downloaded, so no envelope is typed in
+    from memory. The pad catches a station sitting right on a border; anything
+    genuinely outside the state is dropped later by the spatial match anyway.
+    """
+    xs, ys = [], []
+    for _geoid, polys in shapes:
+        for rings in polys:
+            for ring in rings:
+                for pt in ring:
+                    xs.append(pt[0])
+                    ys.append(pt[1])
+    if not xs:
+        raise ValueError("no county geometry to derive a bounding box from")
+    return (min(xs) - pad, min(ys) - pad, max(xs) + pad, max(ys) + pad)
+
+
+def fetch_osm(state_abbr, mirrors=None, log=print, bbox=None, timeout=180):
+    """[{name, phone, address, city, admintype, lon, lat}] inside `bbox`.
 
     `out center tags` gives a single representative coordinate for ways and
     relations as well as nodes, so a police station mapped as a building
@@ -698,20 +731,27 @@ def fetch_osm(state_abbr, mirrors=None, log=print):
     """
     import urllib.parse
     import urllib.request
-    q = OSM_QUERY.format(st=state_abbr.upper())
+    if bbox is None:
+        bbox = bbox_of_shapes(county_shapes(STATE_FIPS[state_abbr.upper()], log=log))
+    w, s_, e, n = bbox
+    q = OSM_QUERY.format(timeout=timeout, s=s_, w=w, n=n, e=e)
     last = None
     for url in (mirrors or OVERPASS_MIRRORS):
         try:
             data = urllib.parse.urlencode({"data": q}).encode()
             req = urllib.request.Request(url, data=data, headers=UA)
-            with urllib.request.urlopen(req, timeout=180, context=SSL_CTX) as r:
+            with urllib.request.urlopen(req, timeout=timeout + 30, context=SSL_CTX) as r:
                 doc = json.loads(r.read().decode("utf-8", "replace"))
+            log(f"    {url.split('/')[2]} answered")
             break
         except Exception as e:                      # noqa: BLE001
             last = e
-            log(f"    [!] {url} -> {redact_err(e)}")
+            log(f"    [!] {url.split('/')[2]} -> {redact_err(e)}")
     else:
-        raise RuntimeError(f"no Overpass mirror answered: {last}")
+        raise RuntimeError(
+            f"no Overpass mirror answered: {last}. The public mirrors rate-limit "
+            f"and time out under load - this is usually worth retrying in a few "
+            f"minutes rather than a permanent failure.")
 
     out = []
     for el in doc.get("elements") or []:
@@ -764,12 +804,16 @@ def discover_arcgis(root, pattern="", log=print):
     log(f"  {len(services)} service(s) total\n")
 
     found = []
+    checked = 0
     for svc in services:
         nm, typ = svc.get("name", ""), svc.get("type", "")
         if typ not in ("MapServer", "FeatureServer"):
             continue
-        if rx and not rx.search(nm):
-            continue
+        # Do NOT skip a service because its own name does not match. A service
+        # called "mn_structures" can hold a law-enforcement LAYER, and filtering
+        # at the service level means never looking inside it. The filter applies
+        # to the service name OR any of its layer names.
+        checked += 1
         url = f"{root}/{nm}/{typ}"
         try:
             meta = http_json(url, {"f": "json"}, tries=1, timeout=45)
@@ -777,14 +821,21 @@ def discover_arcgis(root, pattern="", log=print):
             log(f"  {nm} ({typ}): unreadable - {redact_err(e)}")
             continue
         layers = meta.get("layers") or []
+        svc_hit = bool(rx and rx.search(nm))
+        hits = [l for l in layers if rx and rx.search(str(l.get("name", "")))]
+        if rx and not svc_hit and not hits:
+            continue                    # nothing in this service matches; stay quiet
         log(f"  {nm} ({typ}) - {len(layers)} layer(s)")
         for l in layers:
-            mark = "  <--" if rx and rx.search(str(l.get("name", ""))) else ""
+            hit = rx and rx.search(str(l.get("name", "")))
+            mark = "  <-- MATCH" if hit else ""
             log(f"      {str(l.get('id')):>3}  {l.get('name')}{mark}")
-            found.append((url, l.get("id"), l.get("name")))
+            if hit or not rx:
+                found.append((url, l.get("id"), l.get("name")))
+    log(f"\n  inspected {checked} service(s); {len(found)} matching layer(s)")
     if not found:
-        log("  nothing matched. Re-run with a different --pattern, or none at all "
-            "to list everything.")
+        log("  Nothing matched the filter. To see everything this server has:")
+        log(f"    python3 seed_le_contacts.py --discover {root} --pattern ''")
     return found
 
 
@@ -805,6 +856,67 @@ def _fetch_raw(state_abbr, use_osm, use_usgs, args, layer_id):
     if use_usgs:
         return fetch_usgs(state_abbr, args.usgs_layer)
     return fetch_state(STATE_FIPS[state_abbr], layer_id, args.endpoint)
+
+
+
+
+def dump_raw(state_abbr, use_osm, use_usgs, args, layer_id):
+    """Print the server's own response for a few records, unmapped.
+
+    When every mapped field comes back empty, the mapping and the response are
+    indistinguishable from the outside. This shows which it is.
+    """
+    import urllib.parse
+    import urllib.request
+    if use_osm:
+        shapes = county_shapes(STATE_FIPS[state_abbr.upper()])
+        w, s_, e, n = bbox_of_shapes(shapes)
+        q = OSM_QUERY.format(timeout=180, s=s_, w=w, n=n, e=e)
+        print(f"QUERY:\n{q}")
+        for url in OVERPASS_MIRRORS:
+            try:
+                data = urllib.parse.urlencode({"data": q}).encode()
+                req = urllib.request.Request(url, data=data, headers=UA)
+                with urllib.request.urlopen(req, timeout=210, context=SSL_CTX) as r:
+                    doc = json.loads(r.read().decode("utf-8", "replace"))
+                els = doc.get("elements") or []
+                print(f"{url.split('/')[2]}: {len(els)} element(s)\n")
+                for el in els[:args.show]:
+                    print(json.dumps(el, indent=2)[:1500])
+                    print()
+                return 0
+            except Exception as ex:                 # noqa: BLE001
+                print(f"  [!] {url.split('/')[2]} -> {redact_err(ex)}")
+        return 2
+
+    base = USGS["url"] if use_usgs else HIFLD_LE
+    lid = args.usgs_layer if use_usgs else layer_id
+    where = (f"STATE='{state_abbr}'" if use_usgs
+             else f"COUNTYFIPS LIKE '{STATE_FIPS[state_abbr]}%'")
+    for fmt, fields in (("geojson", "NAME,ADDRESS,CITY,STATE,ADMINTYPE,FCODE,LOADDATE"),
+                        ("geojson", "*"),
+                        ("json", "*")):
+        url = f"{base}/{lid}/query"
+        params = {"where": where, "outFields": fields, "returnGeometry": "true",
+                  "outSR": "4326", "f": fmt, "resultRecordCount": args.show}
+        print(f"\n--- f={fmt}  outFields={fields} ---")
+        print(f"    {redact_err(url + '?' + urllib.parse.urlencode(params))}")
+        try:
+            doc = http_json(url, params, tries=1, timeout=60)
+        except Exception as ex:                     # noqa: BLE001
+            print(f"    FAILED: {redact_err(ex)}")
+            continue
+        if "error" in doc:
+            print(f"    server error: {doc['error']}")
+            continue
+        items = doc.get("features") or []
+        print(f"    {len(items)} feature(s)")
+        for it in items[:args.show]:
+            print(json.dumps(it, indent=2)[:1200])
+    print("\nCompare the three: if outFields=* returns populated attributes and the")
+    print("explicit field list does not, the server is not honouring outFields and")
+    print("the fix is to request * and map client-side.")
+    return 0
 
 
 if __name__ == "__main__":
