@@ -70,11 +70,14 @@ def test_sourced_renders_value_with_source_and_vintage():
     assert bool(s) is True
 
 
-def test_sourced_absence_is_explicit_never_zero():
+def test_an_absent_value_renders_as_nothing_never_as_zero():
+    """The popup omits an absent field entirely, so there is no placeholder
+    string left to get mistaken for data. What must never happen is a 0."""
     for empty in (bcp.Sourced(), bcp.Sourced(None, "ACS 5-year", "2023"), bcp.Sourced("")):
         assert bool(empty) is False
-        assert empty.render() == "not in dataset"
-        assert "0" != empty.render()
+        assert empty.render() == ""
+        assert empty.parts() == ("", "")
+        assert "0" not in empty.render()
 
 
 def _meta(**over):
@@ -99,8 +102,8 @@ def test_popup_shows_what_exists_and_omits_what_does_not():
     dataset" bury the three that carry real values."""
     pm = bcp.county_placemark({}, {"type": "Polygon", "coordinates": [
         [[-93, 45], [-92, 45], [-92, 46], [-93, 45]]]}, _meta())
-    assert "58,241  [ACS 5-year 2023]" in pm
-    assert "414.2 sq mi  [TIGER ALAND 2024]" in pm
+    assert "58,241 [ACS 5-year 2023]" in _text(pm)
+    assert "414.2 sq mi [TIGER ALAND 2024]" in _text(pm)
 
     # absent fields get no row of their own at all
     assert "<b>County seat:</b>" not in pm
@@ -125,7 +128,7 @@ def test_a_county_with_everything_has_no_no_data_line():
     pm = bcp.county_placemark({}, {"type": "Polygon", "coordinates": [
         [[-93, 45], [-92, 45], [-92, 46], [-93, 45]]]}, full)
     assert "No data for:" not in pm
-    assert "651-257-4100  [OSM 2026]" in pm
+    assert "651-257-4100 [OSM 2026]" in _text(pm)
 
 
 # --------------------------------------------------------------------------
@@ -160,6 +163,11 @@ def stubbed(monkeypatch):
     return bcp
 
 
+def _text(kml):
+    """Popup text with tags stripped and whitespace collapsed - assert on what a
+    reader sees, not on the markup or the spacing around it."""
+    return re.sub(r"\s+", " ", re.sub(r"<[^>]+>", " ", kml))
+
 def _doc(path):
     return zipfile.ZipFile(path).read("doc.kml").decode()
 
@@ -192,8 +200,8 @@ def test_land_area_comes_from_aland_not_a_projected_shape_area(stubbed, tmp_path
     """
     bcp.build_state("MN", str(tmp_path), log=lambda *a: None, today="2026-09-14")
     kml = _doc(tmp_path / MN_PACK)
-    assert "413.9 sq mi  [TIGER ALAND 2024]" in kml
-    assert "28.5 sq mi  [TIGER AWATER 2024]" in kml
+    assert "413.9 sq mi [TIGER ALAND 2024]" in _text(kml)
+    assert "28.5 sq mi [TIGER AWATER 2024]" in _text(kml)
 
 
 def test_missing_acs_still_builds_and_says_so(monkeypatch, tmp_path):
@@ -221,8 +229,8 @@ def test_csv_enrichment_carries_its_own_source_and_vintage(stubbed, tmp_path, mo
 
     bcp.build_state("MN", str(tmp_path), log=lambda *a: None, today="2026-09-14")
     kml = _doc(tmp_path / MN_PACK)
-    assert "Center City  [Wikidata 2026-09-14]" in kml
-    assert "651-555-0100  [county website 2026]" in kml
+    assert "Center City [Wikidata 2026-09-14]" in _text(kml)
+    assert "651-555-0100 [county website 2026]" in _text(kml)
     # the county with no CSV row still refuses to guess
     assert "not in dataset" in kml
 
@@ -730,9 +738,10 @@ def test_seeded_rows_flow_into_the_popup_with_their_vintage(tmp_path, monkeypatc
     monkeypatch.setattr(bcp, "fetch_acs", lambda sfp, year=2023, log=print, **kw: {})
     bcp.build_state("MN", str(tmp_path), log=lambda *a: None, today="2026-09-14")
     kml = _doc(tmp_path / MN_PACK)
-    assert "County0 Sheriff&#39;s Office  [HIFLD LE Locations (frozen snapshot) 2025]" in kml \
-        or "County0 Sheriff's Office  [HIFLD LE Locations (frozen snapshot) 2025]" in kml
-    assert "651-555-0100  [HIFLD LE Locations (frozen snapshot) 2025]" in kml
+    txt = _text(kml)
+    assert "Sheriff&#39;s Office [HIFLD LE Locations (frozen snapshot) 2025]" in txt \
+        or "Sheriff's Office [HIFLD LE Locations (frozen snapshot) 2025]" in txt
+    assert "651-555-0100 [HIFLD LE Locations (frozen snapshot) 2025]" in txt
 
 
 # --------------------------------------------------------------------------
@@ -830,8 +839,8 @@ def test_key_flows_from_build_state_into_the_popup(monkeypatch, tmp_path):
                     census_api_key="passed-through")
     assert seen.get("key") == "passed-through"
     kml = _doc(tmp_path / "MN_Counties_Current_2026_09_14.kmz")
-    assert "15,900  [ACS 5-year 2023]" in kml
-    assert "11,000  [ACS 5-year 2023]" in kml
+    assert "15,900 [ACS 5-year 2023]" in _text(kml)
+    assert "11,000 [ACS 5-year 2023]" in _text(kml)
 
 
 # --------------------------------------------------------------------------
@@ -1127,3 +1136,45 @@ def test_discovery_with_an_empty_pattern_lists_everything(monkeypatch):
     monkeypatch.setattr(sle, "http_json", fake)
     found = sle.discover_arcgis(root, "", log=lambda *a: None)
     assert len(found) == 2
+
+
+def test_value_is_bold_and_provenance_is_grey_and_bracketed():
+    """What someone is reading the popup FOR is the number. The source and year
+    are there for judgement and must not compete with it."""
+    pm = bcp.county_placemark({}, {"type": "Polygon", "coordinates": [
+        [[-93, 45], [-92, 45], [-92, 46], [-93, 45]]]}, _meta())
+
+    assert "<b>58,241</b>" in pm                        # the value, bold
+    assert f'<font color="{bcp.GREY}">[ACS 5-year 2023]</font>' in pm
+    assert "Population: <b>" in pm                      # label plain, value bold
+    # provenance never ends up inside the bold run
+    assert "<b>58,241  [ACS" not in pm
+
+    # the absence line is grey too, so it recedes
+    assert f'<font color="{bcp.GREY}"><i>No data for:' in pm
+    # and the whole thing is still valid XML inside its CDATA
+    kml = bcp.state_kml("MN", [pm], {
+        "title": "T", "boundary_source": "s", "boundary_url": "u",
+        "acs_label": "a", "tiger_vintage": "2024", "built": "b"})
+    minidom.parseString(kml)
+
+
+def test_parts_keeps_value_and_provenance_separate():
+    s = bcp.Sourced(58241, "ACS 5-year", "2023")
+    assert s.parts(lambda v: f"{v:,}") == ("58,241", "ACS 5-year 2023")
+    assert bcp.Sourced("x").parts() == ("x", "")        # no source, no tag
+    assert bcp.Sourced().parts() == ("", "")            # absent value
+    # render() still gives the plain one-line form for logs and tests
+    assert s.render(lambda v: f"{v:,}") == "58,241  [ACS 5-year 2023]"
+
+
+def test_a_value_containing_markup_cannot_escape_its_bold_run():
+    nasty = bcp.Sourced("</b><script>x</script>", "csv", "2026")
+    pm = bcp.county_placemark({}, {"type": "Polygon", "coordinates": [
+        [[-93, 45], [-92, 45], [-92, 46], [-93, 45]]]}, _meta(seat=nasty))
+    assert "<script>" not in pm
+    assert "&lt;script&gt;" in pm
+    kml = bcp.state_kml("MN", [pm], {
+        "title": "T", "boundary_source": "s", "boundary_url": "u",
+        "acs_label": "a", "tiger_vintage": "2024", "built": "b"})
+    minidom.parseString(kml)

@@ -113,6 +113,9 @@ KEY_FILE = os.path.join(os.path.expanduser("~"), ".config",
 TIGER_VINTAGE_UNKNOWN = "vintage not reported"
 _YEAR_RE = re.compile(r"\b(19|20)\d{2}\b")
 SQ_M_PER_SQ_MI = 2589988.110336  # exact, by definition of the survey mile
+# Provenance grey. Mid-grey reads on both the light and dark popup backgrounds
+# ATAK uses, where a lighter grey washes out on white.
+GREY = "#808080"
 
 SSL_CTX = ssl.create_default_context()
 UA = {"User-Agent": "atak-statepacks/1.0 (+https://github.com/NordicDevelopment-org/ATAK-Overlays)"}
@@ -151,12 +154,30 @@ class Sourced:
         return self.value is not None and self.value != ""
 
     def render(self, fmt=None):
-        """'58,241  [ACS 5-year 2023]', or an explicit absence."""
+        """'58,241  [ACS 5-year 2023]' as plain text, for logs and tests.
+
+        An absent value renders as nothing at all - not as a bare provenance
+        tag, which would show a source next to no number.
+        """
         if not self:
-            return "not in dataset"
+            return ""
+        v, tag = self.parts(fmt)
+        return f"{v}  [{tag}]" if tag else v
+
+    def parts(self, fmt=None):
+        """(value, 'source vintage') kept SEPARATE so each can be styled.
+
+        The popup renders the value bold and the provenance grey, which means
+        they cannot be escaped as one string - the markup would be escaped with
+        them.
+        """
+        if not self:
+            # No value means no tag either. A source and year next to nothing
+            # would render as provenance for a number that was never there.
+            return "", ""
         v = fmt(self.value) if fmt else str(self.value)
         tag = " ".join(x for x in (self.source, self.vintage) if x)
-        return f"{v}  [{tag}]" if tag else v
+        return v, tag
 
 
 # --------------------------------------------------------------------------
@@ -562,16 +583,29 @@ def county_placemark(props, geom, meta, precision=6):
     # an omitted row asserts nothing - which is the only thing the rule against
     # inventing values actually requires. The Document description still lists
     # every source consulted, so absence stays explainable.
+    #
+    # Styling: the VALUE is bold, because that is what someone is reading the
+    # popup for; the source and year are grey and bracketed, present for
+    # judgement but never competing with the number. <font color> rather than a
+    # CSS span - ATAK's description renderer is not a full browser, and the old
+    # tag is the one constrained renderers reliably honour.
     present = [(label, sv) for label, sv in rows if sv]
-    body = "".join(
-        f"<b>{esc(label)}:</b> {esc(sv.render(comma))}<br/>" for label, sv in present)
+    body = ""
+    for label, sv in present:
+        value, tag = sv.parts(comma)
+        line = f"{esc(label)}: <b>{esc(value)}</b>"
+        if tag:
+            line += f' <font color="{GREY}">[{esc(tag)}]</font>'
+        body += line + "<br/>"
     missing = [label for label, sv in rows if not sv]
     if missing:
-        body += (f"<br/><i>No data for: {esc(', '.join(missing))}</i><br/>")
-    footer = (f"<hr/><i>Boundary: {esc(meta['boundary_source'])}<br/>"
+        body += (f'<br/><font color="{GREY}"><i>No data for: '
+                 f'{esc(", ".join(missing))}</i></font><br/>')
+    footer = (f'<hr/><font color="{GREY}"><i>'
+              f"Boundary: {esc(meta['boundary_source'])}<br/>"
               f"{esc(meta['boundary_url'])}<br/>"
               f"Licence: public domain (US Census Bureau)<br/>"
-              f"Pack built: {esc(meta['built'])}</i>")
+              f"Pack built: {esc(meta['built'])}</i></font>")
 
     geoms = []
     for ring in rings_of(geom):

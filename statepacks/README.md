@@ -182,17 +182,22 @@ does — a deleted file can linger in the UI until the app restarts.
 
 **Every value in a popup is followed by its source and year:**
 
-```
-County:               Chisago County, MN   [TIGER Current]
-FIPS (GEOID):         27025                [TIGER Current]
-County seat:          Center City          [Wikidata (community-maintained) 2026-09-14]
-Population:           58,241               [ACS 5-year 2023]
-Housing units:        23,110               [ACS 5-year 2023]
-Land area:            413.9 sq mi          [TIGER ALAND Current]
-Water area:           28.5 sq mi           [TIGER AWATER Current]
+| | |
+|---|---|
+| County: | **Chisago County, MN** <sub>`[TIGER Current]`</sub> |
+| FIPS (GEOID): | **27025** <sub>`[TIGER Current]`</sub> |
+| County seat: | **Center City** <sub>`[Wikidata (community-maintained) 2026-09-14]`</sub> |
+| Population: | **58,241** <sub>`[ACS 5-year 2023]`</sub> |
+| Housing units: | **23,110** <sub>`[ACS 5-year 2023]`</sub> |
+| Land area: | **413.9 sq mi** <sub>`[TIGER ALAND Current]`</sub> |
+| Water area: | **28.5 sq mi** <sub>`[TIGER AWATER Current]`</sub> |
+| | *No data for: Sheriff / primary LE, LE non-emergency* |
 
-No data for: Sheriff / primary LE, LE non-emergency
-```
+The **value is bold** — that is what someone opened the popup to read. The
+source and year are **grey and bracketed**: present for judgement, never
+competing with the number. `<font color>` rather than a CSS span, because
+ATAK's description renderer is not a full browser and the old tag is the one
+constrained renderers reliably honour.
 
 **A field nothing returned gets no row.** Nine lines of "not in dataset" bury
 the six that carry real values, so an absent field is simply left out and the
