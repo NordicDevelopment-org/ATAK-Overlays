@@ -1895,8 +1895,8 @@ def test_gap_report_separates_a_filter_problem_from_an_absence(capsys):
         # 27005 has nothing at all - no filter fixes that
     ]
     chosen = {"27001": records[0]}
-    out = _gap_lines(capsys, state="MN", names=names, records=records,
-                     chosen=chosen, match="sheriff")
+    out = _gap_lines(capsys, state="MN", geoids=list(names), names=names,
+                     records=records, chosen=chosen, match="sheriff")
     assert "have records, none matched the filter : 1" in out
     assert "Blaine Police Department" in out          # what they are REALLY called
     assert "Anoka County" in out
@@ -1915,8 +1915,8 @@ def test_gap_report_counts_phone_and_website_separately(capsys):
         {"geoid": "27005", "agency": "C County Sheriff", "phone": "", "website": ""},
     ]
     chosen = {r["geoid"]: r for r in records}
-    out = _gap_lines(capsys, state="MN", names=names, records=records,
-                     chosen=chosen, match="sheriff")
+    out = _gap_lines(capsys, state="MN", geoids=list(names), names=names,
+                     records=records, chosen=chosen, match="sheriff")
     assert "carrying a phone number : 1" in out
     assert "carrying a website      : 2" in out
     assert "none matched the filter : 0" in out
@@ -1928,8 +1928,8 @@ def test_gap_report_names_counties_it_has_no_name_for_by_geoid(capsys):
     is a missing name - it must not turn into a wrong one or a crash."""
     records = [{"geoid": "27999", "agency": "Somewhere PD", "phone": "",
                 "website": ""}]
-    out = _gap_lines(capsys, state="MN", names={}, records=records,
-                     chosen={}, match="sheriff")
+    out = _gap_lines(capsys, state="MN", geoids=["27999"], names={},
+                     records=records, chosen={}, match="sheriff")
     assert "27999" in out
 
 
@@ -1965,3 +1965,88 @@ def test_the_shape_cache_carries_the_county_names(monkeypatch, tmp_path):
     # and it survives the round trip through the cache
     shapes2, names2 = sle.county_shapes("27", log=lambda *a: None, with_names=True)
     assert names2 == names and shapes2 == shapes
+
+
+def test_gap_report_counts_counties_that_have_no_record_at_all(capsys):
+    """The regression that made this report useless: the county list was taken
+    from the records, so a county with no records could not appear in it and
+    'no law-enforcement record at all' was structurally always 0. It reported
+    85 counties and 0 gaps for a state with 87 counties and 2 real ones."""
+    geoids = [f"270{n:02d}" for n in range(1, 8)]          # 7 counties
+    records = [{"geoid": "27001", "agency": "A County Sheriff", "phone": "",
+                "website": ""}]
+    out = _gap_lines(capsys, state="MN", geoids=geoids, names={},
+                     records=records, chosen={"27001": records[0]},
+                     match="sheriff")
+    assert "GAP REPORT for MN - 7 counties" in out, out
+    assert "no law-enforcement record at all      : 6" in out, out
+
+
+def test_a_shape_cache_without_names_is_refetched_when_names_are_asked_for(
+        monkeypatch, tmp_path):
+    """Serving 'this state has no county names' out of an older cache is a
+    wrong answer dressed as a cache hit."""
+    monkeypatch.setattr(sle, "CACHE_DIR", str(tmp_path))
+    import build_county_pack as _bcp
+    hits = []
+
+    def fake(sfp, ep=None, alts=None, log=print):
+        hits.append(sfp)
+        return ([{"properties": {"GEOID": "27025", "NAME": "Chisago County"},
+                  "geometry": {"type": "Polygon",
+                               "coordinates": [[[0, 0], [5, 0], [5, 5], [0, 5], [0, 0]]]}}],
+                "http://e/1", "Current")
+
+    monkeypatch.setattr(_bcp, "fetch_counties", fake)
+    sle.county_shapes("27", log=lambda *a: None)
+    path = sle._shapes_cache_path("27")
+    doc = json.loads(open(path, encoding="utf-8").read())
+    del doc["names"]                                  # an older cache
+    open(path, "w", encoding="utf-8").write(json.dumps(doc))
+
+    _shapes, names = sle.county_shapes("27", log=lambda *a: None, with_names=True)
+    assert names == {"27025": "Chisago County"}
+    assert len(hits) == 2
+
+    # a cache that legitimately has no names must NOT refetch forever
+    doc = json.loads(open(path, encoding="utf-8").read())
+    doc["names"] = {}
+    open(path, "w", encoding="utf-8").write(json.dumps(doc))
+    sle.county_shapes("27", log=lambda *a: None, with_names=True)
+    sle.county_shapes("27", log=lambda *a: None, with_names=True)
+    assert len(hits) == 2
+
+
+def test_a_jail_does_not_outrank_the_sheriff_just_by_arriving_first():
+    """With a widened --match a county matches on several records. Order is
+    tile order, which has nothing to do with which one is the sheriff."""
+    recs = [
+        {"geoid": "27005", "agency": "Becker County Jail", "phone": "", "website": ""},
+        {"geoid": "27005", "agency": "Becker County Sheriff", "phone": "", "website": ""},
+    ]
+    m = "sheriff|jail"
+    assert sle.pick_sheriffs(recs, m)["27005"]["agency"] == "Becker County Sheriff"
+    assert sle.pick_sheriffs(list(reversed(recs)), m)["27005"]["agency"] \
+        == "Becker County Sheriff"
+
+
+def test_a_phone_still_wins_between_two_records_of_the_same_kind():
+    recs = [
+        {"geoid": "27005", "agency": "X County Sheriff", "phone": "", "website": ""},
+        {"geoid": "27005", "agency": "X County Sheriff Annex", "phone": "555",
+         "website": ""},
+    ]
+    assert sle.pick_sheriffs(recs)["27005"]["phone"] == "555"
+
+
+def test_a_sheriff_without_a_phone_still_beats_a_jail_with_one():
+    """The name is what the field claims to be. A phone number on the wrong
+    agency is worse than no phone number on the right one."""
+    recs = [
+        {"geoid": "27005", "agency": "Becker County Jail", "phone": "555",
+         "website": ""},
+        {"geoid": "27005", "agency": "Becker County Sheriff", "phone": "",
+         "website": ""},
+    ]
+    got = sle.pick_sheriffs(recs, "sheriff|jail")["27005"]
+    assert got["agency"] == "Becker County Sheriff" and got["phone"] == ""

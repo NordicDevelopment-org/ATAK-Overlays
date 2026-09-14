@@ -289,12 +289,29 @@ def fetch_state(sfp, layer_id, base=HIFLD_LE, log=print):
     return out
 
 
+def _rank(rec):
+    """How good a match is, most significant first. Higher wins.
+
+    Only two preferences, both stated rather than inferred:
+      * a name that actually says "sheriff" beats one that does not. With a
+        widened --match a county can match on several records, and "Becker
+        County Jail" must not outrank "Becker County Sheriff" merely by being
+        returned first.
+      * a record carrying a phone number beats one that does not, since the
+        number is the part that cannot be looked up anywhere else.
+    Ties keep the first record seen, which is tile order - deterministic.
+    """
+    return (1 if re.search(r"sheriff", rec["agency"], re.I) else 0,
+            1 if rec.get("phone") else 0)
+
+
 def pick_sheriffs(records, match="sheriff"):
-    """One agency per county: the best sheriff-looking match.
+    """One agency per county: the best matching record.
 
     A county has many law-enforcement records (city PDs, campus police, a
-    sheriff's office). Only the sheriff is the county's primary LE, so filter
-    by name and keep the first per county, preferring one with a phone number.
+    sheriff's office, a jail). Filter by name, then keep the best one per
+    county by _rank. The agency is written EXACTLY as the source spells it -
+    nothing is relabelled into "X County Sheriff" because it looked like one.
     """
     rx = re.compile(match, re.I)
     by_county = {}
@@ -302,8 +319,7 @@ def pick_sheriffs(records, match="sheriff"):
         if not rx.search(r["agency"]):
             continue
         cur = by_county.get(r["geoid"])
-        # prefer a record that actually has a phone number
-        if cur is None or (not cur["phone"] and r["phone"]):
+        if cur is None or _rank(r) > _rank(cur):
             by_county[r["geoid"]] = r
     return by_county
 
@@ -556,7 +572,7 @@ def main(argv=None):
         print(f"[*] {st}: {len(records)} LE records -> {len(chosen)} counties "
               f"({withphone} with a phone number)")
         if a.gaps:
-            report_gaps(st, cnames if (use_osm or use_usgs) else {}, records,
+            report_gaps(st, [g for g, _polys in shapes], cnames, records,
                         chosen, a.match)
         if records and not chosen:
             # Data arrived and every record was discarded. That is a filter
@@ -686,6 +702,12 @@ def county_shapes(state_fips, log=print, refresh=False, ttl_days=SHAPES_TTL_DAYS
                 doc = json.load(fh)
             age = (dt.date.today() - dt.date.fromisoformat(doc["fetched"])).days
             shapes = doc["shapes"]
+            # An older cache has no "names" key at all. Serving that as "this
+            # state has no county names" is a wrong answer dressed as a cache
+            # hit; refetch instead. An empty dict that IS present is a real
+            # answer and is kept, so this cannot loop.
+            if with_names and "names" not in doc:
+                raise KeyError("names")
             if 0 <= age <= ttl_days and shapes:
                 log(f"    {len(shapes)} county shapes from the local cache "
                     f"(fetched {doc['fetched']}; --refresh-shapes to redownload)")
@@ -1326,7 +1348,7 @@ def discover_arcgis(root, pattern="", log=print):
     return found
 
 
-def report_gaps(state, names, records, chosen, match, log=print):
+def report_gaps(state, geoids, names, records, chosen, match, log=print):
     """Say exactly WHY each county came back without a sheriff.
 
     "52 of 87" is a number, not a diagnosis. A county with no row is either a
@@ -1336,7 +1358,11 @@ def report_gaps(state, names, records, chosen, match, log=print):
     responses, so the report separates them and prints what the unmatched
     records are actually called.
     """
-    geoids = sorted(names) or sorted({r["geoid"] for r in records})
+    # `geoids` is the authoritative county list, from the boundaries. Deriving
+    # it from the records instead would make "no record at all" impossible to
+    # report - a county with no records is not in the records - and the total
+    # would silently shrink to however many counties happened to have one.
+    geoids = sorted(geoids)
     by_county = {}
     for r in records:
         by_county.setdefault(r["geoid"], []).append(r)
@@ -1351,7 +1377,11 @@ def report_gaps(state, names, records, chosen, match, log=print):
 
     log(f"\nGAP REPORT for {state} - {len(geoids)} count"
         f"{'y' if len(geoids) == 1 else 'ies'}")
-    log(f"  matched /{match}/i and written        : {len(chosen)}")
+    # The filter goes on its own line: a long regex in the middle of a label
+    # pushes every number out of its column and the report stops being
+    # scannable, which is the only thing it is for.
+    log(f"  filter: /{match}/i")
+    log(f"  matched and written                   : {len(chosen)}")
     log(f"    ...of those carrying a phone number : {withphone}")
     log(f"    ...of those carrying a website      : {withsite}")
     log(f"  have records, none matched the filter : {len(unmatched)}"

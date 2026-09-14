@@ -279,14 +279,36 @@ python3 seed_le_contacts.py --state MN --gaps
 
 ```
 GAP REPORT for MN - 87 counties
-  matched /sheriff/i and written        : 52
+  filter: /sheriff/i
+  matched and written                   : 52
     ...of those carrying a phone number : 3
-    ...of those carrying a website      : 11
-  have records, none matched the filter : 12  <- widening --match may fix these
-      27003 Anoka County                 Blaine Police Department, Coon Rapids Police Dept
-  no law-enforcement record at all      : 23  <- not in the source; no filter fixes this
-      27005 Becker County         27009 Benton County         ...
+    ...of those carrying a website      : 5
+  have records, none matched the filter : 33  <- widening --match may fix these
+      27007 Beltrami County              Beltrami County Law Enforcement Center, Redlake Police Department
+      27005 Becker County                Becker County Jail, Detroit Lakes Police Department
+  no law-enforcement record at all      : 2   <- not in the source; no filter fixes this
 ```
+
+Minnesota's own spelling, from that report: several counties file the sheriff
+under **"<County> Law Enforcement Center"** or **"<County> Jail"**, not
+"Sheriff". Widening the filter picks those up, and the agency is written
+**exactly as the source spells it** — nothing is relabelled into "X County
+Sheriff" because it looked like one:
+
+```bash
+python3 seed_le_contacts.py --state MN --gaps \
+    --match 'sheriff|law enforcement cent|county jail'
+```
+
+When a county matches on more than one record, the one whose name actually
+says "sheriff" wins, and only then does a phone number break the tie — a jail
+must not outrank the sheriff's office just by being returned first, and a phone
+number attached to the wrong agency is worse than no phone number on the right
+one.
+
+The rest of the unmatched counties have only **city** police departments.
+Writing one of those as a county's primary LE would be wrong, so they stay
+empty.
 
 ### What OSM actually has for Minnesota, measured 2026-09-14
 
