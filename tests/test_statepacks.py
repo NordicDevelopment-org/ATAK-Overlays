@@ -1,4 +1,4 @@
-MN_PACK = "MN_Counties_2024.kmz"
+MN_PACK = "MN_Counties__2024.kmz"
 
 """Tests for statepacks/build_county_pack.py - the stdlib-only ATAK county builder.
 
@@ -240,7 +240,10 @@ def test_per_county_also_writes_individual_files(stubbed, tmp_path):
                     today="2026-09-14")
     names = {p.name for p in tmp_path.glob("*.kmz")}
     assert MN_PACK in names
-    assert {"MN_County0_County.kmz", "MN_County1_County.kmz"} <= names
+    families = {n.split("__")[0] for n in names}
+    assert {"MN_Counties", "MN_County0_County", "MN_County1_County"} <= families
+    # every per-county file is versioned too, so a rebuild supersedes it
+    assert all("__" in n for n in names), names
 
 
 def test_every_state_is_addressable_and_fips_round_trips():
@@ -488,14 +491,14 @@ def test_a_vintage_with_no_year_still_dates_the_filename(monkeypatch, tmp_path):
                         (_fake_counties(1), "http://e/1", "Current"))
     monkeypatch.setattr(bcp, "fetch_acs", lambda sfp, year=2023, log=print, **kw: {})
     r = bcp.build_state("MN", str(tmp_path), log=lambda *a: None, today="2026-09-14")
-    assert os.path.basename(r["path"]) == "MN_Counties_Current_2026_09_14.kmz"
+    assert os.path.basename(r["path"]) == "MN_Counties__Current_2026_09_14.kmz"
 
     # one that already names a year needs no date appended
     monkeypatch.setattr(bcp, "fetch_counties",
                         lambda sfp, ep=None, alts=None, log=print:
                         (_fake_counties(1), "http://e/55", "Census 2020"))
     r2 = bcp.build_state("MN", str(tmp_path), log=lambda *a: None, today="2026-09-14")
-    assert os.path.basename(r2["path"]) == "MN_Counties_Census_2020.kmz"
+    assert os.path.basename(r2["path"]) == "MN_Counties__Census_2020.kmz"
 
 
 def test_unknown_vintage_is_never_shown_as_a_year(monkeypatch, tmp_path):
@@ -506,7 +509,7 @@ def test_unknown_vintage_is_never_shown_as_a_year(monkeypatch, tmp_path):
                         (_fake_counties(1), "http://e/1", bcp.TIGER_VINTAGE_UNKNOWN))
     monkeypatch.setattr(bcp, "fetch_acs", lambda sfp, year=2023, log=print, **kw: {})
     r = bcp.build_state("MN", str(tmp_path), log=lambda *a: None, today="2026-09-14")
-    assert os.path.basename(r["path"]) == "MN_Counties_built2026_09_14.kmz"
+    assert os.path.basename(r["path"]) == "MN_Counties__built2026_09_14.kmz"
     kml = _doc(r["path"])
     assert "vintage not reported" in kml
     assert "TIGER 2024" not in kml                  # never a year nobody returned
@@ -519,7 +522,7 @@ def test_a_feature_with_no_identity_shows_no_fips(stubbed, tmp_path, monkeypatch
                             "geometry": {"type": "Polygon", "coordinates": [RING]},
                         }], "http://e/1", "2024"))
     bcp.build_state("MN", str(tmp_path), log=lambda *a: None, today="2026-09-14")
-    kml = _doc(tmp_path / "MN_Counties_2024.kmz")
+    kml = _doc(tmp_path / MN_PACK)
     assert "<b>FIPS (GEOID):</b>" not in kml         # omitted rather than invented
     assert "No data for:" in kml and "FIPS (GEOID)" in kml
     assert "27000" not in kml                       # the old fabrication
@@ -841,7 +844,7 @@ def test_key_flows_from_build_state_into_the_popup(monkeypatch, tmp_path):
     bcp.build_state("MN", str(tmp_path), log=lambda *a: None, today="2026-09-14",
                     census_api_key="passed-through")
     assert seen.get("key") == "passed-through"
-    kml = _doc(tmp_path / "MN_Counties_Current_2026_09_14.kmz")
+    kml = _doc(tmp_path / "MN_Counties__Current_2026_09_14.kmz")
     assert "15,900 [ACS 5-year 2023]" in _text(kml)
     assert "11,000 [ACS 5-year 2023]" in _text(kml)
 
@@ -1269,3 +1272,45 @@ def test_the_misconfigured_mirror_is_not_retried():
     every request there fails TLS. Keeping it only burns a retry."""
     assert not any("osm.jp" in m for m in sle.OVERPASS_MIRRORS)
     assert len(sle.OVERPASS_MIRRORS) >= 2
+
+
+# --------------------------------------------------------------------------
+# "__" separates a pack's identity from its version, so an install can retire
+# older editions of the same pack without mistaking a sibling for one.
+# --------------------------------------------------------------------------
+def test_pack_filenames_carry_an_identity_version_boundary(stubbed, tmp_path):
+    r = bcp.build_state("MN", str(tmp_path), log=lambda *a: None, today="2026-09-16")
+    name = os.path.basename(r["path"])
+    assert "__" in name, name
+    family, _, version = name.partition("__")
+    assert family == "MN_Counties"                  # what the pack IS
+    assert version.endswith(".kmz") and version != ".kmz"   # which edition
+
+
+def test_two_builds_differ_only_after_the_boundary(monkeypatch, tmp_path):
+    """Same pack, different day: the family must be identical so the installer
+    can see the second as superseding the first."""
+    monkeypatch.setattr(bcp, "fetch_counties",
+                        lambda sfp, ep=None, alts=None, log=print:
+                        (_fake_counties(1), "http://e/1", "Current"))
+    monkeypatch.setattr(bcp, "fetch_acs", lambda sfp, year=2023, log=print, **kw: {})
+    a = os.path.basename(bcp.build_state("MN", str(tmp_path), log=lambda *a: None,
+                                         today="2026-09-16")["path"])
+    b = os.path.basename(bcp.build_state("MN", str(tmp_path), log=lambda *a: None,
+                                         today="2026-09-17")["path"])
+    assert a != b                                   # a new edition, not the same file
+    assert a.split("__")[0] == b.split("__")[0] == "MN_Counties"
+
+
+def test_per_county_files_are_versioned_too(stubbed, tmp_path):
+    bcp.build_state("MN", str(tmp_path), per_county=True, log=lambda *a: None,
+                    today="2026-09-16")
+    per = [p.name for p in tmp_path.glob("MN_County0*.kmz")]
+    assert per and all("__" in n for n in per), per
+
+
+def test_sector_pack_names_have_no_version_boundary():
+    """A sector pack carries no edition, so nothing may be retired for it -
+    otherwise MN_Water would read as a newer MN_Energy-Electric."""
+    for name in ("MN_Energy-Electric.kmz", "MN_Water.kmz", "SAMPLE_MN_Water.kmz"):
+        assert "__" not in name

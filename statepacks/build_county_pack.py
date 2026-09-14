@@ -688,6 +688,13 @@ def build_state(state_abbr, out_dir, acs_year=ACS_YEAR, per_county=False,
     le = load_csv_table("le_contacts.csv")
 
     boundary_source = f"US Census TIGERweb ({vintage})"
+    # Same rule as the state pack: a pack is datable from its own filename.
+    if vintage == TIGER_VINTAGE_UNKNOWN:
+        stamp_for_files = f"built{built}"
+    elif _YEAR_RE.search(vintage):
+        stamp_for_files = vintage
+    else:
+        stamp_for_files = f"{vintage}_{built}"
     acs_label = (f"US Census ACS 5-year {acs_year}" if acs
                  else "not retrieved - population and housing show as not in dataset")
 
@@ -746,7 +753,9 @@ def build_state(state_abbr, out_dir, acs_year=ACS_YEAR, per_county=False,
                 "title": f"{name}, {state_abbr}", "boundary_source": boundary_source,
                 "boundary_url": used_url, "acs_label": acs_label,
                 "tiger_vintage": vintage, "built": built})
-            write_kmz(os.path.join(out_dir, f"{state_abbr}_{safe(name)}.kmz"), one)
+            write_kmz(os.path.join(out_dir,
+                                   f"{state_abbr}_{safe(name)}__{safe(stamp_for_files)}.kmz"),
+                      one)
 
     if not placemarks:
         raise RuntimeError(f"{state_abbr}: no counties with usable geometry")
@@ -757,17 +766,18 @@ def build_state(state_abbr, out_dir, acs_year=ACS_YEAR, per_county=False,
     # A pack must be datable from its filename alone. A vintage that already
     # names a year ("Census 2020") is enough; one that does not ("Current") gets
     # the build date appended, because "Current" ages the moment it is written.
-    if vintage == TIGER_VINTAGE_UNKNOWN:
-        stamp = f"built{built}"
-    elif _YEAR_RE.search(vintage):
-        stamp = vintage
-    else:
-        stamp = f"{vintage}_{built}"
+    stamp = stamp_for_files
     title = f"{state_abbr} Counties - boundaries and reference data ({vintage})"
     kml = state_kml(state_abbr, placemarks, {
         "title": title, "boundary_source": boundary_source, "boundary_url": used_url,
         "acs_label": acs_label, "tiger_vintage": vintage, "built": built})
-    path = os.path.join(out_dir, f"{state_abbr}_Counties_{safe(stamp)}.kmz")
+    # "__" separates the pack's IDENTITY from its VERSION. Everything left of it
+    # names what the pack IS (MN_Counties); everything right of it is which
+    # edition. atak-install.sh reads that boundary to retire older editions of
+    # the same pack, and a filename with no "__" has no version, so it is simply
+    # overwritten in place. Guessing the split from token counts instead would
+    # have read SAMPLE_MN_Water as a version of SAMPLE_MN_Energy.
+    path = os.path.join(out_dir, f"{state_abbr}_Counties__{safe(stamp)}.kmz")
     size = write_kmz(path, kml)
 
     filled = sum(1 for m in built_rows if m["population"])

@@ -1,9 +1,13 @@
 #!/data/data/com.termux/files/usr/bin/bash
 # atak-install.sh - copy KMZ/KML packs into ATAK and make ATAK actually see them.
 #
-#   ./atak-install.sh ~/atak-packs/MN_Counties_2024.kmz
+#   ./atak-install.sh ~/atak-packs/MN_Counties__Current_2026-09-16.kmz
 #   ./atak-install.sh ~/atak-packs/*.kmz
 #   ./atak-install.sh ~/atak-packs            # a whole folder
+#   ./atak-install.sh --keep-old ~/atak-packs # keep previous editions too
+#
+# Installing a pack RETIRES older editions of the same pack, so a rebuild does
+# not leave the previous copy drawing underneath this one.
 #
 # THE FORCE STOP IS THE POINT. ATAK caches its overlay list in memory. Dropping
 # a file into the folder while it is running usually does nothing visible - the
@@ -16,7 +20,9 @@ set -euo pipefail
 HERE="$(cd -- "$(dirname -- "$0")" && pwd -P)"
 . "$HERE/atak-env.sh"
 
-[ $# -ge 1 ] || die "usage: $0 <file.kmz|folder> [more...]"
+keep_old=0
+if [ "${1:-}" = "--keep-old" ]; then keep_old=1; shift; fi
+[ $# -ge 1 ] || die "usage: $0 [--keep-old] <file.kmz|folder> [more...]"
 [ -d "$ATAK_DIR" ] || die "ATAK overlays folder not found: $ATAK_DIR
 Open ATAK once so it creates it, or set ATAK_DIR to your path."
 
@@ -37,6 +43,7 @@ done
 say "Installing ${#files[@]} file(s) into $ATAK_DIR"
 copied=0
 failed=0
+retired=0
 for f in "${files[@]}"; do
   base="$(basename "$f")"
   dest="$ATAK_DIR/$base"
@@ -57,6 +64,27 @@ for f in "${files[@]}"; do
   if cp -f -- "$f" "$tmp" 2>/dev/null && mv -f -- "$tmp" "$dest"; then
     copied=$((copied+1))
     printf '  %-46s %s\n' "$base" "$(du -h "$dest" | cut -f1)"
+
+    # Retire older editions of the SAME pack. "__" separates a pack's identity
+    # from its version: MN_Counties__Current_2026-09-16 is a new edition of
+    # MN_Counties, and leaving the previous one behind draws every county twice
+    # and lists the pack twice in Overlay Manager.
+    #
+    # A filename with no "__" carries no version, so nothing is retired for it -
+    # that is what keeps MN_Water from being read as an edition of MN_Energy.
+    case "$base" in
+      *__*)
+        if [ "$keep_old" -eq 0 ]; then
+          family="${base%%__*}"
+          while IFS= read -r -d '' old; do
+            [ "$(basename "$old")" != "$base" ] || continue
+            rm -f -- "$old" && printf '  %-46s %s\n' \
+              "$(basename "$old")" "(superseded, removed)"
+            retired=$((retired+1))
+          done < <(find "$ATAK_DIR/" -maxdepth 1 -type f -name "${family}__*.kmz" -print0)
+        fi
+        ;;
+    esac
   else
     rm -f -- "$tmp" 2>/dev/null || true
     failed=$((failed+1))
@@ -81,6 +109,7 @@ else
 fi
 
 say ""
+[ "$retired" -eq 0 ] || say "$retired older edition(s) removed (use --keep-old to keep them)"
 [ "$failed" -eq 0 ] || warn "$failed file(s) failed to copy; $copied succeeded"
 say "Done. Now:"
 say "  1. Open ATAK."

@@ -130,6 +130,21 @@ a full card leaves your existing pack intact rather than a truncated one.
 Then: **open ATAK → Overlay Manager (stacked-layers button) → your pack is
 listed by filename → tap the eye to toggle it.**
 
+### Rebuilds retire the previous edition
+
+A pack filename is `<identity>__<version>.kmz` — `MN_Counties__Current_2026-09-16.kmz`.
+Everything left of the `__` says what the pack **is**; everything right of it says
+which **edition**. Installing a new edition removes the older ones, so a rebuild
+does not leave last week's copy drawing county lines underneath this week's, or
+listing the same pack twice in Overlay Manager.
+
+A filename with no `__` carries no version, so nothing is ever retired for it —
+that is what stops `MN_Water.kmz` being read as a newer `MN_Energy-Electric.kmz`.
+
+```bash
+./termux/atak-install.sh --keep-old ~/atak-packs/out   # keep every edition
+```
+
 ### The force stop is the whole trick
 
 ATAK caches its overlay list in memory. Copy a file into the folder while ATAK
