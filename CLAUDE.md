@@ -69,6 +69,20 @@ then don't" and `OSM_JOBS = 1`, which silently undoes concurrent tile fetching.
 It reverts with `git checkout --`, so commit first; it refuses to run against a
 dirty tree because it has eaten uncommitted work once.
 
+## Picking this up
+
+`statepacks/` is the working end of this repo right now: ATAK county packs,
+one per state, built on a phone via Termux. Minnesota is verified end to end;
+nothing else has been fetched live.
+
+**Read `statepacks/README.md` §11 before starting.** It carries what is
+verified, what is untried, the next three things to do in order, the decisions
+that are the maintainer's rather than the code's, and a short list of things
+that look like bugs but are deliberate - don't "fix" those.
+
+Everything is on `claude/critical-infra-kmz-overlays-cnv8nj`. No PR has been
+opened; don't open one unless asked.
+
 ## Conventions that bite
 
 - **Overpass element types** are `node`/`way`/`rel`/`nwr`/`nw`/`nr`/`wr`.

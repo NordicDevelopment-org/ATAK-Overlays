@@ -681,3 +681,50 @@ Untried, and the most likely places for the next surprise:
   harder than Minnesota does.
 - **`--per-county`** builds one KMZ per county. It works, but 87 files has not
   been installed into ATAK in anger.
+
+### Pick up here
+
+In this order. Each is a real gap, not a polish item.
+
+1. **Fetch a second state live.** `./make-state-pack.sh WI --gaps`. Nothing but
+   Minnesota has ever touched a real endpoint. The thing to read is the gap
+   report: does the default LE filter fit Wisconsin's spellings, or does
+   `--gaps` compute a different widening? Let the report decide it — it counts
+   what each candidate term would reach in *that state's* data.
+2. **Alaska.** `./make-state-pack.sh AK --gaps`. The two-bounding-box
+   antimeridian path is unit-tested against synthetic geometry and has never
+   seen TIGER's real polygons. Expect: "straddles the antimeridian: 2 bounding
+   boxes", 18 tiles rather than 9, no tile wider than 180°.
+3. **Bound `--all-states`.** The `Deadline` is created inside `fetch_osm`,
+   which runs once per state, so 52 states is 52 budgets and the mirrors will
+   rate-limit long before the end. Either add a run-level budget or document a
+   batching workflow — but measure with three or four states first.
+
+### Decisions that are the maintainer's, not the code's
+
+- **Does a jail belong under "Sheriff / primary LE"?** The default filter
+  reaches `Becker County Jail` and `Beltrami County Law Enforcement Center`.
+  Both are written verbatim from OSM with source and date, and a record whose
+  name actually says "sheriff" always outranks them — but whether that label
+  should carry a jail is a judgement about the field, not about the data.
+  `MATCH='sherr?iff'` narrows it to 53 of 87.
+- **The 20 city-PD-only counties stay empty.** Writing `Hill City Police
+  Department` as Aitkin County's primary LE would be wrong. If you decide a
+  city PD is better than a blank, that is a deliberate change of meaning and
+  the label should change with it.
+
+### Deliberately not done — don't "fix" these
+
+- **Which Overpass mirror answered is not recorded.** All three query the same
+  OSM planet, so "OpenStreetMap (Overpass)" is accurate whichever served it.
+  This is not the alternate-endpoint provenance rule being ignored.
+- **Pack filenames stay `<ST>_Counties__<edition>.kmz` for every state**, even
+  where the document title says Parish or Municipio. The filename is the
+  identity `atak-install.sh` splits on to retire an older edition; it has to be
+  predictable, not descriptive.
+- **The tile grid is a fixed 3×3.** Changing it would invalidate every cached
+  tile on every device. A tile that is too big is handled by splitting it, not
+  by re-cutting the grid.
+- **The phone column is not a work in progress.** 4 of 87 is the ceiling for
+  any public source. It fills by hand in `data/le_contacts.local.csv`, which
+  the seeder never overwrites.
