@@ -328,3 +328,44 @@ def test_sector_and_aoi_filename_tokens():
     assert aoi_prefix(_p("state:MN")) == "MN"
     assert aoi_prefix(_p("county:27025", county_name="Chisago")) == "MN-Chisago"
     assert aoi_prefix(_p("us")) == "US"
+
+
+def test_empty_sector_writes_no_pack(tmp_path):
+    """A source that returned nothing must not become an empty overlay: an empty
+    pack in Import Manager reads as "nothing here", which is a claim we cannot make."""
+    srcs = [{"layer": "county_boundary", "driver": "_fake", "id": "cb"},
+            {"layer": "hospitals", "driver": "_fake", "id": "h"}]     # _fake returns [] for hospitals
+    ctx = Context(aoi=parse_aoi("county:27025", county_name="Chisago"))
+    m = run_build(ctx, srcs, str(tmp_path), ["kmz"], False, do_reconcile=False, log=lambda *a: None)
+    files = set(os.listdir(tmp_path))
+    assert "MN-Chisago_Base.kmz" in files                       # boundary has a feature
+    assert "MN-Chisago_Emergency-Health.kmz" not in files       # hospitals came back empty
+    assert not [r for r in m["layers"] if r.get("doc") == "MN-Chisago_Emergency-Health.kmz"]
+
+
+def test_attribution_does_not_claim_osm_lives_in_its_own_file(tmp_path):
+    """The ODbL notice used to say OSM layers are separate documents. Sector
+    packs merge them with public-domain sources, so that sentence had to go."""
+    @driver("_odbl")
+    def _odbl(logical, spec, ctx):
+        prov = Provenance("OpenStreetMap", "https://osm.org", "ODbL 1.0", "2026-09-14", "_odbl")
+        return LayerResult(logical, [Feature({"type": "Point", "coordinates": [-92.9, 45.5]},
+                                             {"name": "P"})], prov)
+
+    srcs = [{"layer": "county_boundary", "driver": "_fake", "id": "cb"},
+            {"layer": "power_plants", "driver": "_odbl", "id": "pp_osm", "provider": "osm"}]
+    ctx = Context(aoi=parse_aoi("county:27025", county_name="Chisago"))
+    run_build(ctx, srcs, str(tmp_path), ["kmz"], False, do_reconcile=False, log=lambda *a: None)
+    txt = (tmp_path / "ATTRIBUTION.txt").read_text()
+    assert "ODbL" in txt                                    # the notice really rendered
+    assert "kept as separate" not in txt                    # the sentence sector packs falsified
+    assert "their own folder and" in txt and "provenance footer inside every KMZ" in txt
+
+
+def test_sector_pack_document_carries_every_contributing_source(tmp_path):
+    ctx = Context(aoi=parse_aoi("county:27025", county_name="Chisago"))
+    run_build(ctx, _sources(), str(tmp_path), ["kmz"], False, do_reconcile=False, log=lambda *a: None)
+    kml = zipfile.ZipFile(tmp_path / "MN-Chisago_Energy-Electric.kmz").read("doc.kml").decode()
+    head = kml[:kml.index("<Style")]
+    assert "2 sources in this pack" in head
+    assert "Fake-eia" in head and "Fake-osm" in head

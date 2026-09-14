@@ -46,7 +46,7 @@ MN_Emergency-Health.kmz     hospitals, fire, police, EMS, EOC, shelters
 MN_Communications.kmz       towers, data centres, exchanges, PSAPs
 MN_Transportation.kmz       airports, rail, bridges, ports
 MN_Chemical-Hazmat.kmz  MN_Agriculture-Food.kmz  MN_Mining.kmz
-MN_Government.kmz       MN_Base.kmz  (boundaries, roads, parcels)
+MN_Government.kmz       MN_Base.kmz  (state, county and city boundaries)
 ALL.kmz                     every sector in one file (--no-combined to skip)
 manifest.json               counts, bbox, provenance per layer, build time
 reconcile.md                EIA vs OSM plants, HIFLD vs OSM substations: matches, deltas, misses

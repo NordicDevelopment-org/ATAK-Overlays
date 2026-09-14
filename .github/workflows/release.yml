@@ -62,7 +62,11 @@ jobs:
             python - <<'PY'
           import json
           m = json.load(open("pack/manifest.json"))
+          # manifest["layers"] now also carries a row per output pack (SECTOR:/ALL);
+          # those repeat features already counted, so list sources only.
           for r in m["layers"]:
+              if str(r.get("id", "")).startswith("SECTOR:") or r.get("id") == "ALL":
+                  continue
               if r.get("features"):
                   print(f"- {r.get('doc', r['layer'])}: {r['features']:,} features")
           bad = [r for r in m["layers"] if str(r["status"]).startswith("ERROR")]

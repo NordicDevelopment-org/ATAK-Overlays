@@ -194,8 +194,9 @@ ODBL_NOTICE = (
     "  - Attribution: credit \"(c) OpenStreetMap contributors\" wherever this pack is shown.\n"
     "  - Share-alike: if you publish a DERIVED DATABASE that adapts this OSM data, that database\n"
     "    must also be offered under ODbL. Producing a map or a briefing FROM it does not trigger\n"
-    "    share-alike; redistributing the modified data does. The OSM layers are kept as separate\n"
-    "    documents in this pack so they can be handled on their own terms.")
+    "    share-alike; redistributing the modified data does. OSM layers keep their own folder and\n"
+    "    their own provenance footer inside every KMZ, so which features are ODbL stays visible\n"
+    "    even where a pack merges them with public-domain sources - see the per-layer rows below.")
 
 
 def _write_attribution(path: str, results: List[LayerResult], specs: Dict[str, dict],
@@ -431,6 +432,11 @@ def run_build(ctx: Context, sources: List[dict], out_dir: str,
             kml, icons = convert.combined_kml(
                 group, specs, precision,
                 title=f"{ctx.aoi.describe()} - {sector}", sector_folders=False)
+            if kml.count("<Placemark>") == 0:
+                # every source in this sector came back empty; an empty overlay in
+                # Import Manager reads as "nothing here", which is a claim we cannot make
+                log(f"    {sector}: no features, no pack written")
+                continue
             n = convert.write_kmz(path, kml, icons)
             written.append(path)
             rows.append({

@@ -91,11 +91,75 @@ def test_demo_without_aoi_still_builds_near_chisago(tmp_path):
 def test_demo_group_by_layer_and_both(tmp_path):
     build_demo(str(tmp_path / "l"), group_by="layer", log=lambda *a: None)
     lf = set(os.listdir(tmp_path / "l"))
-    assert "power_plants.kmz" in lf and not [f for f in lf if f.startswith("SAMPLE_")]
+    assert "SAMPLE_power_plants.kmz" in lf
+    assert "power_plants.kmz" not in lf        # never the name a real build writes
 
     build_demo(str(tmp_path / "b"), group_by="both", log=lambda *a: None)
     bf = set(os.listdir(tmp_path / "b"))
-    assert "power_plants.kmz" in bf and "SAMPLE_Energy-Electric.kmz" in bf
+    assert "SAMPLE_power_plants.kmz" in bf and "SAMPLE_Energy-Electric.kmz" in bf
 
     with pytest.raises(ValueError, match="group_by"):
         build_demo(str(tmp_path / "x"), group_by="nope", log=lambda *a: None)
+
+
+def test_every_demo_kmz_is_marked_synthetic_in_every_mode(tmp_path):
+    """A demo file must never be named what a real build would name it."""
+    for mode in ("sector", "layer", "both"):
+        d = tmp_path / mode
+        build_demo(str(d), group_by=mode, aoi=parse_aoi("state:MN"), log=lambda *a: None)
+        for f in os.listdir(d):
+            if f.endswith(".kmz"):
+                assert f.startswith("SAMPLE_") or f == "DEMO_SAMPLE_ALL.kmz", f"{mode}: {f}"
+
+
+def test_county_aoi_does_not_claim_a_boundary_it_never_had(tmp_path):
+    """A county Aoi carries the STATE envelope until TIGER supplies the polygon.
+
+    Placing the grid there is fine; claiming it is "inside Chisago County" is not.
+    """
+    aoi = parse_aoi("county:27025", county_name="Chisago")
+    assert aoi.geometry is None and aoi.bbox == MN        # the premise of this test
+    m = build_demo(str(tmp_path), aoi=aoi, log=lambda *a: None)
+
+    placement = m["placement"]
+    assert "WIDER than its actual boundary" in placement
+    assert "inside the Chisago" not in placement
+
+    # and the honest wording rides everywhere the claim is repeated
+    assert "WIDER" in (tmp_path / "README.txt").read_text()
+    kml = zipfile.ZipFile(tmp_path / "SAMPLE_MN-Chisago_Water.kmz").read("doc.kml").decode()
+    assert "WIDER than its actual boundary" in kml
+
+
+def test_aoi_without_an_envelope_is_not_named_in_the_pack(tmp_path):
+    """country:XX has bbox=None, so nothing is placed - and nothing may claim it."""
+    aoi = parse_aoi("country:CA")
+    assert aoi.bbox is None                               # the premise of this test
+    m = build_demo(str(tmp_path), aoi=aoi, log=lambda *a: None)
+
+    files = [f for f in os.listdir(tmp_path) if f.endswith(".kmz")]
+    assert not [f for f in files if "CA" in f.replace("SAMPLE_", "").split("_")[0]]
+    assert "SAMPLE_Water.kmz" in files                    # bare prefix, no AOI token
+    assert "Chisago" in m["placement"]                    # says where it really is
+    kml = zipfile.ZipFile(tmp_path / "SAMPLE_Water.kmz").read("doc.kml").decode()
+    assert all(-94 < x < -92 and 45 < y < 46 for x, y in _coords(kml))
+
+
+def test_feature_total_is_not_double_counted(tmp_path):
+    """rows carry a per-layer AND a per-sector entry over the same features."""
+    m = build_demo(str(tmp_path), group_by="both", log=lambda *a: None)
+    assert m["features_total"] == 68
+    assert sum(r["features"] for r in m["layers"]) == 2 * m["features_total"]
+
+
+def test_sector_pack_document_names_every_source(tmp_path):
+    """PROJECT RULES: provenance in each KML Document, and a merged pack must
+    never speak for a source it did not use."""
+    build_demo(str(tmp_path), aoi=parse_aoi("state:MN"), log=lambda *a: None)
+    kml = zipfile.ZipFile(tmp_path / "SAMPLE_MN_Energy-Electric.kmz").read("doc.kml").decode()
+    head = kml[:kml.index("<Style")]
+    assert "<description>" in head
+    for layer in ("power_plants", "substations", "transmission_lines"):
+        assert f"overlaybuilder demo ({layer})" in head, layer
+    assert "3 sources in this pack" in head
+

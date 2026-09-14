@@ -315,11 +315,33 @@ def build_demo(out_dir: str, precision: int = 6, log=print, aoi=None,
 
     os.makedirs(out_dir, exist_ok=True)
     specs, results = demo_specs_and_results()
-    where = "a grid near Chisago County, MN"
-    if aoi is not None and aoi.bbox:
-        rescale_to_bbox(results, aoi.bbox)
-        where = f"a grid inside the {aoi.describe()} envelope"
-    prefix = f"SAMPLE_{aoi_prefix(aoi)}" if aoi is not None else "SAMPLE"
+
+    # Describe the box we ACTUALLY used, never the label we were handed. A county
+    # Aoi carries its STATE envelope until TIGER supplies the polygon during a real
+    # build, so "inside Chisago County" would be false by a few hundred km; an AOI
+    # with no bbox at all (country:XX) cannot be placed, and then the pack must not
+    # be named for it either.
+    from .aoi import bbox_of_geometry
+    box = None
+    exact = False
+    if aoi is not None:
+        if aoi.geometry:
+            box, exact = bbox_of_geometry(aoi.geometry), True
+        elif aoi.bbox:
+            box, exact = aoi.bbox, aoi.kind in ("state", "bbox")
+    if box:
+        rescale_to_bbox(results, box)
+        w, s_, e, n = box
+        env = f"{w:.2f},{s_:.2f},{e:.2f},{n:.2f}"
+        where = (f"a grid inside the {aoi.describe()} envelope ({env})" if exact else
+                 f"a grid inside {env} - the query envelope used for {aoi.describe()}, "
+                 f"which is WIDER than its actual boundary")
+    else:
+        where = "a grid near Chisago County, MN"
+        if aoi is not None:
+            log(f"[!] {aoi.describe()} has no envelope to place the sample grid in; "
+                f"leaving it near Chisago County and naming the pack SAMPLE_*")
+    prefix = f"SAMPLE_{aoi_prefix(aoi)}" if box else "SAMPLE"
 
     stamp = _dt.date.today().isoformat()
     written, rows = [], []
@@ -330,7 +352,7 @@ def build_demo(out_dir: str, precision: int = 6, log=print, aoi=None,
         normalize.apply_to_layer(res, spec)
         if group_by in ("layer", "both"):
             kml, icons = convert.layer_kml(res, spec, precision, title=f"{res.logical} (SAMPLE)")
-            path = os.path.join(out_dir, f"{res.logical}.kmz")
+            path = os.path.join(out_dir, f"{prefix}_{res.logical}.kmz")
             n = convert.write_kmz(path, kml, icons)
             written.append(path)
             rows.append({"layer": res.logical, "status": "ok",
@@ -363,9 +385,14 @@ def build_demo(out_dir: str, precision: int = 6, log=print, aoi=None,
     allp = os.path.join(out_dir, "DEMO_SAMPLE_ALL.kmz")
     convert.write_kmz(allp, kml, icons)
     written.append(allp)
+    # rows carry a row per layer AND a row per sector pack, both with "features"
+    # over the same features - so publish the real total rather than let a caller
+    # sum the column and print double.
     manifest = {"tool": "overlaybuilder demo", "built": stamp, "warning": PROV_NOTE,
                 "aoi": aoi.describe() if aoi is not None else None,
                 "placement": where, "group_by": group_by,
+                "features_total": sum(len(r.features) for r in results),
+                "packs": [os.path.basename(w) for w in written if os.path.basename(w) != "DEMO_SAMPLE_ALL.kmz"],
                 "layers": rows, "files": [os.path.basename(w) for w in written]}
     with open(os.path.join(out_dir, "manifest.json"), "w", encoding="utf-8") as fh:
         json.dump(manifest, fh, indent=1)

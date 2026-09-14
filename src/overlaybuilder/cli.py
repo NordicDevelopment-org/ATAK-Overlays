@@ -204,17 +204,16 @@ def cmd_demo(args):
     out = args.out or "demo"
     aoi = parse_aoi(args.aoi, cache_dir=args.cache_dir) if args.aoi else None
     print(f"[*] building a SYNTHETIC sample pack in {os.path.abspath(out)}")
-    if aoi is not None:
-        print(f"[*] placed inside the {aoi.describe()} envelope")
     print(f"    {PROV_NOTE}\n")
     m = build_demo(out, precision=args.precision, aoi=aoi, group_by=args.group_by)
-    packs = [f for f in m["files"] if f.startswith("SAMPLE")]
-    print(f"\n{len(m['layers'])} rows, {sum(r['features'] for r in m['layers'])} features")
+    # report where it actually landed, which is not always where --aoi asked for
+    print(f"\n[*] placed on {m['placement']}")
+    print(f"{m['features_total']} features")
     print(f"Output: {os.path.abspath(out)}")
-    if packs:
+    if m["packs"]:
         print("Load these into ATAK (Import Manager > Local SD) to check the folder tree,")
         print("eye-toggles, icons, voltage styling and popup layout:")
-        for f in packs:
+        for f in m["packs"]:
             print(f"    {f}")
     print("Everything here is SYNTHETIC. Delete it before it can be mistaken for real data.")
     return 0
