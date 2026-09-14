@@ -204,7 +204,7 @@ not a convenience.
 | Field | Source | Notes |
 |---|---|---|
 | Boundary, FIPS, land/water area | **US Census TIGERweb** | public domain; national — same call for all 52. **Verified live 2026-09-14**: layer 1, 87 MN counties, renders correctly in ATAK-CIV |
-| Population, housing units | **US Census ACS 5-year API** | exact figures, explicit vintage; keyless at low volume |
+| Population, housing units | **US Census ACS 5-year API** | exact figures, explicit vintage. **Key required** - verified live 2026-09-14: 87 MN counties |
 | County seat | **Wikidata** via `fetch_county_seats.py` | community-maintained, not a government register — labelled as such in the popup |
 | Sheriff / LE + non-emergency | **HIFLD LE Locations** via `seed_le_contacts.py` | frozen 2025 snapshot, no longer maintained — verify before relying on a number |
 

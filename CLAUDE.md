@@ -93,9 +93,15 @@ environment still cannot reach these):
 - A full MN county pack built from it renders correctly in ATAK-CIV: boundaries
   follow the real county lines, the metadata popup shows every field with its
   vintage, and ALAND-derived land area checks out (Kanabec 521.6 sq mi).
-- `api.census.gov` ACS 5-year returned a non-JSON body from the same device;
-  population and housing are unresolved. `statepacks/acs_diagnose.py` is the
-  next step. `docs/SOURCES.md` records
+- `api.census.gov` ACS 5-year, **with a key**: 87 Minnesota county records,
+  population and housing populated. A keyless request answers HTTP 200 with an
+  HTML page titled "Missing Key" - not an error status and not JSON - so the
+  key is required, free, and instant at
+  https://api.census.gov/data/key_signup.html
+- Boundary detail: layers 1/3/5/7/9/11/13 all return an identical 1906 vertices
+  for the same county, so the repeats within a vintage are not generalization
+  levels and there is no sharper layer to switch to. Layer 67 has 1928 (+1.2%)
+  but is the older Census 2020 vintage. `docs/SOURCES.md` records
 per-source confidence and 2026 status. Run
 `overlaybuilder doctor --aoi <aoi> [--include-disabled]` on a connected
 machine before trusting a pack.
