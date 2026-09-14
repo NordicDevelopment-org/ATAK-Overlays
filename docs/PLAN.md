@@ -150,9 +150,28 @@ as a source field.
 
 | | What | Status |
 |---|---|---|
-| 2.1 | Emergency services | `OPEN` |
-| 2.2 | Jails and prisons | `OPEN` |
-| 2.3 | Power plants | `OPEN` |
+| 2.1 | Power plants and nuclear | `BUILT` 782 MN plants, both reactors |
+| 2.2 | Emergency services | `OPEN` |
+| 2.3 | Jails and prisons | `OPEN` |
+
+**2.1 built 2026-09-14** from the EIA U.S. Energy Atlas Power Plants service,
+public domain. 782 Minnesota plants: solar 519, wind 122, petroleum 58, natural
+gas 34, hydroelectric 22, biomass 13, coal 8, batteries 3, nuclear 2, other 1.
+Monticello and Prairie Island both present with correct capacities.
+
+**Two capacities, never one.** `Install_MW` is nameplate and `Total_MW` is
+maximum summer, and they are different measurements kept apart and labelled. A
+number called "capacity" with no qualifier is unusable. Summer is NOT always
+lower - Clay Boswell reports 923.3 MW nameplate and 937.8 MW summer, and that
+number is passed through rather than "corrected" into what someone expected. A
+test pins it.
+
+**Density is handled by switching off, not by dropping.** 641 of 782 placemarks
+are small solar and wind sites. Those folders import switched off and the
+visibility is set on each placemark as well as the folder, since ATAK's KML path
+honours per-placemark visibility more reliably. `--min-mw` exists when even that
+is too much; nothing is removed from the file by default, so it can be undone
+from the tablet.
 
 Note for 2.3: `psap` lost its only source when the NASA HIFLD re-host left DNS,
 and the FCC Master PSAP Registry is tabular only. There is no polygon

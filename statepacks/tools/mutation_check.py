@@ -39,6 +39,7 @@ BUILD = "statepacks/build_county_pack.py"
 INV = "statepacks/atak_inventory.py"
 RPT = "statepacks/repeater_diagnose.py"
 NWR = "statepacks/build_nwr_pack.py"
+PWR = "statepacks/build_power_pack.py"
 
 MUTATIONS = {
     SEED: [
@@ -118,6 +119,20 @@ MUTATIONS = {
          "        if parse is not None:", "        if False:"),
         ("unwire --gaps-dump",
          "                            dump=a.gaps_dump)", "                            dump=None)"),
+    ],
+    PWR: [
+        ("merge nameplate and summer capacity into one number",
+         '        ("Nameplate capacity", f"{nameplate:,.1f} MW" if nameplate is not None else ""),\n'
+         '        ("Max summer capacity", f"{summer:,.1f} MW" if summer is not None else ""),',
+         '        ("Capacity", f"{nameplate:,.1f} MW" if nameplate is not None else ""),'),
+        ("turn an unparseable capacity into zero",
+         "    except (TypeError, ValueError):\n        return None",
+         "    except (TypeError, ValueError):\n        return 0.0"),
+        ("let 519 solar sites import switched on",
+         '    hidden = fuel not in DEFAULT_ON', "    hidden = False"),
+        ("replace EIA's reporting period with the build date",
+         'f"EIA reporting period: {bcp.esc(str(p.get(\'Period\') or \'not stated\'))}<br/>"',
+         'f"EIA reporting period: {bcp.esc(meta[\'built\'])}<br/>"'),
     ],
     NWR: [
         ("find the first bracket instead of the cclData assignment",

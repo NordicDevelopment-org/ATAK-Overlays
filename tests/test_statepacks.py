@@ -3546,3 +3546,100 @@ def test_the_filename_keeps_the_identity_version_boundary(tmp_path):
     assert "__" in os.path.basename(path)
     assert os.path.basename(path).startswith("MN_WeatherRadio__")
     assert n == 1
+
+
+# ============================================================================
+# build_power_pack - EIA power plants. Two capacities, never conflated.
+# ============================================================================
+
+pwr = _load("build_power_pack")
+
+
+def _plant(**kw):
+    p = {"Plant_Name": "Test Plant", "Plant_Code": "1", "PrimSource": "coal",
+         "Install_MW": 100, "Total_MW": 90, "Utility_Na": "Someone",
+         "tech_desc": "Steam Turbine", "sector_nam": "Electric Utility",
+         "County": "Test", "Period": "202502", "Source": "EIA-860"}
+    p.update(kw)
+    return {"type": "Feature", "properties": p,
+            "geometry": {"type": "Point", "coordinates": [-93.1, 45.4]}}
+
+
+def test_nameplate_and_summer_capacity_are_never_merged():
+    """Two measurements of different things. A number called 'capacity' with
+    no qualifier is unusable."""
+    _f, pm = pwr.placemark(_plant(), {"url": "u", "built": "d"})
+    assert "Nameplate capacity: <b>100.0 MW</b>" in pm
+    assert "Max summer capacity: <b>90.0 MW</b>" in pm
+
+
+def test_a_summer_capacity_above_nameplate_is_passed_through_not_corrected():
+    """Clay Boswell MN reports 923.3 nameplate and 937.8 summer. That is EIA's
+    number. 'Fixing' it would be inventing one."""
+    _f, pm = pwr.placemark(_plant(Install_MW=923.3, Total_MW=937.8),
+                           {"url": "u", "built": "d"})
+    assert "Nameplate capacity: <b>923.3 MW</b>" in pm
+    assert "Max summer capacity: <b>937.8 MW</b>" in pm
+
+
+def test_a_string_typed_capacity_does_not_crash_or_become_zero():
+    """Several MW columns are typed as strings in the service schema."""
+    assert pwr.as_mw("12.5") == 12.5
+    assert pwr.as_mw("") is None and pwr.as_mw(None) is None
+    assert pwr.as_mw("not a number") is None       # None, never 0
+
+
+def test_the_eia_reporting_period_is_not_replaced_by_the_build_date():
+    """When EIA last reported and when the pack was built are different facts."""
+    _f, pm = pwr.placemark(_plant(Period="202502"),
+                           {"url": "u", "built": "2026-09-14"})
+    assert "EIA reporting period: 202502" in pm
+    assert "Pack built: 2026-09-14" in pm
+
+
+def test_the_dense_fuels_start_switched_off_on_the_placemark_too():
+    """641 of 782 MN plants are solar or wind. ATAK's KML path honours
+    per-placemark visibility more reliably than a folder's, so both are set."""
+    _f, solar = pwr.placemark(_plant(PrimSource="solar"), {"url": "u", "built": "d"})
+    _f, nuke = pwr.placemark(_plant(PrimSource="nuclear"), {"url": "u", "built": "d"})
+    assert "<visibility>0</visibility>" in solar
+    assert "<visibility>0</visibility>" not in nuke
+
+
+def test_a_plant_with_no_coordinate_is_dropped_not_placed_at_zero():
+    bad = _plant()
+    bad["geometry"] = {"type": "Point", "coordinates": []}
+    assert pwr.placemark(bad, {"url": "u", "built": "d"}) == (None, None)
+
+
+def test_the_by_fuel_split_appears_only_when_a_plant_burns_more_than_one_thing():
+    _f, single = pwr.placemark(_plant(Coal_MW=100), {"url": "u", "built": "d"})
+    assert "By fuel" not in single            # would just repeat the nameplate
+    _f, mixed = pwr.placemark(_plant(Coal_MW=937, Crude_MW=0.8),
+                              {"url": "u", "built": "d"})
+    assert "By fuel: coal 937.0 MW, petroleum 0.8 MW" in mixed
+
+
+def test_folders_put_what_is_switched_on_first():
+    """Ordering by count would put 519 solar at the top of the tree."""
+    feats = ([_plant(PrimSource="solar") for _ in range(5)]
+             + [_plant(PrimSource="nuclear")])
+    kml = pwr.pack_kml("MN", feats, {"title": "t", "url": "u", "built": "d"})
+    ET.fromstring(kml)
+    assert kml.index("<name>nuclear (1)</name>") < kml.index("<name>solar (5)</name>")
+
+
+def test_eia_is_filtered_on_the_full_state_name_not_the_abbreviation():
+    assert pwr.STATE_NAMES["MN"] == "Minnesota"
+    assert pwr.STATE_NAMES["DC"] == "District of Columbia"
+    missing = [s for s in ("MN", "WI", "TX", "CA", "AK", "HI") if s not in pwr.STATE_NAMES]
+    assert not missing
+
+
+def test_min_mw_filters_and_says_so_rather_than_silently_shrinking(tmp_path):
+    feats = [_plant(Install_MW=5), _plant(Install_MW=500)]
+    said = []
+    path, n = pwr.build("MN", str(tmp_path), feats, min_mw=25, log=said.append)
+    assert n == 1
+    assert any("--min-mw" in s for s in said)
+    assert "__" in os.path.basename(path)
