@@ -729,6 +729,14 @@ In this order. Each is a real gap, not a polish item.
   name actually says "sheriff" always outranks them — but whether that label
   should carry a jail is a judgement about the field, not about the data.
   `MATCH='sherr?if'` narrows it to the sheriff-proper records.
+- **Should a GMRS repeater layer exist at all?** Not a licensing question, a
+  consent one. On myGMRS the tone for a closed repeater is withheld until the
+  individual owner grants a per-person request, and many GMRS repeaters sit on
+  private residential property. A KMZ cannot carry that consent - once the tone
+  is in a pack it is in everyone's hands. The options are: build it only from a
+  source with written permission and only for repeaters their owners published
+  as open, never a per-owner-consent tone; or do not build it. The code should
+  not decide this.
 - **The 20 city-PD-only counties stay empty.** Writing `Hill City Police
   Department` as Aitkin County's primary LE would be wrong. If you decide a
   city PD is better than a blank, that is a deliberate change of meaning and

@@ -36,10 +36,52 @@ tone that opens it.
 
 | | What | Status |
 |---|---|---|
-| 1.1 | Diagnostic: what does OSM actually carry for MN repeaters? | `NEXT` run it |
-| 1.2 | Decide sources from 1.1's numbers | `OPEN` |
-| 1.3 | `MN_Repeaters__<vintage>.kmz` - ham and GMRS | `OPEN` |
-| 1.4 | NOAA Weather Radio transmitters, its own diagnostic first | `OPEN` |
+| 1.1 | Diagnostic: what does OSM actually carry for MN repeaters? | `DONE` and the answer is nothing |
+| 1.2 | Decide sources from 1.1's numbers | `DONE` no redistributable source exists |
+| 1.3 | `MN_Repeaters__<vintage>.kmz` from a public source | `BLOCKED` on permission, see below |
+| 1.3b | Bring-your-own-data repeater layer | `OPEN` the only unblocked path |
+| 1.4 | NOAA Weather Radio transmitters | `OPEN` licence clean, coordinates missing |
+
+**1.4 NOAA Weather Radio.** The licence is genuinely clean and settled:
+<https://www.weather.gov/disclaimer> puts NWS web content in the public domain,
+subject to three conditions an attributed KMZ satisfies. It is not a repeater
+layer - NWR is one-way broadcast, so there is no input frequency, no offset and
+no tone, and those columns stay empty. The 1050 Hz alert tone and SAME digital
+headers are not CTCSS/DCS and must never be written into a tone column.
+
+The blocker is coordinates. weather.gov publishes station tables as
+server-rendered HTML only - callsign, frequency, site town, status, WFO, and
+per-county SAME codes - with **no latitude or longitude and no power column**.
+Endpoints read: `/nwr/station_listing`, `/nwr/stations?State=MN`,
+`/nwr/county_coverage?State=MN`, `/nwr/sites?site=<CALL>`. Both state tables
+carry their own "current on" timestamp, so a retrieval date rides in the page.
+
+Two unverified leads for coordinates: an ArcGIS Online item
+`f399e8e588c64cdc898ed70dd7782fba` ("National NOAA Weather Radio Sites", owned
+by NWS.HUN_noaa), whose REST URL, fields and `licenseInfo` nobody has read -
+"Sharing: Everyone" is a visibility setting, not a licence, and the weather.gov
+public-domain sentence is scoped to weather.gov, not to an Esri-hosted service.
+And `/nwr/station_search`, a find-stations-near-me page which cannot work
+without server-side coordinates; capturing its request would settle it.
+
+**SAME codes, corrected.** A county has ONE whole-county code (`0` + 5-digit
+FIPS) AND zero or more partial-county codes (`1`-`9` + FIPS). Partial County
+Alerting adds sub-area codes, it does not replace the whole-county one - the MN
+table shows Aitkin as both `027001` and `227001`. Any note claiming a county's
+code is the partial one *instead of* the whole-county one is wrong and would
+drop every whole-county code in the state.
+
+**1.1, measured live 2026-09-14 over 7 of 9 MN tiles.** One object in the whole
+state: a `man_made=antenna` node with `communication:amateur_radio=yes`, no
+frequency, no callsign, no name. **Zero objects carried a listen frequency.**
+The query is confirmed working - `communication:amateur_radio` is one of its
+anchors and it matched - so this measures OSM, not the code.
+
+**1.2, the answer is no.** There is no source of MN amateur or GMRS repeater
+data with output frequency, input/offset and tone that this project can
+redistribute in a public KMZ on a licence anyone has read. Every candidate
+fails on one of: an explicit prohibition, a login or per-person token wall, or
+a permission that does not cover republication.
 
 **Settled.** No coverage circles. ERP and HAAT are absent from essentially
 every candidate source, so a radius would be a number we chose presented as a
@@ -52,17 +94,30 @@ whose leading zero and N suffix are load-bearing.
 
 | Source | Verdict |
 |---|---|
-| OpenStreetMap | Usable. ODbL, fetch machinery already exists |
-| OpenRepeater.org | States CC0 on its own pages. Coverage unknown, terms need reading live |
-| RepeaterBook | Ruled out. Terms forbid bulk extraction, redistribution, offline bundling, or using it to build another dataset |
+| OpenStreetMap | Licence fine (ODbL), **data does not exist**. Measured: 1 object statewide, 0 with a frequency |
+| hearham.com | **Closest to a yes, and still not one.** Real public JSON API, 493 MN records by its own count. The grant on /repeaters is "Free to use and free to use in your application" - a redistributable pack is not "your application". /terms is silent on redistribution in both directions, and no contributor-licence clause is documented, so its authority to sublicense crowd-sourced rows is unestablished. Needs an email |
+| RepeaterBook | Ruled out without written permission, which they have a channel for. Their wiki names "offline bundling" - a KMZ pack, exactly - among the uses requiring it |
+| RadioReference | Ruled out. Terms prohibit use of database tables "in any form, media or technology" without written consent. Full API is paid |
+| myGMRS | Ruled out. Login-gated, and for closed repeaters the tone is emailed only after the owner grants a per-person request |
+| openrepeater.org | **UNVERIFIED - I previously overstated this.** Two different things share the name: openrepeater**.com** is Raspberry Pi repeater *controller software* with no data at all, and openrepeater**.org** is a separate new directory. "Repeater data is licensed under CC0." appears only in what looks like site-wide footer chrome, not in /terms, and /register suggests a login wall. No MN evidence of any kind |
+| repeatermap.de | Ruled out. API needs a per-person token requested by contact form. That is access control, not a licence |
+| artscipub | Ruled out. Browse-only, and the bulk product is a printed book they sell |
 | ARRL Directory | Ruled out. Powered by RepeaterBook, and a paid product |
 | FCC ULS `l_amat` / `l_gmrs` | Ruled out for locations. Licensee mailing address, not transmitter site |
-| hearham.com | Disabled pending a written yes. Prose licence, coords self-described as approximate |
 
-**GMRS.** The FCC licenses the operator, not the site, so GMRS repeater
-locations are largely not in any public federal database. Whatever OSM has may
-be all there is, and the pack has to say so rather than look thin for no
-stated reason.
+**GMRS is out, and not only on licensing.** The FCC licenses the operator, not
+the site, so no federal register of GMRS repeater locations exists. More
+importantly: on myGMRS the tone for a closed repeater is structurally withheld
+until the individual owner grants a per-person request. A KMZ cannot carry that
+consent, so shipping those tones would be wrong even if a licence allowed it.
+Whether a GMRS layer should exist at all is a maintainer judgement, recorded in
+README section 11.
+
+**Settled about modelling, whatever the source turns out to be.** GMRS pairs are
+fixed by 47 CFR 95 subpart E at output +5.000 MHz, so a GMRS input frequency is
+computed from a rule and never fetched. hearham has no input field either, so
+transmit is `frequency + offset` and must be labelled derived, never presented
+as a source field.
 
 ---
 
