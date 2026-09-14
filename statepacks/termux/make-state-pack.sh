@@ -15,8 +15,14 @@
 #
 # EVERY STEP IS RESUMABLE. Boundaries, OSM tiles and the CSVs are all cached or
 # written locally, so re-running after a failure picks up where it stopped
-# rather than starting over. A step that fails stops the run: a pack built on
-# half-fetched data would look complete.
+# rather than starting over.
+#
+# STEPS 1 AND 2 ARE ENRICHMENT, AND THEY DO NOT STOP THE RUN. They write
+# nothing when they fail, so the pack after them is complete except for the
+# fields they fill - and every one of those says "No data for" per county
+# rather than guessing. Losing a working pack because the public Overpass
+# mirrors were busy is the wrong trade. STEP 3 IS THE PACK: if it fails there
+# is nothing to install and the run stops.
 #
 # REQUIREMENTS
 #   pkg install python git            (that is all - no pip, no gdal, no pyproj)
@@ -74,9 +80,31 @@ if [ -z "${CENSUS_API_KEY:-}" ] && [ ! -s "$HOME/.config/atak-statepacks/census_
   printf '\n'
 fi
 
+# An enrichment step that fails writes nothing, so the pack is still worth
+# building - it just says "No data for" on the fields that step fills.
+# soft <name> <paste-able re-run line> <command...>
+# The hint is passed in rather than rebuilt from "$@": the LE filter contains
+# pipes, and a line someone is meant to paste has to arrive quoted.
+soft() {
+  what="$1"; hint="$2"; shift 2
+  if "$@"; then return 0; fi
+  warn ""
+  warn "  [!] $what did not complete. NOTHING WAS WRITTEN by it, so no wrong"
+  warn "      value can reach the pack - those fields will read \"No data for\""
+  warn "      per county instead. Carrying on with the build."
+  warn "      To fill them in, re-run just that step (it resumes from cache):"
+  warn "        $hint"
+  warn ""
+  failed_steps="${failed_steps}${what}, "
+  return 0
+}
+
+failed_steps=""
 if [ "$skip_seats" -eq 0 ]; then
   banner "county seats for $state (Wikidata)"
-  python3 "$SP/fetch_county_seats.py" --state "$state"
+  soft "county seats" \
+       "python3 $SP/fetch_county_seats.py --state $state" \
+       python3 "$SP/fetch_county_seats.py" --state "$state"
 else
   banner "county seats - SKIPPED (--skip-seats)"
 fi
@@ -84,12 +112,17 @@ fi
 if [ "$skip_le" -eq 0 ]; then
   banner "sheriff / primary LE for $state (OpenStreetMap)"
   say "      filter: /$MATCH/i"
-  python3 "$SP/seed_le_contacts.py" --state "$state" --match "$MATCH" $gaps
+  # shellcheck disable=SC2086
+  soft "sheriff / primary LE" \
+       "python3 $SP/seed_le_contacts.py --state $state --match '$MATCH'" \
+       python3 "$SP/seed_le_contacts.py" \
+       --state "$state" --match "$MATCH" $gaps
 else
   banner "sheriff / primary LE - SKIPPED (--skip-le)"
 fi
 
 banner "building the pack (TIGERweb boundaries + ACS)"
+# NOT soft: with no pack there is nothing to install.
 python3 "$SP/build_county_pack.py" --state "$state" --out "$STAGE_DIR"
 
 if [ "$install" -eq 1 ]; then
@@ -108,4 +141,11 @@ else
   printf '    %s %s --install\n' "$0" "$state"
   say "or by hand:"
   printf '    %s/atak-install.sh %s\n' "$HERE" "$STAGE_DIR"
+fi
+
+if [ -n "$failed_steps" ]; then
+  printf '\n'
+  warn "Built, but these steps did not complete: ${failed_steps%, }"
+  warn "Their fields read \"No data for\" rather than a guess. Re-run this"
+  warn "command later to fill them in - everything already fetched is cached."
 fi

@@ -2700,3 +2700,29 @@ def test_a_rate_limit_does_not_wait_past_the_budget(monkeypatch, tmp_path):
         sle._overpass_tile((0.0, 0.0, 1.0, 1.0), ["https://a.invalid/i"], 5, 1,
                            lambda *a: None, deadline=sle.Deadline(30))
     assert not slept, "waited 600s inside a 30s budget"
+
+
+def test_the_server_timeout_is_the_one_that_was_measured_to_work():
+    """All nine MN tiles are served at [timeout:90]; at 30 five of them fail
+    and each failure fans out into four more requests. This constant is
+    evidence from a real run, not a tuning knob."""
+    assert sle.OSM_SERVER_TIMEOUT_S == 90
+    # and the flag default is that constant, not a second copy of the number
+    import argparse
+    import contextlib
+    import io
+    buf = io.StringIO()
+    with contextlib.redirect_stdout(buf), pytest.raises(SystemExit):
+        sle.main(["--help"])
+    assert f"default {sle.OSM_SERVER_TIMEOUT_S}" in buf.getvalue()
+
+
+def test_the_socket_outlives_the_server_timeout_by_the_slack(monkeypatch, tmp_path):
+    monkeypatch.setattr(sle, "CACHE_DIR", str(tmp_path))
+    seen = []
+    monkeypatch.setattr("urllib.request.urlopen",
+                        lambda req, timeout=None, context=None:
+                        (seen.append(timeout), FakeHTTP({"elements": []}))[1])
+    sle._overpass_tile((0.0, 0.0, 1.0, 1.0), ["https://a.invalid/i"],
+                       sle.OSM_SERVER_TIMEOUT_S, 1, lambda *a: None)
+    assert seen == [sle.OSM_SERVER_TIMEOUT_S + sle.OSM_SOCKET_SLACK], seen

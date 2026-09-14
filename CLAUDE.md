@@ -131,6 +131,13 @@ environment still cannot reach these):
   `elements` list and a `remark` - never as an error status. Anything that
   caches an Overpass response has to check for that or it stores "there is
   nothing here" permanently.
+  **`[timeout:90]` serves all nine MN tiles; `[timeout:30]` fails five of
+  them** - measured 2026-09-15, same tiles, same mirrors. Lowering it to make
+  failures arrive sooner turned successes into failures, and each failure then
+  split into four more requests, which earned an HTTP 429. Do not lower the
+  server timeout without evidence from a real run.
+  **HTTP 429 is not a failure to retry differently** - it is a request to wait.
+  Splitting a rate-limited tile answers "too many requests" with four more.
 - Boundary detail: layers 1/3/5/7/9/11/13 all return an identical 1906 vertices
   for the same county, so the repeats within a vintage are not generalization
   levels and there is no sharper layer to switch to. Layer 67 has 1928 (+1.2%)

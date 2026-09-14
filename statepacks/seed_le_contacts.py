@@ -397,9 +397,9 @@ def main(argv=None):
                     help="accept an incomplete OSM result when some tiles fail. "
                          "Off by default: a partial set leaves some counties "
                          "empty for no reason the pack can show.")
-    ap.add_argument("--osm-timeout", type=int, default=30,
+    ap.add_argument("--osm-timeout", type=int, default=OSM_SERVER_TIMEOUT_S,
                     help=f"seconds the Overpass SERVER is given per tile "
-                         f"(default 30); the socket allows "
+                         f"(default {OSM_SERVER_TIMEOUT_S}); the socket allows "
                          f"{OSM_SOCKET_SLACK}s more for the transfer. A tile "
                          f"that times out on "
                          f"{OSM_TIMEOUTS_BEFORE_SPLIT} mirrors is retried as "
@@ -887,7 +887,11 @@ OSM_TILE_ROWS = 3
 # three attempts, three mirrors and a 120s socket multiply out to 2.7 hours of
 # a command that looks hung - which is exactly what it did. Nothing waits past
 # the deadline; what was fetched is cached, so the next run resumes.
-OSM_DEADLINE_S = 480
+# A COLD run is nine queries that each take the better part of a minute, plus
+# whatever the mirrors are doing that day. 480s was cutting real work off; a
+# warm run is instant either way, so the budget only has to be generous enough
+# not to fail a run that is working.
+OSM_DEADLINE_S = 600
 # Tiles are fetched CONCURRENTLY, one in-flight request per mirror. Nine tiles
 # one after another is nine round trips of waiting; three at a time across
 # three mirrors is three. The cap is per mirror on purpose - the public
@@ -902,6 +906,13 @@ OSM_JOBS = 3
 # giving up and answering, which is fast and legible. The socket gets that plus
 # slack for the transfer, so we never cut off a server that is about to reply.
 OSM_SOCKET_SLACK = 15
+# MEASURED, not chosen. Every one of Minnesota's nine tiles is served at 90s.
+# At 30s - picked to make a failure arrive sooner - five of the nine time out
+# instead, and each of those five then fans out into four more requests, which
+# is how a run that used to fetch 517 features earned an HTTP 429. A timeout
+# that turns successes into failures is not a faster failure, it is a slower
+# one with extra steps. Lower it only against evidence from a real run.
+OSM_SERVER_TIMEOUT_S = 90
 # A tile that TIMES OUT on two different mirrors is a tile that is too much to
 # ask for, not two unlucky mirrors. Stop there and split it. Waiting for the
 # third mirror to also time out buys no information and costs a whole timeout.
@@ -1488,7 +1499,8 @@ def _run_tiles(items, mirrors, timeout, attempts, log, clock, jobs, locks,
     return ok, bad
 
 
-def fetch_osm(state_abbr, mirrors=None, log=print, bbox=None, timeout=30,
+def fetch_osm(state_abbr, mirrors=None, log=print, bbox=None,
+              timeout=OSM_SERVER_TIMEOUT_S,
               attempts=1, allow_partial=False, deadline_s=OSM_DEADLINE_S,
               jobs=OSM_JOBS, shapes=None, split=True, gaps_out=None):
     """[{name, phone, address, city, admintype, lon, lat}] inside `bbox`.

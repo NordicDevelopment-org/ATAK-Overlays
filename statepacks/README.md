@@ -409,7 +409,7 @@ whole-state box gets a 504. On top of that:
 | **Two boxes when a state crosses the date line** | Alaska's Aleutians sit near +172 and the mainland near -130; min/max longitude over both is a 302-degree box — most of the northern hemisphere in one query. Detected from the coordinates, never from a list of states. |
 | **County boundaries are cached 30 days** | 87 polygons was the largest download the seeder made, and it was being made twice per run. |
 | **A dated, expiring tile cache** | Each entry records when it was fetched, and the CSV row is stamped with *that* date — not the date the file happened to be written. Entries expire after 30 days. |
-| **One wall-clock budget** | 480s **per state** (`--all` gets that for each state, not in total). The response body is read in chunks with the budget checked between them, so a mirror that trickles bytes cannot outlive it either. |
+| **One wall-clock budget** | 600s **per state** (`--all` gets that for each state, not in total). The response body is read in chunks with the budget checked between them, so a mirror that trickles bytes cannot outlive it either. |
 
 Measured against a replay of a real run — eight healthy tiles and one that
 times out on every mirror:
@@ -423,7 +423,7 @@ now, re-run             0 requests, instant
 ```bash
 python3 seed_le_contacts.py --state MN                    # defaults
 python3 seed_le_contacts.py --state MN --deadline 1200    # 20 minutes to play with
-python3 seed_le_contacts.py --state MN --osm-timeout 60   # let each tile work longer
+python3 seed_le_contacts.py --state MN --osm-timeout 120  # let each tile work longer
 python3 seed_le_contacts.py --state MN --jobs 1           # one request at a time
 python3 seed_le_contacts.py --state MN --no-split         # never split a failed tile
 python3 seed_le_contacts.py --state MN --refresh-shapes   # redownload the boundaries
@@ -436,6 +436,14 @@ be served, the run **fails and names the counties that would come back empty**
 no sheriff". `--allow-partial` accepts one knowingly, and `--gaps` then files
 those counties under **`NOT FETCHED — their tile failed`**, separately from the
 ones the source genuinely has nothing for.
+
+**The server timeout is 90s because 90s is what works.** Measured on a real
+Minnesota run: all nine tiles are served at `[timeout:90]`. At 30s — picked to
+make a failure arrive sooner — five of the nine time out instead, and each of
+those five then fans out into four quarter-requests, which is how a run that
+had been fetching 517 features earned an HTTP 429. A timeout that turns
+successes into failures is not a faster failure; it is a slower one with extra
+steps. Lower it only against evidence from a real run.
 
 **Overpass answers its own timeout with HTTP 200.** Not a 504 — a normal JSON
 body with an empty `elements` list and a `remark` reading `runtime error: Query
@@ -538,7 +546,7 @@ edition, so it has to be predictable rather than descriptive.
 | `permission denied` running a script | `chmod +x termux/*.sh` |
 | `unknown option: --x` from remove | deliberate — an unrecognised flag is never treated as a filename pattern |
 | Seats/contacts still say `not in dataset` after editing a CSV | check the row has a 5-digit `geoid` in the first column and that you kept the `geoid,...` header line |
-| The LE fetch sits there for ages | It prints a line per tile with time used/left. It stops on its own at 480s; `--deadline 1200` gives it longer. Finished tiles are cached, so a re-run resumes where it stopped. |
+| The LE fetch sits there for ages | It prints a line per tile with time used/left. It stops on its own at 600s; `--deadline 1800` gives it longer. Finished tiles are cached, so a re-run resumes where it stopped. |
 | One tile keeps timing out | It is split into quarters automatically. If the quarters land, the parent is never asked for again. |
 | Boundaries look out of date in the LE match | `--refresh-shapes`. The cache is only used to decide which county a station falls in; overlay boundaries are always fetched fresh by the builder. |
 | `N of 9 tiles failed (... ran out of the 480s budget)` | The budget ran out, not "no data". Re-run — cached tiles are skipped — or raise `--deadline`. |
