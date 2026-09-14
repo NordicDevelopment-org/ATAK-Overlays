@@ -211,7 +211,9 @@ not a convenience.
 | Boundary, FIPS, land/water area | **US Census TIGERweb** | public domain; national — same call for all 52. **Verified live 2026-09-14**: layer 1, 87 MN counties, renders correctly in ATAK-CIV |
 | Population, housing units | **US Census ACS 5-year API** | exact figures, explicit vintage. **Key required** - verified live 2026-09-14: 87 MN counties |
 | County seat | **Wikidata** via `fetch_county_seats.py` | community-maintained, not a government register — labelled as such in the popup. **Verified live 2026-09-14**: 87/87 MN counties |
-| Sheriff / LE + non-emergency | **HIFLD LE Locations** via `seed_le_contacts.py` | frozen 2025 snapshot, no longer maintained — verify before relying on a number |
+| Sheriff / LE + non-emergency | **OpenStreetMap** via `seed_le_contacts.py` | the only reachable source carrying phone numbers. Community-maintained: coverage varies, a number is as current as the last edit. Stamped with the fetch date. |
+| Sheriff / LE (names only) | **USGS National Map Structures** (`--source usgs`) | live and maintained, but **no phone field exists** in that dataset |
+| ~~HIFLD LE Locations~~ | ~~NASA NCCS re-host~~ | **host gone from DNS 2026-09-14** — see CLAUDE.md |
 
 ### Why sheriff contacts ship empty, and how to fill them
 
@@ -224,11 +226,34 @@ moment someone actually dials it.** So nothing is shipped unsourced.
 county, preferring a record that actually has a number:
 
 ```bash
-python3 seed_le_contacts.py --probe          # check it answers, show its layers
-python3 seed_le_contacts.py --state MN
+python3 seed_le_contacts.py --probe                   # which sources answer
+python3 seed_le_contacts.py --state MN --show 5       # see the real records first
 python3 seed_le_contacts.py --state MN --dry-run      # preview, write nothing
-python3 seed_le_contacts.py --state MN --all-agencies # every LE record, not just sheriffs
+python3 seed_le_contacts.py --state MN                # OSM by default
+python3 seed_le_contacts.py --state MN --source usgs  # names only, no phones
+python3 seed_le_contacts.py --state MN --all-agencies # every agency, not just sheriffs
 ```
+
+**Look before you filter.** `--show N` prints the raw records, counts how many
+names the current `--match` would hit, and lists the distinct values of the
+classifying columns. A run that writes zero rows is usually a filter that does
+not match how that dataset spells its names — not an absence of sheriffs.
+
+### Finding a state's own GIS server
+
+No national dataset is going to be as good as the state's own. `--discover`
+lists what an ArcGIS server actually publishes, so you never have to guess a
+service name:
+
+```bash
+python3 seed_le_contacts.py --discover https://feat.gisdata.mn.gov/arcgis/rest/services
+python3 seed_le_contacts.py --discover https://<your-state-server>/arcgis/rest/services --pattern ''
+```
+
+It walks the folders the server advertises and prints every MapServer and
+FeatureServer with its layers, marking ones whose name matches `--pattern`
+(default `law|police|sheriff|emergency`). Pass `--pattern ''` to list
+everything. Point `--endpoint` at whatever you find.
 
 **Read this before dialling anything it writes.** HIFLD Open shut down in
 August 2025; this is a **frozen final snapshot** re-hosted by NASA NCCS, and

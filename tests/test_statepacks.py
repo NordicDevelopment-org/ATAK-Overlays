@@ -8,6 +8,7 @@ builder never invents a value and never mangles a shape.
 import importlib.util
 import json
 import os
+import re
 import sys
 import zipfile
 import xml.dom.minidom as minidom
@@ -567,7 +568,7 @@ def test_seeding_never_overwrites_a_row_you_verified(tmp_path, monkeypatch, caps
         {"geoid": "27053", "agency": "Hennepin County Sheriff", "phone": "612-555-0100",
          "address": "", "type": ""}])
 
-    assert sle.main(["--state", "MN"]) == 0
+    assert sle.main(["--state", "MN", "--source", "hifld"]) == 0
     rows, comments = sle.read_existing(str(csv_path))
     # the hand-verified row survives untouched...
     assert rows["27025"]["phone"] == "651-257-4100"
@@ -579,42 +580,87 @@ def test_seeding_never_overwrites_a_row_you_verified(tmp_path, monkeypatch, caps
     assert comments and comments[0].startswith("#")       # comment block preserved
 
     # --overwrite is opt-in and does replace
-    assert sle.main(["--state", "MN", "--overwrite"]) == 0
+    assert sle.main(["--state", "MN", "--source", "hifld", "--overwrite"]) == 0
     rows2, _ = sle.read_existing(str(csv_path))
     assert rows2["27025"]["phone"] == "000-000-0000"
 
 
-def test_hifld_down_falls_back_to_usgs_and_says_the_phone_is_gone(monkeypatch, tmp_path, capsys):
-    """auto: HIFLD carries phone numbers, USGS does not. Falling back is right,
-    but the pack must not imply a phone number is merely missing when the whole
-    source has none."""
-    csv_path = tmp_path / "le.csv"
-    monkeypatch.setattr(sle, "CSV_PATH", str(csv_path))
-
-    def dead(*a, **k):
-        raise RuntimeError("host unreachable")
-    monkeypatch.setattr(sle, "resolve_layer", dead)
-    monkeypatch.setattr(sle, "fetch_usgs", lambda st, lid, log=print: [
-        {"name": "Chisago County Sheriff", "address": "1 Main", "city": "Center City",
-         "admintype": "County", "loaddate": "2024-01-01", "lon": 1.0, "lat": 1.0},
-        {"name": "Elsewhere PD", "address": "", "city": "", "admintype": "",
-         "loaddate": "", "lon": 99.0, "lat": 99.0},          # outside every county
+def test_auto_prefers_osm_because_it_is_the_only_source_with_phone_numbers(
+        monkeypatch, tmp_path, capsys):
+    """The phone column has no other home: HIFLD's host is gone and USGS has no
+    phone field at all. So auto reaches for OSM first."""
+    monkeypatch.setattr(sle, "CSV_PATH", str(tmp_path / "le.csv"))
+    monkeypatch.setattr(sle, "fetch_usgs",
+                        lambda *a, **k: pytest.fail("USGS used when OSM was available"))
+    monkeypatch.setattr(sle, "fetch_osm", lambda st, mirrors=None, log=print: [
+        {"name": "Chisago County Sheriff", "phone": "651-257-4100", "address": "1 Main",
+         "city": "Center City", "admintype": "county", "loaddate": "",
+         "lon": 1.0, "lat": 1.0},
+        {"name": "Elsewhere Sheriff", "phone": "", "address": "", "city": "",
+         "admintype": "", "loaddate": "", "lon": 99.0, "lat": 99.0},
     ])
     monkeypatch.setattr(sle, "county_shapes", lambda sfp, log=print: [
         ("27025", [[[[0, 0], [5, 0], [5, 5], [0, 5], [0, 0]]]])])
 
     assert sle.main(["--state", "MN"]) == 0
     out = capsys.readouterr().out
-    assert "falling back to USGS" in out
-    assert "NO phone" in out
-    assert "fell outside every county" in out            # the unplaced one, reported
+    assert "OSM police features" in out
+    assert "1 with a phone number" in out
+    assert "fell outside every county" in out          # the unplaced one
 
-    rows, _ = sle.read_existing(str(csv_path))
-    assert rows["27025"]["agency"] == "Chisago County Sheriff"
-    assert rows["27025"]["phone"] == ""                  # never fabricated
-    assert "USGS" in rows["27025"]["source"]
-    assert rows["27025"]["vintage"] == "2024"
-    assert "Elsewhere" not in open(csv_path).read()      # dropped, not guessed
+    rows, _ = sle.read_existing(str(tmp_path / "le.csv"))
+    assert rows["27025"]["phone"] == "651-257-4100"    # a real phone, at last
+    assert "OpenStreetMap" in rows["27025"]["source"]
+    # OSM has no dataset vintage, so the stamp is the fetch date, not a guess
+    assert re.match(r"^\d{4}-\d{2}-\d{2}$", rows["27025"]["vintage"])
+    assert "community-maintained" in out
+
+
+def test_osm_reads_both_phone_spellings_and_a_way_centre(monkeypatch):
+    """OSM uses `phone` and `contact:phone` interchangeably, and a station
+    mapped as a building has no lat/lon of its own - only `center`."""
+    import json as _json
+    captured = {}
+
+    class FakeResp:
+        def __init__(self, payload):
+            self._p = _json.dumps(payload).encode()
+        def read(self):
+            return self._p
+        def __enter__(self):
+            return self
+        def __exit__(self, *a):
+            return False
+
+    payload = {"elements": [
+        {"type": "node", "lat": 45.5, "lon": -92.8,
+         "tags": {"name": "A PD", "phone": "111"}},
+        {"type": "way", "center": {"lat": 45.6, "lon": -92.9},
+         "tags": {"name": "B Sheriff", "contact:phone": "222",
+                  "addr:housenumber": "12", "addr:street": "Main St",
+                  "addr:city": "Town", "operator:type": "county"}},
+        {"type": "way", "tags": {"name": "No Geometry"}},      # dropped
+    ]}
+
+    def fake_urlopen(req, timeout=None, context=None):
+        captured["url"] = req.full_url
+        captured["body"] = req.data.decode()
+        return FakeResp(payload)
+
+    monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
+    got = sle.fetch_osm("MN", log=lambda *a: None)
+
+    assert [r["name"] for r in got] == ["A PD", "B Sheriff"]
+    assert got[0]["phone"] == "111"
+    assert got[1]["phone"] == "222"                    # contact:phone honoured
+    assert (got[1]["lon"], got[1]["lat"]) == (-92.9, 45.6)   # way centre used
+    assert got[1]["address"] == "12 Main St"
+    assert got[1]["admintype"] == "county"
+    import urllib.parse
+    body = urllib.parse.unquote_plus(captured["body"])
+    assert 'ISO3166-2"="US-MN' in body                 # queried the right state
+    assert 'amenity"="police' in body
+    assert "out center tags" in body                   # centres for ways/relations
 
 
 def test_every_source_down_writes_nothing_and_exits_nonzero(monkeypatch, tmp_path, capsys):
@@ -624,6 +670,7 @@ def test_every_source_down_writes_nothing_and_exits_nonzero(monkeypatch, tmp_pat
         raise RuntimeError("host unreachable")
     monkeypatch.setattr(sle, "resolve_layer", dead)
     monkeypatch.setattr(sle, "fetch_usgs", dead)
+    monkeypatch.setattr(sle, "fetch_osm", dead)
     assert sle.main(["--state", "MN"]) == 2
     err = capsys.readouterr().err
     assert "no source answered" in err and "stay empty" in err
@@ -969,10 +1016,10 @@ def test_records_that_all_fail_the_filter_are_reported_not_silently_zero(
     def dead(*a, **k):
         raise RuntimeError("gone")
     monkeypatch.setattr(sle, "resolve_layer", dead)
-    monkeypatch.setattr(sle, "fetch_usgs", lambda st, lid, log=print: [
-        {"name": "MINNEAPOLIS POLICE DEPT", "address": "", "city": "",
+    monkeypatch.setattr(sle, "fetch_osm", lambda st, mirrors=None, log=print: [
+        {"name": "MINNEAPOLIS POLICE DEPT", "phone": "", "address": "", "city": "",
          "admintype": "Local", "loaddate": "", "lon": 1.0, "lat": 1.0},
-        {"name": "ST PAUL POLICE", "address": "", "city": "",
+        {"name": "ST PAUL POLICE", "phone": "", "address": "", "city": "",
          "admintype": "Local", "loaddate": "", "lon": 2.0, "lat": 2.0},
     ])
     monkeypatch.setattr(sle, "county_shapes", lambda sfp, log=print: [
@@ -989,11 +1036,11 @@ def test_show_dumps_records_and_reports_what_the_filter_would_match(
         monkeypatch, capsys):
     monkeypatch.setattr(sle, "resolve_layer",
                         lambda *a, **k: (_ for _ in ()).throw(RuntimeError("gone")))
-    monkeypatch.setattr(sle, "fetch_usgs", lambda st, lid, log=print: [
-        {"name": "Chisago County Sheriff", "address": "1 Main", "city": "X",
-         "admintype": "County", "loaddate": "2024-01-01", "lon": 1.0, "lat": 1.0},
-        {"name": "Center City Police", "address": "2 Main", "city": "Y",
-         "admintype": "Local", "loaddate": "", "lon": 2.0, "lat": 2.0},
+    monkeypatch.setattr(sle, "fetch_osm", lambda st, mirrors=None, log=print: [
+        {"name": "Chisago County Sheriff", "phone": "651-1", "address": "1 Main",
+         "city": "X", "admintype": "County", "loaddate": "", "lon": 1.0, "lat": 1.0},
+        {"name": "Center City Police", "phone": "", "address": "2 Main",
+         "city": "Y", "admintype": "Local", "loaddate": "", "lon": 2.0, "lat": 2.0},
     ])
     assert sle.main(["--state", "MN", "--show", "2"]) == 0
     out = capsys.readouterr().out

@@ -92,6 +92,18 @@ SOURCES = [
     },
 ]
 
+SOURCES.append({
+    "name": "OpenStreetMap (Overpass)",
+    "url": "https://overpass-api.de/api/interpreter",
+    "layer_re": None,                  # not an ArcGIS service
+    "county_field": None,              # spatial match, same as USGS
+    "name_field": "name",
+    "phone_field": "phone",            # OSM DOES carry phone / contact:phone
+    "addr_field": "addr:street",
+    "note": "community-maintained; coverage varies by area, but it is the only "
+            "reachable source that carries phone numbers at all",
+})
+
 # Kept for backwards compatibility with anything importing the old names.
 HIFLD_LE = SOURCES[0]["url"]
 LAYER_NAME_RE = SOURCES[0]["layer_re"]
@@ -328,9 +340,19 @@ def main(argv=None):
                     help="replace rows that are already in the CSV (default: keep yours)")
     ap.add_argument("--dry-run", action="store_true", help="print, write nothing")
     ap.add_argument("--endpoint", default=HIFLD_LE, help="override the FeatureServer URL")
-    ap.add_argument("--source", choices=["auto", "hifld", "usgs"], default="auto",
-                    help="auto (default) tries HIFLD for phone numbers and falls "
-                         "back to USGS for names only; hifld or usgs force one")
+    ap.add_argument("--source", choices=["auto", "hifld", "usgs", "osm"],
+                    default="auto",
+                    help="auto tries OSM first (the only reachable source with "
+                         "phone numbers), then USGS for names only. hifld/usgs/osm "
+                         "force one.")
+    ap.add_argument("--raw", action="store_true",
+                    help="with --show, print the server's response for one record "
+                         "exactly as it arrives, before any field mapping")
+    ap.add_argument("--discover", metavar="ARCGIS_ROOT",
+                    help="list the services and layers an ArcGIS server publishes, "
+                         "e.g. https://feat.gisdata.mn.gov/arcgis/rest/services")
+    ap.add_argument("--pattern", default="law|police|sheriff|emergency",
+                    help="regex filter for --discover (default: law|police|sheriff|emergency)")
     ap.add_argument("--show", type=int, metavar="N",
                     help="dump the first N raw source records and exit - use this "
                          "when the filter matches nothing, to see how the names "
@@ -339,6 +361,12 @@ def main(argv=None):
                     help="USGS Police Stations feature layer (18 or 53; 17 and 52 "
                          "are group layers with no fields)")
     a = ap.parse_args(argv)
+
+    if a.discover:
+        print(f"DISCOVERING {a.discover}")
+        print(f"  filter: /{a.pattern}/i\n")
+        found = discover_arcgis(a.discover, a.pattern)
+        return 0 if found else 1
 
     if a.probe:
         ok = probe_sources()
@@ -351,18 +379,18 @@ def main(argv=None):
 
     layer_id = vintage = None
     use_usgs = a.source == "usgs"
-    if a.source in ("auto", "hifld"):
+    use_osm = a.source == "osm"
+    if a.source == "auto":
+        # OSM first: it is the only reachable source that carries a phone number,
+        # and the phone is the field that has no other home.
+        use_osm = True
+    if a.source == "hifld":
         try:
             layer_id, vintage = resolve_layer(a.endpoint)
         except Exception as e:                      # noqa: BLE001
-            if a.source == "hifld":
-                print(f"[!] cannot reach the HIFLD layer: {e}", file=sys.stderr)
-                print("    Try:  python3 seed_le_contacts.py --probe", file=sys.stderr)
-                return 2
-            print(f"[*] HIFLD unavailable ({str(e).splitlines()[0]})")
-            print("[*] falling back to USGS: agency names and addresses, NO phone "
-                  "numbers - the phone column stays 'not in dataset'")
-            use_usgs = True
+            print(f"[!] cannot reach the HIFLD layer: {redact_err(e)}", file=sys.stderr)
+            print("    Try:  python3 seed_le_contacts.py --probe", file=sys.stderr)
+            return 2
 
     if a.all:
         targets = sorted(STATE_FIPS)
@@ -374,8 +402,7 @@ def main(argv=None):
     if a.show:
         st = targets[0]
         try:
-            raw = (fetch_usgs(st, a.usgs_layer) if use_usgs
-                   else fetch_state(STATE_FIPS[st], layer_id, a.endpoint))
+            raw = _fetch_raw(st, use_osm, use_usgs, a, layer_id)
         except Exception as e:                      # noqa: BLE001
             print(f"[!] {st}: {redact_err(e)}", file=sys.stderr)
             return 2
@@ -404,12 +431,19 @@ def main(argv=None):
     for st in targets:
         sfp = STATE_FIPS[st]
         try:
-            if use_usgs:
-                raw = fetch_usgs(st, a.usgs_layer)
-                vintage = usgs_vintage(raw)
-                source_name = f"{USGS['name']} (no phone numbers)"
-                print(f"[*] {st}: {len(raw)} USGS law-enforcement points, "
-                      f"vintage {vintage}")
+            if use_osm or use_usgs:
+                raw = _fetch_raw(st, use_osm, use_usgs, a, layer_id)
+                if use_osm:
+                    vintage = today_iso()
+                    source_name = OSM["name"]
+                    withph = sum(1 for r in raw if r.get("phone"))
+                    print(f"[*] {st}: {len(raw)} OSM police features, "
+                          f"{withph} with a phone number (fetched {vintage})")
+                else:
+                    vintage = usgs_vintage(raw)
+                    source_name = f"{USGS['name']} (no phone numbers)"
+                    print(f"[*] {st}: {len(raw)} USGS law-enforcement points, "
+                          f"vintage {vintage}")
                 shapes = county_shapes(sfp)
                 records, unplaced = [], 0
                 for r in raw:
@@ -418,7 +452,8 @@ def main(argv=None):
                         unplaced += 1       # never guessed into a nearby county
                         continue
                     records.append({"geoid": geoid, "agency": r["name"],
-                                    "phone": "", "address": r["address"],
+                                    "phone": r.get("phone", ""),
+                                    "address": r["address"],
                                     "type": r["admintype"]})
                 if unplaced:
                     print(f"    {unplaced} point(s) fell outside every county "
@@ -481,7 +516,12 @@ def main(argv=None):
     print(f"\n{added} row(s) written, {skipped} existing row(s) kept; "
           f"{len(existing)} total in {CSV_PATH}")
     print(f"Source stamped on new rows: {source_name} {vintage}")
-    if use_usgs:
+    if use_osm:
+        print("OpenStreetMap is community-maintained: coverage varies by area and")
+        print("a phone number there is as current as whoever last edited it. Every")
+        print("row says so and carries the date it was fetched. Verify before you")
+        print("rely on a number; your own edits are never overwritten.")
+    elif use_usgs:
         print("USGS carries NO phone numbers, so LE non-emergency stays 'not in")
         print("dataset'. Add one you have verified yourself and the seeder will")
         print("never overwrite it.")
@@ -625,6 +665,146 @@ def usgs_vintage(records):
             if m:
                 years.append(int(m.group(0)))
     return str(max(years)) if years else "load date not reported"
+
+
+
+
+# ---------------------------------------------------------------------------
+# OpenStreetMap via Overpass. The only reachable source that carries a phone
+# number. Community-maintained, so coverage varies - which is exactly why every
+# row records that it came from OSM and when it was fetched.
+# ---------------------------------------------------------------------------
+OSM = SOURCES[2]
+OVERPASS_MIRRORS = [
+    "https://overpass-api.de/api/interpreter",
+    "https://overpass.kumi.systems/api/interpreter",
+]
+
+# ISO 3166-2 subdivision codes are what Overpass indexes US states by.
+OSM_QUERY = """
+[out:json][timeout:180];
+area["ISO3166-2"="US-{st}"]->.a;
+nwr["amenity"="police"](area.a);
+out center tags;
+"""
+
+
+def fetch_osm(state_abbr, mirrors=None, log=print):
+    """[{name, phone, address, city, admintype, lon, lat}] for one state.
+
+    `out center tags` gives a single representative coordinate for ways and
+    relations as well as nodes, so a police station mapped as a building
+    footprint still lands somewhere.
+    """
+    import urllib.parse
+    import urllib.request
+    q = OSM_QUERY.format(st=state_abbr.upper())
+    last = None
+    for url in (mirrors or OVERPASS_MIRRORS):
+        try:
+            data = urllib.parse.urlencode({"data": q}).encode()
+            req = urllib.request.Request(url, data=data, headers=UA)
+            with urllib.request.urlopen(req, timeout=180, context=SSL_CTX) as r:
+                doc = json.loads(r.read().decode("utf-8", "replace"))
+            break
+        except Exception as e:                      # noqa: BLE001
+            last = e
+            log(f"    [!] {url} -> {redact_err(e)}")
+    else:
+        raise RuntimeError(f"no Overpass mirror answered: {last}")
+
+    out = []
+    for el in doc.get("elements") or []:
+        t = el.get("tags") or {}
+        lon = el.get("lon")
+        lat = el.get("lat")
+        if lon is None or lat is None:
+            c = el.get("center") or {}
+            lon, lat = c.get("lon"), c.get("lat")
+        if lon is None or lat is None:
+            continue
+        street = " ".join(x for x in (t.get("addr:housenumber"), t.get("addr:street")) if x)
+        out.append({
+            "name": (t.get("name") or t.get("official_name") or "").strip(),
+            # phone and contact:phone are both in use; neither is preferred by OSM
+            "phone": (t.get("phone") or t.get("contact:phone") or "").strip(),
+            "address": street.strip(),
+            "city": (t.get("addr:city") or "").strip(),
+            # operator:type is how OSM records that an agency is county-run
+            "admintype": (t.get("operator:type") or t.get("operator") or "").strip(),
+            "loaddate": "",
+            "lon": float(lon), "lat": float(lat),
+        })
+    return out
+
+
+def discover_arcgis(root, pattern="", log=print):
+    """List an ArcGIS server's services and their layers, filtered by `pattern`.
+
+    For finding what a STATE GIS server actually publishes without guessing at
+    service names. Walks the catalog the server advertises; nothing is assumed
+    about what exists.
+    """
+    rx = re.compile(pattern, re.I) if pattern else None
+    try:
+        root_doc = http_json(root, {"f": "json"}, tries=2, timeout=60)
+    except Exception as e:                          # noqa: BLE001
+        log(f"  UNREACHABLE {root}: {redact_err(e)}")
+        return []
+
+    folders = root_doc.get("folders") or []
+    services = list(root_doc.get("services") or [])
+    log(f"  {len(services)} service(s) at the root, {len(folders)} folder(s)")
+    for f in folders:
+        try:
+            sub = http_json(f"{root}/{f}", {"f": "json"}, tries=1, timeout=60)
+            services.extend(sub.get("services") or [])
+        except Exception as e:                      # noqa: BLE001
+            log(f"  folder {f}: {redact_err(e)}")
+    log(f"  {len(services)} service(s) total\n")
+
+    found = []
+    for svc in services:
+        nm, typ = svc.get("name", ""), svc.get("type", "")
+        if typ not in ("MapServer", "FeatureServer"):
+            continue
+        if rx and not rx.search(nm):
+            continue
+        url = f"{root}/{nm}/{typ}"
+        try:
+            meta = http_json(url, {"f": "json"}, tries=1, timeout=45)
+        except Exception as e:                      # noqa: BLE001
+            log(f"  {nm} ({typ}): unreadable - {redact_err(e)}")
+            continue
+        layers = meta.get("layers") or []
+        log(f"  {nm} ({typ}) - {len(layers)} layer(s)")
+        for l in layers:
+            mark = "  <--" if rx and rx.search(str(l.get("name", ""))) else ""
+            log(f"      {str(l.get('id')):>3}  {l.get('name')}{mark}")
+            found.append((url, l.get("id"), l.get("name")))
+    if not found:
+        log("  nothing matched. Re-run with a different --pattern, or none at all "
+            "to list everything.")
+    return found
+
+
+def today_iso():
+    """Fetch date, for sources that carry no vintage of their own.
+
+    OSM has no dataset vintage - it is edited continuously - so the honest
+    stamp is when this copy was taken, not a year invented for it.
+    """
+    import datetime as _dt
+    return _dt.date.today().isoformat()
+
+
+def _fetch_raw(state_abbr, use_osm, use_usgs, args, layer_id):
+    """Whichever source is selected, in one place, returning one record shape."""
+    if use_osm:
+        return fetch_osm(state_abbr)
+    if use_usgs:
+        return fetch_usgs(state_abbr, args.usgs_layer)
+    return fetch_state(STATE_FIPS[state_abbr], layer_id, args.endpoint)
 
 
 if __name__ == "__main__":
