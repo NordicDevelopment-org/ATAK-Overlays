@@ -215,3 +215,55 @@ def test_every_state_is_addressable_and_fips_round_trips():
 def test_unknown_state_is_rejected_not_guessed(capsys):
     assert bcp.main(["--state", "ZZ"]) == 1
     assert "unknown state" in capsys.readouterr().err
+
+
+# --------------------------------------------------------------------------
+# Trust the server's data, not its filtering
+# --------------------------------------------------------------------------
+def test_state_of_feature_reads_geoid_or_state_column():
+    assert bcp.state_of_feature({"GEOID": "27025"}) == "27"
+    assert bcp.state_of_feature({"geoid": "06001"}) == "06"
+    assert bcp.state_of_feature({"STATE": "27"}) == "27"
+    assert bcp.state_of_feature({"STATEFP": 6}) == "06"        # numeric, zero-padded
+    assert bcp.state_of_feature({"NAME": "Nowhere"}) is None
+    assert bcp.state_of_feature(None) is None
+
+
+def test_counties_from_other_states_are_dropped_not_shipped(monkeypatch):
+    """A `where` clause the server ignores would otherwise put California
+    counties inside MN_Counties.kmz, silently."""
+    everything = [
+        {"properties": {"NAME": f"C{i}", "GEOID": f"{st}{i:03d}"}, "geometry": None}
+        for st in ("27", "06", "48") for i in range(2)
+    ]
+    monkeypatch.setattr(bcp, "get_json", lambda url, params=None, **kw:
+                        {"features": everything})
+    msgs = []
+    kept, used = bcp.fetch_counties("27", "http://e/0", [], log=msgs.append)
+
+    assert len(kept) == 2
+    assert all(f["properties"]["GEOID"].startswith("27") for f in kept)
+    assert any("outside state 27" in m and "not honoured" in m for m in msgs)
+
+
+def test_a_page_with_no_matching_state_is_a_failure_not_an_empty_pack(monkeypatch):
+    monkeypatch.setattr(bcp, "get_json", lambda url, params=None, **kw:
+                        {"features": [{"properties": {"GEOID": "06001"}, "geometry": None}]})
+    with pytest.raises(RuntimeError, match="no county endpoint answered"):
+        bcp.fetch_counties("27", "http://e/0", [], log=lambda *a: None)
+
+
+def test_hostile_text_cannot_break_the_kml(tmp_path):
+    """A CSV value containing ]]> must not terminate the CDATA and corrupt the
+    document; & < > must survive as displayable text."""
+    meta = _meta(seat=bcp.Sourced("Evil]]><script>x</script>", "csv", "2026"),
+                 le_agency=bcp.Sourced("A & B <Sheriff>", "csv", "2026"))
+    pm = bcp.county_placemark({}, {"type": "Polygon", "coordinates": [
+        [[-93, 45], [-92, 45], [-92, 46], [-93, 45]]]}, meta)
+    kml = bcp.state_kml("MN", [pm], {
+        "title": "T", "boundary_source": "s", "boundary_url": "u",
+        "acs_label": "a", "tiger_vintage": "2024", "built": "b"})
+    minidom.parseString(kml)                       # would raise if CDATA broke
+    assert "]]><script" not in kml                 # the escape really happened
+    assert "]]&gt;" in kml
+    assert "A &amp; B &lt;Sheriff&gt;" in kml

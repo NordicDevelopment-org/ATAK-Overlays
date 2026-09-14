@@ -162,6 +162,23 @@ def get_json(url, params=None, **kw):
 # --------------------------------------------------------------------------
 # Fetch: county polygons
 # --------------------------------------------------------------------------
+def state_of_feature(props, default_len=2):
+    """The 2-digit state FIPS a returned county belongs to, or None.
+
+    Read from GEOID (first two digits) or from a STATE/STATEFP column. Used to
+    check that the server honoured our filter - see fetch_counties.
+    """
+    p = {str(k).upper(): v for k, v in (props or {}).items()}
+    geoid = str(p.get("GEOID") or "")
+    if len(geoid) >= default_len and geoid[:default_len].isdigit():
+        return geoid[:default_len]
+    for key in ("STATE", "STATEFP", "STATE_FIPS"):
+        v = p.get(key)
+        if v not in (None, ""):
+            return str(v).zfill(default_len)[:default_len]
+    return None
+
+
 def fetch_counties(state_fips, endpoint=TIGERWEB, alternates=None, log=print):
     """Every county in one state, as GeoJSON features, paged.
 
@@ -191,11 +208,23 @@ def fetch_counties(state_fips, endpoint=TIGERWEB, alternates=None, log=print):
                 if len(batch) < 1000:
                     break
                 offset += len(batch)
-            if feats:
+
+            # Trust the server's data, not its filtering. A `where` clause that a
+            # server ignores, mis-parses, or applies to a column that does not
+            # exist can come back as EVERY county in the country - which would
+            # quietly ship California inside MN_Counties.kmz. Keep only the
+            # features that actually belong to the state we asked for.
+            kept = [f for f in feats
+                    if state_of_feature(f.get("properties")) == state_fips]
+            dropped = len(feats) - len(kept)
+            if dropped:
+                log(f"    [!] {url} returned {dropped} feature(s) outside state "
+                    f"{state_fips} - the filter was not honoured; they were dropped")
+            if kept:
                 if url != endpoint:
                     log(f"    [!] primary endpoint failed; used fallback {url}")
-                return feats, url
-            last_err = "0 features"
+                return kept, url
+            last_err = f"0 features for state {state_fips} (of {len(feats)} returned)"
         except Exception as e:                      # noqa: BLE001 - try the next one
             last_err = e
             log(f"    [!] {url} -> {e}")
