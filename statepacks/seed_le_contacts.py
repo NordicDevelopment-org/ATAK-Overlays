@@ -387,6 +387,12 @@ def main(argv=None):
                          "sheriff: no record in the source at all, or records "
                          "whose names the filter did not match (with their "
                          "actual spellings)")
+    ap.add_argument("--gaps-dump", metavar="FILE",
+                    help="with --gaps, also write EVERY unmatched county and "
+                         "all its agency names to FILE as JSON. The printed "
+                         "report samples 20 counties to stay readable; on a "
+                         "state nobody has fetched before, the names it does "
+                         "not print are the evidence that decides the filter")
     ap.add_argument("--endpoint", default=HIFLD_LE, help="override the FeatureServer URL")
     ap.add_argument("--source", choices=["auto", "hifld", "usgs", "osm"],
                     default="auto",
@@ -612,7 +618,8 @@ def main(argv=None):
             if shapes:
                 report_gaps(st, [g for g, _polys in shapes], cnames, records,
                             chosen, a.match,
-                            uncovered=coverage.get("uncovered") or ())
+                            uncovered=coverage.get("uncovered") or (),
+                            dump=a.gaps_dump)
             else:
                 print("    --gaps needs the county boundaries, which only the "
                       "osm and usgs sources fetch; nothing to report here")
@@ -1759,8 +1766,116 @@ def suggest_widening(unmatched, match, hints=COUNTY_LE_HINTS):
     return sorted(out, key=lambda t: (-t[1], t[0]))
 
 
+# A name with one of these in it is a municipal force, not the county's. The
+# maintainer's standing decision is that a city PD is never written as a
+# county's primary LE, so a term reachable only through one of these is not a
+# candidate at any count - see README §11 "Decisions that are the maintainer's".
+MUNICIPAL_RX = re.compile(
+    r"\b(?:city|village|township|town|campus|university|tribal|park|school|"
+    r"metro|airport|transit|capitol|state)\b|\bpolice\s+(?:department|dept)\b",
+    re.I)
+
+# Tokens that carry no vocabulary on their own. A phrase made only of these
+# describes nothing; one containing them alongside a real word is fine.
+_FILLER = frozenset(("the", "of", "and", "at", "for", "a", "an", "county",
+                     "co", "dept", "department", "office", "offices"))
+
+
+def discover_terms(unmatched, match, min_counties=2, max_terms=8):
+    """[(phrase, counties_it_would_reach)] mined from THIS state's own names.
+
+    `COUNTY_LE_HINTS` is Minnesota's vocabulary, read off Minnesota's gap
+    report. Another state files its county agency under whatever word that
+    state uses, and a fixed hint list cannot propose a word nobody has looked
+    at yet - so on the first run for a new state `suggest_widening` can only
+    test Minnesota's hypotheses against that state's data. This reads the
+    phrases that actually came back unmatched and counts what each would
+    reach, so a state's own naming can surface itself.
+
+    Suggestions only, never applied: the report prints them and the maintainer
+    decides, exactly as with the curated hints.
+
+    A phrase is offered only when it
+      * reaches at least `min_counties` counties - a phrase reaching exactly
+        one is that county's own name ("dane county jail"), not vocabulary;
+      * is not already in `match`;
+      * never appears in a municipal name anywhere in this state's unmatched
+        records. Widening onto a city PD would relabel it as the county's
+        primary LE, which is the one mistake this seeder must not make.
+    """
+    counties_with = {}
+    banned = set()
+    for agencies in unmatched.values():
+        for a in agencies:
+            toks = [t for t in re.split(r"[^a-z0-9']+", a.lower()) if len(t) > 1]
+            grams = {" ".join(toks[i:i + n])
+                     for n in (2, 3) for i in range(len(toks) - n + 1)}
+            grams = {g for g in grams
+                     if not all(t in _FILLER for t in g.split())}
+            if MUNICIPAL_RX.search(a):
+                # Every phrase in a municipal name is disqualified outright,
+                # not merely down-ranked: offering it at all invites the wrong
+                # widening, and this state may spell "city" in the county
+                # agency's name too.
+                banned |= grams
+            else:
+                for g in grams:
+                    counties_with.setdefault(g, set())
+    for geoid, agencies in unmatched.items():
+        for a in agencies:
+            if MUNICIPAL_RX.search(a):
+                continue
+            low = a.lower()
+            for g in counties_with:
+                if g in low:
+                    counties_with[g].add(geoid)
+    out = [(g, len(cs)) for g, cs in counties_with.items()
+           if g not in banned
+           and len(cs) >= min_counties
+           and not re.search(re.escape(g), match, re.I)]
+    # Longest phrase wins a tie so the report offers "law enforcement center"
+    # rather than the vaguer "law enforcement" at the same reach.
+    out.sort(key=lambda t: (-t[1], -len(t[0]), t[0]))
+    # One phrase per vocabulary term. "public safety building" already reaches
+    # every county "public safety" does, so listing both - and "safety
+    # building", and "county public" - pads the report with four spellings of
+    # one finding. Where a shorter phrase reaches no further than a longer one
+    # already kept, it is the same term seen through a smaller window; the
+    # longer is kept because it is the narrower match.
+    kept = []
+    for g, n in out:
+        if any(n == m and (g in k or k in g) for k, m in kept):
+            continue
+        kept.append((g, n))
+    return kept[:max_terms]
+
+
+def dump_gaps(path, state, unmatched_by_county, names, match):
+    """Write every unmatched county and all its agency names, uncapped.
+
+    The printed report samples 20 counties so it stays scannable. On a state
+    nobody has fetched before, the names it does not print are exactly the
+    evidence that decides the filter, so `--gaps-dump` writes the lot to a
+    file that can be read or sent on whole.
+    """
+    payload = {
+        "state": state,
+        "filter": match,
+        "fetched": today_iso(),
+        "counties": [
+            {"geoid": g, "name": names.get(g, ""),
+             "agencies": sorted({a for a in agencies if a})}
+            for g, agencies in sorted(unmatched_by_county.items())
+        ],
+    }
+    with open(path, "w", encoding="utf-8") as fh:
+        json.dump(payload, fh, indent=1, ensure_ascii=False)
+        fh.write("\n")
+    return path
+
+
 def report_gaps(state, geoids, names, records, chosen, match, log=print,
-                uncovered=()):
+                uncovered=(), dump=None):
     """Say exactly WHY each county came back without a sheriff.
 
     "52 of 87" is a number, not a diagnosis. A county with no row is either a
@@ -1826,6 +1941,28 @@ def report_gaps(state, geoids, names, records, chosen, match, log=print,
         wider = "|".join([match] + [h for h, _n in helps])
         log(f"    python3 seed_le_contacts.py --state {state} --gaps \\")
         log(f"        --match '{wider}'")
+    # The curated hints are Minnesota's words. On a state nobody has fetched
+    # before they may all miss, and "no suggestions" would then read as "no
+    # filter fixes this" when the truth is that nobody has looked at this
+    # state's vocabulary yet. These come from the names in front of us.
+    found = discover_terms(
+        {g: [r["agency"] for r in by_county[g]] for g in unmatched}, match)
+    found = [(t, n) for t, n in found
+             if not any(re.search(re.escape(t), h, re.I)
+                        or re.search(re.escape(h), t, re.I) for h, _n in helps)]
+    if found:
+        log(f"    phrases in {state}'s own unmatched names, not in the curated")
+        log("    list - read them before using them, they are not vetted:")
+        for t, n in found:
+            log(f"      +{n:<3d} {t}")
+        wider = "|".join([match] + [t for t, _n in found])
+        log(f"    python3 seed_le_contacts.py --state {state} --gaps \\")
+        log(f"        --match '{wider}'")
+    if dump and unmatched:
+        where = dump_gaps(dump, state,
+                          {g: [r["agency"] for r in by_county[g]]
+                           for g in unmatched}, names, match)
+        log(f"    all {len(unmatched)} unmatched counties written to {where}")
     if notfetched:
         log(f"  NOT FETCHED - their tile failed        : {len(notfetched)}"
             f"  <- unknown, not absent; re-run to fill")

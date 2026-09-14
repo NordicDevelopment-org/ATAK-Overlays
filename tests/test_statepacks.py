@@ -2134,6 +2134,101 @@ def test_a_term_already_in_the_filter_is_not_suggested_again():
         unmatched, "sherr?iff|law enforcement cent")             # already on
 
 
+# --- discover_terms: a state's own vocabulary, not Minnesota's -------------
+# COUNTY_LE_HINTS was read off Minnesota. The first run for any other state
+# can only test Minnesota's hypotheses against it, so a state that files its
+# county agency under a word Minnesota does not use gets no suggestion at all.
+
+WI_SHAPED = {
+    "55025": ["Dane County Public Safety Building", "Madison Police Department"],
+    "55079": ["Milwaukee County Public Safety Building"],
+    "55133": ["Waukesha County Communications Center"],
+    "55139": ["Winnebago County Communications Center"],
+    "55101": ["Racine Police Department"],        # city only - must stay empty
+}
+
+
+def test_a_word_minnesota_never_uses_is_still_found():
+    """The gap this closes: 'communications center' reaches two counties here
+    and is in no curated hint, so suggest_widening cannot propose it."""
+    assert not any("communications" in h
+                   for h, _n in sle.suggest_widening(WI_SHAPED, "sherr?iff"))
+    found = dict(sle.discover_terms(WI_SHAPED, "sherr?iff"))
+    assert any("communications center" in t for t in found)
+    assert found[next(t for t in found if "communications center" in t)] == 2
+
+
+def test_a_discovered_term_never_reaches_a_city_police_department():
+    """The maintainer's standing decision (README §11): a city PD is never
+    written as a county's primary LE, so no term may be offered that gets
+    there - at any count."""
+    for term, _n in sle.discover_terms(WI_SHAPED, "sherr?iff"):
+        for city in ("Madison Police Department", "Racine Police Department"):
+            assert not re.search(re.escape(term), city, re.I), term
+
+
+def test_a_phrase_reaching_one_county_is_that_countys_name_not_vocabulary():
+    assert not sle.discover_terms({"55025": ["Dane County Jail Annex"]},
+                                  "sherr?iff")
+
+
+def test_one_phrase_per_term_not_every_window_onto_it():
+    """'public safety building' already reaches every county 'public safety'
+    does; listing both, plus 'safety building' and 'county public', is four
+    spellings of one finding."""
+    terms = [t for t, _n in sle.discover_terms(WI_SHAPED, "sherr?iff")]
+    assert "public safety building" in terms
+    for narrower in ("safety building", "public safety", "county public"):
+        assert narrower not in terms
+
+
+def test_discovery_adds_no_noise_to_minnesota():
+    """Minnesota is verified end to end; discovery must not start printing
+    suggestions over the top of the curated list that already works there."""
+    mn = {
+        "27131": ["Rice County Public Safety Center"],
+        "27007": ["Beltrami County Law Enforcement Center"],
+        "27005": ["Becker County Jail"],
+        "27001": ["Hill City Police Department"],
+    }
+    assert sle.suggest_widening(mn, "sherr?iff")      # curated list still leads
+    assert not sle.discover_terms(mn, "sherr?iff")    # and nothing is added
+
+
+def test_the_report_offers_a_discovered_term_when_the_curated_list_misses(capsys):
+    """End to end: with no curated hint reaching them, the report still has
+    something to say rather than reading as 'no filter fixes this'."""
+    names = {"55133": "Waukesha County", "55139": "Winnebago County"}
+    records = [
+        {"geoid": "55133", "agency": "Waukesha County Communications Center",
+         "phone": "", "source": "OSM", "vintage": "2026-09-14"},
+        {"geoid": "55139", "agency": "Winnebago County Communications Center",
+         "phone": "", "source": "OSM", "vintage": "2026-09-14"},
+    ]
+    sle.report_gaps("WI", ["55133", "55139"], names, records, {}, "sherr?iff")
+    out = capsys.readouterr().out
+    assert "communications center" in out
+    assert "not vetted" in out            # offered, not applied
+    assert "--match" in out               # and runnable
+
+
+def test_gaps_dump_writes_every_unmatched_county_not_the_printed_sample(tmp_path):
+    """The printed report samples 20 counties. On a state nobody has fetched,
+    the names it does not print are the evidence that decides the filter."""
+    names = {f"55{i:03d}": f"County {i}" for i in range(30)}
+    records = [{"geoid": g, "agency": f"{n} Communications Center",
+                "phone": "", "source": "OSM", "vintage": "2026-09-14"}
+               for g, n in names.items()]
+    dest = tmp_path / "wi_gaps.json"
+    sle.report_gaps("WI", list(names), names, records, {}, "sherr?iff",
+                    log=lambda *_a, **_k: None, dump=str(dest))
+    payload = json.loads(dest.read_text())
+    assert payload["state"] == "WI"
+    assert payload["filter"] == "sherr?iff"
+    assert len(payload["counties"]) == 30          # all of them, not 20
+    assert payload["counties"][0]["agencies"]
+
+
 def test_the_report_prints_a_runnable_widening_command(capsys):
     names = {"27131": "Rice County", "27001": "Aitkin County"}
     records = [

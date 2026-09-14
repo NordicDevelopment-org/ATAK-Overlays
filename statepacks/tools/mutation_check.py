@@ -68,6 +68,21 @@ MUTATIONS = {
          "                if cool(url) > 0:", "                if False:"),
         ("lower the server timeout that was measured to work",
          "OSM_SERVER_TIMEOUT_S = 90", "OSM_SERVER_TIMEOUT_S = 30"),
+        ("offer a widening that reaches a city police department",
+         "                banned |= grams", "                pass"),
+        ("call one county's own name a vocabulary term",
+         "def discover_terms(unmatched, match, min_counties=2, max_terms=8):",
+         "def discover_terms(unmatched, match, min_counties=1, max_terms=8):"),
+        ("print every window onto one term as a separate finding",
+         "        if any(n == m and (g in k or k in g) for k, m in kept):",
+         "        if False:"),
+        ("only ever test Minnesota's vocabulary against another state",
+         "    found = discover_terms(\n"
+         '        {g: [r["agency"] for r in by_county[g]] for g in unmatched},'
+         " match)",
+         "    found = []"),
+        ("unwire --gaps-dump",
+         "                            dump=a.gaps_dump)", "                            dump=None)"),
     ],
     BUILD: [
         ("pad a missing county code into a fake FIPS",
