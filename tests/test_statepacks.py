@@ -584,13 +584,61 @@ def test_seeding_never_overwrites_a_row_you_verified(tmp_path, monkeypatch, caps
     assert rows2["27025"]["phone"] == "000-000-0000"
 
 
-def test_unreachable_source_writes_nothing_and_says_why(monkeypatch, capsys):
-    def boom(*a, **k):
+def test_hifld_down_falls_back_to_usgs_and_says_the_phone_is_gone(monkeypatch, tmp_path, capsys):
+    """auto: HIFLD carries phone numbers, USGS does not. Falling back is right,
+    but the pack must not imply a phone number is merely missing when the whole
+    source has none."""
+    csv_path = tmp_path / "le.csv"
+    monkeypatch.setattr(sle, "CSV_PATH", str(csv_path))
+
+    def dead(*a, **k):
         raise RuntimeError("host unreachable")
-    monkeypatch.setattr(sle, "resolve_layer", boom)
+    monkeypatch.setattr(sle, "resolve_layer", dead)
+    monkeypatch.setattr(sle, "fetch_usgs", lambda st, lid, log=print: [
+        {"name": "Chisago County Sheriff", "address": "1 Main", "city": "Center City",
+         "admintype": "County", "loaddate": "2024-01-01", "lon": 1.0, "lat": 1.0},
+        {"name": "Elsewhere PD", "address": "", "city": "", "admintype": "",
+         "loaddate": "", "lon": 99.0, "lat": 99.0},          # outside every county
+    ])
+    monkeypatch.setattr(sle, "county_shapes", lambda sfp, log=print: [
+        ("27025", [[[[0, 0], [5, 0], [5, 5], [0, 5], [0, 0]]]])])
+
+    assert sle.main(["--state", "MN"]) == 0
+    out = capsys.readouterr().out
+    assert "falling back to USGS" in out
+    assert "NO phone" in out
+    assert "fell outside every county" in out            # the unplaced one, reported
+
+    rows, _ = sle.read_existing(str(csv_path))
+    assert rows["27025"]["agency"] == "Chisago County Sheriff"
+    assert rows["27025"]["phone"] == ""                  # never fabricated
+    assert "USGS" in rows["27025"]["source"]
+    assert rows["27025"]["vintage"] == "2024"
+    assert "Elsewhere" not in open(csv_path).read()      # dropped, not guessed
+
+
+def test_every_source_down_writes_nothing_and_exits_nonzero(monkeypatch, tmp_path, capsys):
+    monkeypatch.setattr(sle, "CSV_PATH", str(tmp_path / "le.csv"))
+
+    def dead(*a, **k):
+        raise RuntimeError("host unreachable")
+    monkeypatch.setattr(sle, "resolve_layer", dead)
+    monkeypatch.setattr(sle, "fetch_usgs", dead)
     assert sle.main(["--state", "MN"]) == 2
     err = capsys.readouterr().err
-    assert "Nothing was written" in err and "stay empty" in err
+    assert "no source answered" in err and "stay empty" in err
+    assert not (tmp_path / "le.csv").exists()            # nothing written at all
+
+
+def test_forcing_hifld_does_not_silently_use_usgs(monkeypatch, tmp_path, capsys):
+    monkeypatch.setattr(sle, "CSV_PATH", str(tmp_path / "le.csv"))
+
+    def dead(*a, **k):
+        raise RuntimeError("host unreachable")
+    monkeypatch.setattr(sle, "resolve_layer", dead)
+    monkeypatch.setattr(sle, "fetch_usgs",
+                        lambda *a, **k: pytest.fail("USGS must not be used with --source hifld"))
+    assert sle.main(["--state", "MN", "--source", "hifld"]) == 2
 
 
 def test_seeded_rows_flow_into_the_popup_with_their_vintage(tmp_path, monkeypatch):
@@ -815,3 +863,98 @@ def test_the_fetchers_write_local_files_not_the_tracked_templates():
 def test_local_data_is_gitignored():
     ignore = open(os.path.join(ROOT, ".gitignore"), encoding="utf-8").read()
     assert "statepacks/data/*.local.csv" in ignore
+
+
+# --------------------------------------------------------------------------
+# Spatial county assignment. USGS has no FIPS column, so the county comes from
+# geometry - and a sheriff filed under the wrong county is worse than absent.
+# --------------------------------------------------------------------------
+SQUARE = [[0, 0], [10, 0], [10, 10], [0, 10], [0, 0]]
+HOLE = [[4, 4], [6, 4], [6, 6], [4, 6], [4, 4]]
+
+
+def test_point_in_ring_basic():
+    assert sle.point_in_ring(5, 5, SQUARE)
+    assert not sle.point_in_ring(15, 5, SQUARE)
+    assert not sle.point_in_ring(5, -1, SQUARE)
+    assert not sle.point_in_ring(-0.001, 5, SQUARE)
+
+
+def test_a_point_in_a_hole_is_outside_the_polygon():
+    """A county with an enclave carved out does not contain what is inside it."""
+    rings = [SQUARE, HOLE]
+    assert sle.point_in_polygon(2, 2, rings)          # in the body
+    assert not sle.point_in_polygon(5, 5, rings)      # in the hole
+    assert sle.point_in_polygon(9, 9, rings)          # other side of the hole
+
+
+def test_assign_county_picks_the_containing_county():
+    a = ("27001", [[[[0, 0], [5, 0], [5, 5], [0, 5], [0, 0]]]])
+    b = ("27003", [[[[5, 0], [10, 0], [10, 5], [5, 5], [5, 0]]]])
+    counties = [a, b]
+    assert sle.assign_county(1, 1, counties) == "27001"
+    assert sle.assign_county(7, 2, counties) == "27003"
+
+
+def test_a_point_outside_every_county_is_dropped_not_guessed():
+    counties = [("27001", [[SQUARE]])]
+    assert sle.assign_county(99, 99, counties) is None
+    assert sle.assign_county(-5, 5, counties) is None
+
+
+def test_multipolygon_county_matches_its_exclave():
+    """A detached exclave is still that county - Lake of the Woods and the
+    Northwest Angle, for one."""
+    main = [[0, 0], [5, 0], [5, 5], [0, 5], [0, 0]]
+    exclave = [[20, 20], [22, 20], [22, 22], [20, 22], [20, 20]]
+    counties = [("27077", [[main], [exclave]])]
+    assert sle.assign_county(1, 1, counties) == "27077"
+    assert sle.assign_county(21, 21, counties) == "27077"      # the exclave
+    assert sle.assign_county(10, 10, counties) is None
+
+
+def test_usgs_vintage_reads_loaddate_and_never_invents_one():
+    import datetime as dt
+    ms = int(dt.datetime(2024, 6, 1).timestamp() * 1000)
+    older = int(dt.datetime(2019, 1, 1).timestamp() * 1000)
+    assert sle.usgs_vintage([{"loaddate": ms}, {"loaddate": older}]) == "2024"
+    assert sle.usgs_vintage([{"loaddate": "2022-03-04"}]) == "2022"
+    got = sle.usgs_vintage([{"loaddate": ""}, {}])
+    assert got == "load date not reported"
+    assert not any(ch.isdigit() for ch in got)
+
+
+def test_usgs_fetch_keeps_only_points_with_usable_geometry(monkeypatch):
+    monkeypatch.setattr(sle, "http_json", lambda url, params=None, **kw: {
+        "features": [
+            {"properties": {"NAME": "Chisago County Sheriff", "ADDRESS": "1 Main",
+                            "ADMINTYPE": "County", "LOADDATE": 1700000000000},
+             "geometry": {"type": "Point", "coordinates": [-92.8, 45.5]}},
+            {"properties": {"NAME": "No Geometry PD"}, "geometry": None},
+            {"properties": {"NAME": "A Line"},
+             "geometry": {"type": "LineString", "coordinates": [[0, 0], [1, 1]]}},
+            {"properties": {"NAME": "Short Coords"},
+             "geometry": {"type": "Point", "coordinates": [1]}},
+        ],
+        "exceededTransferLimit": False})
+    got = sle.fetch_usgs("MN", 18, log=lambda *a: None)
+    assert [r["name"] for r in got] == ["Chisago County Sheriff"]
+    assert got[0]["lon"] == -92.8 and got[0]["lat"] == 45.5
+    assert got[0]["admintype"] == "County"
+
+
+def test_module_defines_everything_main_needs_before_the_entrypoint():
+    """The __main__ guard executes where it sits in the file, so a function
+    defined below it does not exist when main() runs - and monkeypatched tests
+    never notice, because they import the whole module first. This caught a
+    real NameError that every other test passed straight through."""
+    src = open(os.path.join(SP, "seed_le_contacts.py"), encoding="utf-8").read()
+    guard = src.index('if __name__ == "__main__":')
+    after = src[guard:]
+    assert "\ndef " not in after, (
+        "a function is defined after the __main__ guard; it will not exist "
+        "when main() runs")
+
+    for name in ("fetch_usgs", "county_shapes", "assign_county", "usgs_vintage",
+                 "point_in_polygon", "redact_err"):
+        assert src.index(f"def {name}") < guard, f"{name} is defined too late"

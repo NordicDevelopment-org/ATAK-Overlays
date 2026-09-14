@@ -75,14 +75,20 @@ SOURCES = [
         "note": "frozen Aug 2025, unofficial re-host; carries phone numbers",
     },
     {
-        "name": "USGS National Map Structures - Law Enforcement",
+        "name": "USGS National Map Structures",
         "url": "https://carto.nationalmap.gov/arcgis/rest/services/structures/MapServer",
-        "layer_re": re.compile(r"law\s*enforcement|police", re.I),
-        "county_field": None,          # no FIPS column; needs a spatial join
+        "layer_re": re.compile(r"police\s*stations", re.I),
+        # Probed on-device 2026-09-14. Layers 17 and 52 are GROUP layers with no
+        # fields; 18 and 53 are the Feature Layers and carry:
+        #   NAME ADDRESS CITY STATE ZIPCODE ADMINTYPE FCODE LOADDATE ...
+        # No phone column and no county FIPS, so the county comes from a spatial
+        # match against the same boundaries the builder already downloads.
+        "county_field": None,
         "name_field": "NAME",
-        "phone_field": None,           # this dataset has no phone numbers
+        "phone_field": None,
         "addr_field": "ADDRESS",
-        "note": "live and maintained, but no phone numbers and no county FIPS",
+        "note": "live and maintained; agency names and addresses, NO phone numbers, "
+                "county assigned by spatial match",
     },
 ]
 
@@ -92,6 +98,14 @@ LAYER_NAME_RE = SOURCES[0]["layer_re"]
 SOURCE = SOURCES[0]["name"]
 VINTAGE_UNKNOWN = "snapshot year not reported"
 _YEAR_RE = re.compile(r"\b(19|20)\d{2}\b")
+
+_SECRET_PARAM = re.compile(r"([?&](?:key|api_key|token)=)[^&\s]+", re.I)
+
+
+def redact_err(text):
+    """Strip credentials out of anything printed - these URLs get pasted around."""
+    return _SECRET_PARAM.sub(r"\1<redacted>", str(text))
+
 
 SSL_CTX = ssl.create_default_context()
 UA = {"User-Agent": "atak-statepacks-le/1.0 "
@@ -314,6 +328,12 @@ def main(argv=None):
                     help="replace rows that are already in the CSV (default: keep yours)")
     ap.add_argument("--dry-run", action="store_true", help="print, write nothing")
     ap.add_argument("--endpoint", default=HIFLD_LE, help="override the FeatureServer URL")
+    ap.add_argument("--source", choices=["auto", "hifld", "usgs"], default="auto",
+                    help="auto (default) tries HIFLD for phone numbers and falls "
+                         "back to USGS for names only; hifld or usgs force one")
+    ap.add_argument("--usgs-layer", type=int, default=18,
+                    help="USGS Police Stations feature layer (18 or 53; 17 and 52 "
+                         "are group layers with no fields)")
     a = ap.parse_args(argv)
 
     if a.probe:
@@ -325,14 +345,20 @@ def main(argv=None):
             print("blank one, because it fails at the moment someone dials it.")
         return 0 if ok else 2
 
-    try:
-        layer_id, vintage = resolve_layer(a.endpoint)
-    except Exception as e:                          # noqa: BLE001
-        print(f"[!] cannot reach the HIFLD layer: {e}", file=sys.stderr)
-        print("    Try:  python3 seed_le_contacts.py --probe", file=sys.stderr)
-        print("    Nothing was written. The LE columns stay empty, which is "
-              "correct - better than a number nobody can source.", file=sys.stderr)
-        return 2
+    layer_id = vintage = None
+    use_usgs = a.source == "usgs"
+    if a.source in ("auto", "hifld"):
+        try:
+            layer_id, vintage = resolve_layer(a.endpoint)
+        except Exception as e:                      # noqa: BLE001
+            if a.source == "hifld":
+                print(f"[!] cannot reach the HIFLD layer: {e}", file=sys.stderr)
+                print("    Try:  python3 seed_le_contacts.py --probe", file=sys.stderr)
+                return 2
+            print(f"[*] HIFLD unavailable ({str(e).splitlines()[0]})")
+            print("[*] falling back to USGS: agency names and addresses, NO phone "
+                  "numbers - the phone column stays 'not in dataset'")
+            use_usgs = True
 
     if a.all:
         targets = sorted(STATE_FIPS)
@@ -343,13 +369,35 @@ def main(argv=None):
 
     existing, comments = read_existing(CSV_PATH)
     kept = set(existing)
-    added = skipped = 0
+    added = skipped = failures = 0
     for st in targets:
         sfp = STATE_FIPS[st]
         try:
-            records = fetch_state(sfp, layer_id, a.endpoint)
+            if use_usgs:
+                raw = fetch_usgs(st, a.usgs_layer)
+                vintage = usgs_vintage(raw)
+                source_name = f"{USGS['name']} (no phone numbers)"
+                print(f"[*] {st}: {len(raw)} USGS law-enforcement points, "
+                      f"vintage {vintage}")
+                shapes = county_shapes(sfp)
+                records, unplaced = [], 0
+                for r in raw:
+                    geoid = assign_county(r["lon"], r["lat"], shapes)
+                    if not geoid:
+                        unplaced += 1       # never guessed into a nearby county
+                        continue
+                    records.append({"geoid": geoid, "agency": r["name"],
+                                    "phone": "", "address": r["address"],
+                                    "type": r["admintype"]})
+                if unplaced:
+                    print(f"    {unplaced} point(s) fell outside every county "
+                          f"boundary and were dropped, not guessed")
+            else:
+                records = fetch_state(sfp, layer_id, a.endpoint)
+                source_name = SOURCE
         except Exception as e:                      # noqa: BLE001
-            print(f"[!] {st}: {e}", file=sys.stderr)
+            failures += 1
+            print(f"[!] {st}: {redact_err(e)}", file=sys.stderr)
             continue
         if a.all_agencies:
             chosen = {}
@@ -362,7 +410,8 @@ def main(argv=None):
                 skipped += 1
                 continue
             existing[geoid] = {"geoid": geoid, "agency": r["agency"],
-                               "phone": r["phone"], "source": SOURCE, "vintage": vintage}
+                               "phone": r["phone"], "source": source_name,
+                               "vintage": vintage}
             added += 1
         withphone = sum(1 for r in chosen.values() if r["phone"])
         print(f"[*] {st}: {len(records)} LE records -> {len(chosen)} counties "
@@ -376,13 +425,165 @@ def main(argv=None):
               f"{skipped} existing kept)")
         return 0
 
+    if failures and not added:
+        # Every source refused. Say so and exit non-zero: writing an empty file
+        # and reporting success would read as "there are no sheriffs", which is
+        # a claim we cannot make.
+        print(f"\n[!] no source answered for {failures} state(s); nothing written.",
+              file=sys.stderr)
+        print("    The LE columns stay empty, which is correct - an unsourced "
+              "phone number is worse than a blank one.", file=sys.stderr)
+        print("    Try:  python3 seed_le_contacts.py --probe", file=sys.stderr)
+        return 2
+
     write_csv(CSV_PATH, existing, comments)
     print(f"\n{added} row(s) written, {skipped} existing row(s) kept; "
           f"{len(existing)} total in {CSV_PATH}")
-    print(f"Source stamped on new rows: {SOURCE} {vintage}")
-    print("These are a FROZEN snapshot. Verify any number before you rely on it,")
-    print("then edit the row and put your own source and year in it.")
+    print(f"Source stamped on new rows: {source_name} {vintage}")
+    if use_usgs:
+        print("USGS carries NO phone numbers, so LE non-emergency stays 'not in")
+        print("dataset'. Add one you have verified yourself and the seeder will")
+        print("never overwrite it.")
+    else:
+        print("These are a FROZEN snapshot. Verify any number before you rely on it,")
+        print("then edit the row and put your own source and year in it.")
     return 0
+
+
+
+
+# ---------------------------------------------------------------------------
+# USGS path: agency names with no county column, so the county is worked out
+# from geometry against the same boundaries the pack is built from.
+# ---------------------------------------------------------------------------
+USGS = SOURCES[1]
+
+
+def point_in_ring(x, y, ring):
+    """Ray-casting point-in-polygon. Ring is [[lon, lat], ...]."""
+    inside = False
+    n = len(ring)
+    j = n - 1
+    for i in range(n):
+        xi, yi = ring[i][0], ring[i][1]
+        xj, yj = ring[j][0], ring[j][1]
+        if (yi > y) != (yj > y):
+            denom = (yj - yi)
+            if denom and x < (xj - xi) * (y - yi) / denom + xi:
+                inside = not inside
+        j = i
+    return inside
+
+
+def point_in_polygon(x, y, rings):
+    """First ring is the outer boundary, the rest are holes.
+
+    A point inside a hole is NOT inside the polygon - a lake or an enclave
+    carved out of a county belongs to whatever is inside it, not the county.
+    """
+    if not rings or not point_in_ring(x, y, rings[0]):
+        return False
+    return not any(point_in_ring(x, y, h) for h in rings[1:])
+
+
+def assign_county(x, y, counties):
+    """The GEOID of the county containing (x, y), or None.
+
+    `counties` is [(geoid, [polygon, ...])] where each polygon is a list of
+    rings. A point outside every county returns None and the record is DROPPED,
+    never filed under a nearest guess - a sheriff's office attributed to the
+    wrong county is worse than one that is simply absent.
+    """
+    for geoid, polys in counties:
+        for rings in polys:
+            if point_in_polygon(x, y, rings):
+                return geoid
+    return None
+
+
+def county_shapes(state_fips, log=print):
+    """[(geoid, [rings, ...])] for one state, from the same TIGERweb layer the
+    builder uses - so an agency lands in the county the pack actually draws."""
+    import build_county_pack as bcp                      # noqa: PLC0415
+    feats, url, vintage = bcp.fetch_counties(state_fips, log=log)
+    out = []
+    for f in feats:
+        geoid = bcp.county_geoid(f.get("properties"))
+        geom = f.get("geometry") or {}
+        if not geoid or not geom:
+            continue
+        c = geom.get("coordinates") or []
+        if geom.get("type") == "Polygon":
+            polys = [[r for r in c if r]]
+        elif geom.get("type") == "MultiPolygon":
+            polys = [[r for r in poly if r] for poly in c]
+        else:
+            continue
+        out.append((geoid, polys))
+    log(f"    {len(out)} county shapes for the spatial match")
+    return out
+
+
+def fetch_usgs(state_abbr, layer_id, log=print):
+    """[{name, address, lon, lat, admintype, loaddate}] for one state."""
+    out, offset = [], 0
+    while True:
+        page = http_json(f"{USGS['url']}/{layer_id}/query", {
+            "where": f"STATE='{state_abbr}'",
+            "outFields": "NAME,ADDRESS,CITY,STATE,ADMINTYPE,FCODE,LOADDATE",
+            "returnGeometry": "true",
+            "outSR": "4326",
+            "f": "geojson",
+            "resultOffset": offset,
+            "resultRecordCount": 1000,
+        })
+        if "error" in page:
+            raise RuntimeError(page["error"])
+        feats = page.get("features") or []
+        for f in feats:
+            p = f.get("properties") or {}
+            g = f.get("geometry") or {}
+            if g.get("type") != "Point":
+                continue
+            c = g.get("coordinates") or []
+            if len(c) < 2:
+                continue
+            out.append({
+                "name": str(p.get("NAME") or "").strip(),
+                "address": str(p.get("ADDRESS") or "").strip(),
+                "city": str(p.get("CITY") or "").strip(),
+                "admintype": str(p.get("ADMINTYPE") or "").strip(),
+                "loaddate": str(p.get("LOADDATE") or "").strip(),
+                "lon": float(c[0]), "lat": float(c[1]),
+            })
+        if not feats or not page.get("exceededTransferLimit"):
+            break
+        offset += len(feats)
+        if offset > 50000:
+            log("    [!] stopping after 50k records")
+            break
+    return out
+
+
+def usgs_vintage(records):
+    """The newest LOADDATE in the batch, as a year - a real per-record vintage.
+
+    Falls back to a plain label rather than inventing a year.
+    """
+    import datetime as _dt
+    years = []
+    for r in records:
+        ld = r.get("loaddate")
+        if not ld:
+            continue
+        try:                        # ArcGIS dates come back as epoch milliseconds
+            years.append(_dt.datetime.fromtimestamp(
+                int(ld) / 1000, _dt.timezone.utc).year)
+        except (TypeError, ValueError, OSError, OverflowError):
+            m = re.search(r"\b(19|20)\d{2}\b", str(ld))
+            if m:
+                years.append(int(m.group(0)))
+    return str(max(years)) if years else "load date not reported"
 
 
 if __name__ == "__main__":
