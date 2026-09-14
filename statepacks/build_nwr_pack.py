@@ -50,6 +50,7 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import build_county_pack as bcp                             # noqa: E402
+import glyphs                                                # noqa: E402
 
 CCL_URL = "https://www.weather.gov/source/nwr/JS/ccl-data.js"
 NWS_DISCLAIMER = "https://www.weather.gov/disclaimer"
@@ -237,9 +238,11 @@ def pack_kml(state, stations, meta):
         f"data and is only true as of that date.<br/>"
         f"<b>Cross-check:</b> {bcp.esc(STATION_PAGE.format(state=state))}"
         f"]]></description>"
-        f'<Style id="nwr"><IconStyle><scale>1.1</scale><Icon><href>'
-        f"http://maps.google.com/mapfiles/kml/shapes/track.png"
-        f"</href></Icon></IconStyle>"
+        # A mast with radiating arcs: an NWR transmitter is a broadcast tower
+        # and nothing else. Embedded, because the tablet that needs it is the
+        # one with no signal.
+        f'<Style id="nwr"><IconStyle><scale>1.0</scale>'
+        f"<Icon><href>icons/broadcast.png</href></Icon></IconStyle>"
         f"<LabelStyle><scale>0.8</scale></LabelStyle></Style>"
         f"{folders}</Document></kml>")
 
@@ -271,13 +274,17 @@ def build(state, out_dir, rows, coverage=False, url=CCL_URL, log=print):
     meta = {"title": f"{state} NOAA Weather Radio ({built})",
             "url": url, "built": built}
     kml = pack_kml(state, picked, meta)
+    # Amber for a working transmitter; the folder already separates
+    # the dead ones, so one icon is enough.
+    icons = {"icons/broadcast.png": glyphs.render("broadcast",
+                                                 (255, 209, 64))}
     if meta["dropped_no_coords"]:
         log(f"    [!] {meta['dropped_no_coords']} transmitter(s) had no usable "
             f"coordinates and were left out rather than placed at a guess")
 
     stamp = built.replace("-", "_")
     path = os.path.join(out_dir, f"{state}_WeatherRadio__{bcp.safe(stamp)}.kmz")
-    size = bcp.write_kmz(path, kml)
+    size = bcp.write_kmz(path, kml, icons)
     drawn = len(picked) - meta["dropped_no_coords"]
     log(f"[*] {state}: {drawn} transmitter(s) -> {os.path.basename(path)} "
         f"({size // 1024} KB)")

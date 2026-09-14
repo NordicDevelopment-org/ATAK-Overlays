@@ -39,6 +39,7 @@ import urllib.parse
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import build_county_pack as bcp                             # noqa: E402
+import glyphs                                                # noqa: E402
 
 EIA_URL = ("https://services2.arcgis.com/FiaPA4ga0iQKduv3/arcgis/rest/services"
            "/Power_Plants_in_the_US/FeatureServer/0")
@@ -71,6 +72,34 @@ STATE_NAMES = {
 # and a coal plant is a landmark. Everything else is one tap away.
 DEFAULT_ON = ("nuclear", "coal", "natural gas", "hydroelectric", "petroleum",
               "batteries", "pumped storage", "geothermal")
+
+# Glyph and colour per fuel. Shape carries what it is, colour carries the
+# family, and both are set because colour alone fails in greyscale and for a
+# colour-blind reader. Anything not listed falls back to a bolt, which is true
+# of every entry here: they all make electricity.
+FUEL_STYLE = {
+    "nuclear":       ("trefoil",  (255, 240, 60)),
+    "coal":          ("flame",    (170, 170, 175)),
+    "natural gas":   ("flame",    (120, 200, 255)),
+    "petroleum":     ("flame",    (255, 150, 70)),
+    "biomass":       ("flame",    (150, 220, 120)),
+    "geothermal":    ("flame",    (230, 130, 190)),
+    "hydroelectric": ("droplet",  (90, 180, 255)),
+    "pumped storage": ("droplet", (140, 200, 255)),
+    "wind":          ("turbine",  (200, 235, 255)),
+    "solar":         ("sun",      (255, 210, 70)),
+    "batteries":     ("battery",  (140, 230, 190)),
+}
+FUEL_FALLBACK = ("bolt", (255, 209, 64))
+
+
+def style_for(fuel):
+    return FUEL_STYLE.get(fuel, FUEL_FALLBACK)
+
+
+def style_id(fuel):
+    return "f_" + bcp.safe(fuel).lower()
+
 
 # Per-fuel capacity columns, for the breakdown on a mixed-fuel plant.
 FUEL_MW = [("Nuclear_MW", "nuclear"), ("Coal_MW", "coal"), ("NG_MW", "natural gas"),
@@ -185,7 +214,7 @@ def placemark(feat, meta):
     vis = "<visibility>0</visibility>" if hidden else ""
     pm = (f"<Placemark><name>{bcp.esc(name)}</name>{vis}"
           f"<description><![CDATA[{body}{footer}]]></description>"
-          f"<styleUrl>#plant</styleUrl>"
+          f"<styleUrl>#{style_id(fuel)}</styleUrl>"
           f"<Point><coordinates>{round(lon, 6)},{round(lat, 6)},0"
           f"</coordinates></Point></Placemark>")
     return fuel, pm
@@ -216,6 +245,15 @@ def pack_kml(state, feats, meta):
                     f"{'<visibility>0</visibility>' if off else ''}"
                     f"{''.join(pms)}</Folder>")
 
+    # One style per fuel actually present, so a pack carries only the icons it
+    # uses rather than the whole set.
+    styles = ""
+    for fuel in sorted(by_fuel):
+        name, _rgb = style_for(fuel)
+        styles += (f'<Style id="{style_id(fuel)}"><IconStyle><scale>1.0</scale>'
+                   f"<Icon><href>icons/{name}.png</href></Icon></IconStyle>"
+                   f"<LabelStyle><scale>0.8</scale></LabelStyle></Style>")
+
     periods = sorted({str((f.get('properties') or {}).get('Period') or '')
                       for f in feats} - {''})
     vintage = ", ".join(periods) or "not stated"
@@ -238,10 +276,7 @@ def pack_kml(state, feats, meta):
         f"<b>Licence:</b> public domain (US EIA)<br/>"
         f"<b>Pack built:</b> {bcp.esc(meta['built'])}"
         f"]]></description>"
-        f'<Style id="plant"><IconStyle><scale>1.1</scale><Icon><href>'
-        f"http://maps.google.com/mapfiles/kml/shapes/electronics.png"
-        f"</href></Icon></IconStyle>"
-        f"<LabelStyle><scale>0.8</scale></LabelStyle></Style>"
+        f"{styles}"
         f"{folders}</Document></kml>")
 
 
@@ -256,13 +291,19 @@ def build(state, out_dir, feats, min_mw=0.0, url=EIA_URL, log=print):
     built = dt.date.today().isoformat()
     meta = {"title": f"{state} Power Plants ({built})", "url": url, "built": built}
     kml = pack_kml(state, feats, meta)
+    icons = {}
+    for f in feats:
+        fuel = str((f.get("properties") or {}).get("PrimSource")
+                   or "unknown").strip().lower() or "unknown"
+        name, rgb = style_for(fuel)
+        icons.setdefault(f"icons/{name}.png", glyphs.render(name, rgb))
     if meta["dropped_no_coords"]:
         log(f"    [!] {meta['dropped_no_coords']} plant(s) had no usable "
             f"coordinates and were left out rather than placed at a guess")
 
     stamp = built.replace("-", "_")
     path = os.path.join(out_dir, f"{state}_PowerPlants__{bcp.safe(stamp)}.kmz")
-    size = bcp.write_kmz(path, kml)
+    size = bcp.write_kmz(path, kml, icons)
     drawn = len(feats) - meta["dropped_no_coords"]
     log(f"[*] {state}: {drawn} plant(s) -> {os.path.basename(path)} "
         f"({size // 1024} KB)")

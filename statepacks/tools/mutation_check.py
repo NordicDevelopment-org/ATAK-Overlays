@@ -40,6 +40,7 @@ INV = "statepacks/atak_inventory.py"
 RPT = "statepacks/repeater_diagnose.py"
 NWR = "statepacks/build_nwr_pack.py"
 PWR = "statepacks/build_power_pack.py"
+GLY = "statepacks/glyphs.py"
 
 MUTATIONS = {
     SEED: [
@@ -120,7 +121,22 @@ MUTATIONS = {
         ("unwire --gaps-dump",
          "                            dump=a.gaps_dump)", "                            dump=None)"),
     ],
+    GLY: [
+        ("fall back to a circle for a glyph nobody defined",
+         '        raise KeyError(f"unknown glyph {name!r}. Known: '
+         "{', '.join(glyph_names())}\")",
+         '        subs = GLYPHS["bolt"]()'),
+    ],
     PWR: [
+        ("point an icon at a server the field tablet cannot reach",
+         '                   f"<Icon><href>icons/{name}.png</href></Icon></IconStyle>"',
+         '                   f"<Icon><href>http://maps.google.com/mapfiles/kml/'
+         'shapes/electronics.png</href></Icon></IconStyle>"'),
+        ("reference icons without putting them in the zip",
+         "    size = bcp.write_kmz(path, kml, icons)", "    size = bcp.write_kmz(path, kml)"),
+        ("give nuclear the same symbol as everything else",
+         '    "nuclear":       ("trefoil",  (255, 240, 60)),',
+         '    "nuclear":       ("bolt",  (255, 240, 60)),'),
         ("merge nameplate and summer capacity into one number",
          '        ("Nameplate capacity", f"{nameplate:,.1f} MW" if nameplate is not None else ""),\n'
          '        ("Max summer capacity", f"{summer:,.1f} MW" if summer is not None else ""),',

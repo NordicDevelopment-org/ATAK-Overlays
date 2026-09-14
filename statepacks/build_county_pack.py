@@ -716,10 +716,19 @@ def state_kml(state_abbr, placemarks, meta):
         "</Document></kml>")
 
 
-def write_kmz(path, kml):
+def write_kmz(path, kml, icons=None):
+    """doc.kml, plus any icons the document references by relative path.
+
+    An icon INSIDE the kmz is the only kind that works on a tablet with no
+    signal, which is most of why this pack exists. A remote href renders as
+    nothing in the field and as a working icon on the bench, which is the worst
+    way for a bug to behave.
+    """
     os.makedirs(os.path.dirname(os.path.abspath(path)) or ".", exist_ok=True)
     with zipfile.ZipFile(path, "w", zipfile.ZIP_DEFLATED) as z:
         z.writestr("doc.kml", kml)
+        for name, data in sorted((icons or {}).items()):
+            z.writestr(name, data)
     return os.path.getsize(path)
 
 

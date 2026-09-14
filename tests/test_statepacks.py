@@ -3265,9 +3265,23 @@ def test_the_query_is_generated_from_the_key_list_not_written_beside_it():
 
 
 def test_no_generic_key_can_anchor_a_query():
-    """nwr["name"] over Minnesota returns most of the state."""
+    """nwr["name"] over Minnesota returns most of the state.
+
+    Asserted against a list written HERE, not against the module's own
+    TOO_GENERIC: emptying that constant made the previous version of this test
+    pass while the protection was gone, which is exactly what the mutation
+    harness caught. A test that reads its expectation from the code it is
+    testing is checking nothing.
+    """
+    never_anchor = ("name", "official_name", "operator", "sponsor", "club",
+                    "mode", "tone", "shift", "offset", "frequency", "callsign",
+                    "ctcss", "dcs", "ref:callsign", "description", "note")
     for k in rd.ANCHOR_KEYS:
-        assert k not in rd.TOO_GENERIC, k
+        assert k not in never_anchor, f"{k} is far too common to anchor on"
+    # and the guard must REFUSE, not merely disapprove
+    with pytest.raises(ValueError) as ex:
+        rd.build_query(keys=["name"])
+    assert "too generic" in str(ex.value)
 
 
 def test_every_field_the_report_measures_is_reachable_by_some_anchor():
@@ -3643,3 +3657,85 @@ def test_min_mw_filters_and_says_so_rather_than_silently_shrinking(tmp_path):
     assert n == 1
     assert any("--min-mw" in s for s in said)
     assert "__" in os.path.basename(path)
+
+
+# ============================================================================
+# glyphs - symbols drawn here and embedded in the KMZ, because a tablet with
+# no signal cannot fetch an icon from maps.google.com.
+# ============================================================================
+
+gly = _load("glyphs")
+
+
+def test_every_glyph_renders_a_real_png():
+    for name in gly.glyph_names():
+        png = gly.render(name, (255, 209, 64))
+        assert png.startswith(b"\x89PNG\r\n\x1a\n"), name
+        assert png.endswith(b"IEND\xae\x42\x60\x82"), name
+        assert len(png) > 120, name
+
+
+def test_an_unknown_glyph_raises_rather_than_falling_back_to_a_circle():
+    """A symbol the author did not ask for is an invented value, and it would
+    ship looking deliberate."""
+    with pytest.raises(KeyError) as ex:
+        gly.render("dam_wall", (255, 255, 255))
+    assert "dam_wall" in str(ex.value)
+
+
+def test_the_glyphs_the_packs_name_all_exist():
+    import build_power_pack as _p
+    for fuel, (name, _rgb) in _p.FUEL_STYLE.items():
+        assert name in gly.GLYPHS, f"{fuel} wants a glyph {name!r} that does not exist"
+    assert _p.FUEL_FALLBACK[0] in gly.GLYPHS
+    assert "broadcast" in gly.GLYPHS          # the NWR pack
+
+
+def test_nuclear_gets_the_trefoil_and_water_gets_the_droplet():
+    assert pwr.style_for("nuclear")[0] == "trefoil"
+    assert pwr.style_for("hydroelectric")[0] == "droplet"
+    assert pwr.style_for("wind")[0] == "turbine"
+    assert pwr.style_for("something new EIA invented")[0] == "bolt"
+
+
+def test_a_pack_references_no_remote_icon(tmp_path):
+    """The bug that started this: an http href renders on the bench and fails
+    in the field, which is the worst way for one to behave."""
+    feats = [_plant(PrimSource="nuclear"), _plant(PrimSource="wind")]
+    path, _n = pwr.build("MN", str(tmp_path), feats, log=lambda *a: None)
+    with zipfile.ZipFile(path) as z:
+        kml = z.read("doc.kml").decode()
+    # Only <href> matters. The xmlns is a namespace identifier that is never
+    # fetched, and the provenance URL in a popup is text for a person to read.
+    hrefs = re.findall(r"<href>([^<]+)</href>", kml)
+    assert hrefs, "no icon referenced at all"
+    remote = [h for h in hrefs if h.startswith(("http://", "https://"))]
+    assert not remote, f"remote icon href: {remote}"
+    assert all(h.startswith("icons/") for h in hrefs), hrefs
+
+
+def test_every_icon_a_pack_references_is_actually_inside_it(tmp_path):
+    feats = [_plant(PrimSource=f) for f in
+             ("nuclear", "coal", "wind", "solar", "hydroelectric", "batteries")]
+    path, _n = pwr.build("MN", str(tmp_path), feats, log=lambda *a: None)
+    with zipfile.ZipFile(path) as z:
+        kml = z.read("doc.kml").decode()
+        inside = set(z.namelist())
+    for href in set(re.findall(r"<href>(icons/[^<]+)</href>", kml)):
+        assert href in inside, f"{href} referenced but not embedded"
+
+
+def test_a_pack_carries_only_the_icons_it_uses(tmp_path):
+    path, _n = pwr.build("MN", str(tmp_path), [_plant(PrimSource="nuclear")],
+                         log=lambda *a: None)
+    with zipfile.ZipFile(path) as z:
+        icons = [n for n in z.namelist() if n.startswith("icons/")]
+    assert icons == ["icons/trefoil.png"]
+
+
+def test_write_kmz_still_works_with_no_icons(tmp_path):
+    """The county pack calls it with two arguments and must keep working."""
+    p = str(tmp_path / "x.kmz")
+    bcp.write_kmz(p, "<kml/>")
+    with zipfile.ZipFile(p) as z:
+        assert z.namelist() == ["doc.kml"]

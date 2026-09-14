@@ -104,11 +104,22 @@ def build_query(keys=None, deep=False):
     because a key regex cannot use the tag index - so it is opt-in, for
     settling whether a thin result means thin data or a wrong guess.
     """
+    keys = list(keys or ANCHOR_KEYS)
+    # TOO_GENERIC was a comment pretending to be a guard: nothing read it, so
+    # emptying it changed nothing and the mutation harness said so. Now it
+    # refuses to build the query, because nwr["name"] over Minnesota is not a
+    # slow query, it is most of the state coming back.
+    bad = [k for k in keys if k in TOO_GENERIC]
+    if bad:
+        raise ValueError(
+            f"too generic to anchor an Overpass query on: {', '.join(bad)}. "
+            f"These keys are on millions of objects; anchoring on one asks for "
+            f"the whole state.")
     box = "({s:.4f},{w:.4f},{n:.4f},{e:.4f})"
     if deep:
         lines = [f'  nwr[~"amateur_radio|repeater|gmrs"~"."]{box};']
     else:
-        lines = [f'  nwr["{k}"]{box};' for k in (keys or ANCHOR_KEYS)]
+        lines = [f'  nwr["{k}"]{box};' for k in keys]
     body = "\n".join(lines)
     return "[out:json][timeout:{timeout}];\n(\n" + body + "\n);\nout center tags;\n"
 
