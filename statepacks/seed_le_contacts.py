@@ -54,11 +54,42 @@ from urllib.error import HTTPError, URLError
 from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 
-# HIFLD Open's final snapshot, re-hosted by NASA NCCS. Unofficial and frozen.
-HIFLD_LE = ("https://maps.nccs.nasa.gov/mapping/rest/services"
-            "/hifld_open/law_enforcement/FeatureServer")
-LAYER_NAME_RE = re.compile(r"^local_law_enforcement", re.I)
-SOURCE = "HIFLD LE Locations (frozen snapshot)"
+# Candidate sources, tried in order. The first that answers wins, and the row
+# records WHICH one - a pack must never attribute a value to a source that did
+# not supply it.
+#
+# They are not equivalent. HIFLD carries a phone number and a county FIPS, so a
+# sheriff joins to a county directly. USGS carries neither phone nor FIPS, but
+# it is live and maintained, and a sourced agency NAME with an empty phone is
+# still worth more than nothing - the phone simply stays "not in dataset".
+SOURCES = [
+    {
+        "name": "HIFLD LE Locations (frozen snapshot)",
+        "url": ("https://maps.nccs.nasa.gov/mapping/rest/services"
+                "/hifld_open/law_enforcement/FeatureServer"),
+        "layer_re": re.compile(r"^local_law_enforcement", re.I),
+        "county_field": "COUNTYFIPS",
+        "name_field": "NAME",
+        "phone_field": "TELEPHONE",
+        "addr_field": "ADDRESS",
+        "note": "frozen Aug 2025, unofficial re-host; carries phone numbers",
+    },
+    {
+        "name": "USGS National Map Structures - Law Enforcement",
+        "url": "https://carto.nationalmap.gov/arcgis/rest/services/structures/MapServer",
+        "layer_re": re.compile(r"law\s*enforcement|police", re.I),
+        "county_field": None,          # no FIPS column; needs a spatial join
+        "name_field": "NAME",
+        "phone_field": None,           # this dataset has no phone numbers
+        "addr_field": "ADDRESS",
+        "note": "live and maintained, but no phone numbers and no county FIPS",
+    },
+]
+
+# Kept for backwards compatibility with anything importing the old names.
+HIFLD_LE = SOURCES[0]["url"]
+LAYER_NAME_RE = SOURCES[0]["layer_re"]
+SOURCE = SOURCES[0]["name"]
 VINTAGE_UNKNOWN = "snapshot year not reported"
 _YEAR_RE = re.compile(r"\b(19|20)\d{2}\b")
 
@@ -97,6 +128,51 @@ def http_json(url, params=None, tries=3, timeout=90):
             if i < tries - 1:
                 time.sleep(1.5 * (i + 1))
     raise RuntimeError(f"GET failed: {url}\n  {last}")
+
+
+def probe_sources(log=print):
+    """Report every candidate source: reachable? which layer? which fields?
+
+    Prints what is actually there rather than pass/fail, because the useful
+    question when one is down is "what does the next one give me".
+    """
+    any_ok = False
+    for src in SOURCES:
+        log(f"\n{src['name']}")
+        log(f"  {src['url']}")
+        log(f"  ({src['note']})")
+        try:
+            info = http_json(src["url"], {"f": "json"}, tries=1, timeout=30)
+        except Exception as e:                      # noqa: BLE001
+            log(f"  UNREACHABLE: {e}")
+            continue
+        layers = info.get("layers") or []
+        hits = [l for l in layers if src["layer_re"].search(str(l.get("name") or ""))]
+        log(f"  reachable - {len(layers)} layers, {len(hits)} matching")
+        for l in hits[:6]:
+            log(f"    {l.get('id'):>3}  {l.get('name')}")
+        if not hits:
+            names = ", ".join(str(l.get("name")) for l in layers[:12])
+            log(f"    no match; layers present: {names}")
+            continue
+        lid = hits[0]["id"]
+        try:
+            meta = http_json(f"{src['url']}/{lid}", {"f": "json"}, tries=1, timeout=30)
+            fields = [f["name"] for f in (meta.get("fields") or [])]
+            log(f"    layer {lid} fields: {', '.join(fields[:16])}"
+                f"{' ...' if len(fields) > 16 else ''}")
+            for label, key in (("county join", src["county_field"]),
+                               ("agency name", src["name_field"]),
+                               ("phone", src["phone_field"])):
+                if key is None:
+                    log(f"      {label:12} - none in this dataset")
+                else:
+                    log(f"      {label:12} {key}: "
+                        f"{'PRESENT' if key in fields else 'MISSING'}")
+            any_ok = True
+        except Exception as e:                      # noqa: BLE001
+            log(f"    could not read layer {lid}: {e}")
+    return any_ok
 
 
 def resolve_layer(base=HIFLD_LE, log=print):
@@ -221,15 +297,23 @@ def main(argv=None):
     ap.add_argument("--endpoint", default=HIFLD_LE, help="override the FeatureServer URL")
     a = ap.parse_args(argv)
 
+    if a.probe:
+        ok = probe_sources()
+        print()
+        if not ok:
+            print("No law-enforcement source answered. The LE columns stay empty,")
+            print("which is correct - an unsourced phone number is worse than a")
+            print("blank one, because it fails at the moment someone dials it.")
+        return 0 if ok else 2
+
     try:
         layer_id, vintage = resolve_layer(a.endpoint)
     except Exception as e:                          # noqa: BLE001
         print(f"[!] cannot reach the HIFLD layer: {e}", file=sys.stderr)
+        print("    Try:  python3 seed_le_contacts.py --probe", file=sys.stderr)
         print("    Nothing was written. The LE columns stay empty, which is "
               "correct - better than a number nobody can source.", file=sys.stderr)
         return 2
-    if a.probe:
-        return 0
 
     if a.all:
         targets = sorted(STATE_FIPS)
