@@ -58,12 +58,17 @@ python3 build_county_pack.py --state MN --out ~/atak-packs/out
 Swap `MN` for any state. `--probe` first is worth the ten seconds: it checks
 the Census endpoints are answering before you spend a download on them.
 
-**Optional — fill in county seats** (they ship empty on purpose, see §7):
+**Optional — fill in the empty fields** (they ship empty on purpose, see §7).
+Run these once per state, then rebuild:
 
 ```bash
-python3 fetch_county_seats.py --state MN
+python3 fetch_county_seats.py --state MN     # county seats, from Wikidata
+python3 seed_le_contacts.py --state MN       # sheriff + non-emergency, from HIFLD
 python3 build_county_pack.py --state MN --out ~/atak-packs/out
 ```
+
+Both write their own source and year into every row, so the popup shows where
+each value came from. Neither overwrites a row you edited by hand.
 
 **Other builds:**
 
@@ -182,17 +187,37 @@ not a convenience.
 | Boundary, FIPS, land/water area | **US Census TIGERweb** | public domain; national — same call for all 52 |
 | Population, housing units | **US Census ACS 5-year API** | exact figures, explicit vintage; keyless at low volume |
 | County seat | **Wikidata** via `fetch_county_seats.py` | community-maintained, not a government register — labelled as such in the popup |
-| Sheriff / LE + non-emergency | **`data/le_contacts.csv`** — ships empty | see below |
+| Sheriff / LE + non-emergency | **HIFLD LE Locations** via `seed_le_contacts.py` | frozen 2025 snapshot, no longer maintained — verify before relying on a number |
 
-### Why sheriff contacts ship empty
-
-There is no clean national machine-readable source for sheriff office names and
-non-emergency numbers. FBI UCR tables have agency names but no phone numbers;
-state directories vary in format and licence.
+### Why sheriff contacts ship empty, and how to fill them
 
 **A wrong non-emergency number is worse than a missing one — it fails at the
-moment someone actually dials it.** So the file starts empty. Add rows you have
-verified yourself:
+moment someone actually dials it.** So nothing is shipped unsourced.
+
+`seed_le_contacts.py` fills them from **HIFLD Local Law Enforcement Locations**
+(derived from DOJ BJS), the one public dataset that carries agency name, address
+*and* telephone joined to a county FIPS code. It keeps the sheriff's office per
+county, preferring a record that actually has a number:
+
+```bash
+python3 seed_le_contacts.py --probe          # check it answers, show its layers
+python3 seed_le_contacts.py --state MN
+python3 seed_le_contacts.py --state MN --dry-run      # preview, write nothing
+python3 seed_le_contacts.py --state MN --all-agencies # every LE record, not just sheriffs
+```
+
+**Read this before dialling anything it writes.** HIFLD Open shut down in
+August 2025; this is a **frozen final snapshot** re-hosted by NASA NCCS, and
+nobody maintains it. Agencies consolidate, dispatch moves to a regional PSAP,
+numbers get reassigned. That is exactly why every row carries its vintage:
+
+```
+LE non-emergency: 651-555-0100  [HIFLD LE Locations (frozen snapshot) 2025]
+```
+
+Treat those as a starting point to verify, not as verified. When you confirm
+one, edit the row with your own source and the current year — the seeder will
+not overwrite it on a later run (only `--overwrite` does):
 
 ```bash
 nano data/le_contacts.csv
@@ -243,7 +268,62 @@ If you came here from a script that hit one state's GIS server directly:
 
 ---
 
-## 10. Roadmap — more pack types
+## 10. When an endpoint will not connect
+
+`--probe` does not just pass or fail — it **prints each MapServer's layer list
+with ids and names**, so you can read the right layer straight off:
+
+```bash
+python3 build_county_pack.py --probe
+```
+
+```
+BOUNDARIES (county polygons)
+  OK    https://tigerweb.geo.census.gov/.../State_County/MapServer/1
+        name='Counties'  geometryType='esriGeometryPolygon'
+        vintage reported: 2024
+        layers at .../State_County/MapServer:
+            0  States
+            1  Counties  <-- counties?
+```
+
+| What probe says | What to do |
+|---|---|
+| A different id is marked `<-- counties?` | `--endpoint https://.../MapServer/<that id>` |
+| All three boundary URLs DEAD, everything else OK | the service moved. Browse `https://tigerweb.geo.census.gov/arcgis/rest/services?f=pjson` and find the current county service. |
+| Everything DEAD | you are offline, or on a network that blocks Census. Try mobile data. |
+| Boundaries OK, ACS DEAD | build anyway — population/housing render `not in dataset` and you can rerun later |
+| `CONNECT tunnel failed, 403` | a proxy is blocking it, not the server |
+
+Inspect any service by hand — this is just a URL:
+
+```bash
+curl -s 'https://tigerweb.geo.census.gov/arcgis/rest/services/TIGERweb/State_County/MapServer?f=json' \
+  | python3 -c 'import json,sys; [print(l["id"], l["name"]) for l in json.load(sys.stdin)["layers"]]'
+```
+
+There is nothing to sign up for and no API key. TIGERweb and the ACS API are
+open public endpoints — if they resolve from your phone, you are connected.
+(The ACS API accepts a free key for high volume; one state at a time is well
+under the keyless limit.)
+
+### Using a different source entirely
+
+Any ArcGIS FeatureServer/MapServer layer with county polygons works, including
+your state's own GIS server:
+
+```bash
+python3 build_county_pack.py --state MN \
+  --endpoint https://feat.gisdata.mn.gov/arcgis/rest/services/MnGeo/mn_counties/FeatureServer/0
+```
+
+The builder keeps every ring, reads `ALAND`/`AREALAND` if the layer has it, and
+drops any feature whose FIPS does not belong to the state you asked for — so a
+server that ignores the filter cannot slip other states into your pack.
+
+---
+
+## 11. Roadmap — more pack types
 
 This is the first of several. The layout is meant to be recycled: a new pack
 type is a new builder next to `build_county_pack.py` that emits

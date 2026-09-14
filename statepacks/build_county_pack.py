@@ -612,24 +612,84 @@ def build_state(state_abbr, out_dir, acs_year=ACS_YEAR, per_county=False,
 
 
 def probe(log=print):
-    """Check every endpoint answers, before spending a build on it."""
+    """Check every endpoint this project uses, and SHOW what is there.
+
+    A pass/fail probe tells you something is wrong but not what to do. This
+    prints each MapServer's layer list with ids and names, so if the county
+    layer has been renumbered you can read the right id straight off and pass
+    it with --endpoint .../MapServer/<id>.
+    """
     ok = True
+
+    def show_service(url):
+        """Print the layer list of the MapServer this layer URL belongs to."""
+        root = re.sub(r"/\d+/?$", "", url)
+        try:
+            info = get_json(root, {"f": "json"}, tries=1, timeout=30)
+        except Exception as e:                      # noqa: BLE001
+            log(f"        (could not list layers: {e})")
+            return
+        layers = info.get("layers") or []
+        if not layers:
+            return
+        log(f"        layers at {root}:")
+        for l in layers:
+            mark = "  <-- counties?" if "county" in str(l.get("name", "")).lower() else ""
+            log(f"          {str(l.get('id')):>3}  {l.get('name')}{mark}")
+
+    log("BOUNDARIES (county polygons)")
+    first = True
     for url in [TIGERWEB] + TIGERWEB_ALTERNATES:
         try:
             info = get_json(url, {"f": "json"}, tries=1, timeout=30)
-            log(f"  OK    {url}\n        name={info.get('name')!r} "
+            log(f"  OK    {url}")
+            log(f"        name={info.get('name')!r}  "
                 f"geometryType={info.get('geometryType')!r}")
+            log(f"        vintage reported: {service_vintage(url, log=lambda *a: None)}")
+            if first:
+                show_service(url)
+                first = False
         except Exception as e:                      # noqa: BLE001
             ok = False
             log(f"  DEAD  {url}\n        {e}")
+
+    log("")
+    log(f"POPULATION + HOUSING (ACS 5-year {ACS_YEAR})")
     try:
         rows = get_json(ACS_BASE.format(year=ACS_YEAR),
                         {"get": "NAME," + ACS_VARS["population"],
                          "for": "county:*", "in": "state:27"}, tries=1, timeout=30)
-        log(f"  OK    ACS {ACS_YEAR}: {len(rows) - 1} MN county rows")
+        log(f"  OK    {len(rows) - 1} Minnesota county rows returned")
     except Exception as e:                          # noqa: BLE001
         ok = False
         log(f"  DEAD  ACS {ACS_YEAR}\n        {e}")
+
+    log("")
+    log("OPTIONAL ENRICHMENT (packs build without these)")
+    try:
+        get_json("https://query.wikidata.org/sparql",
+                 {"query": "SELECT ?x WHERE { BIND(1 AS ?x) }", "format": "json"},
+                 tries=1, timeout=30)
+        log("  OK    Wikidata  (county seats - fetch_county_seats.py)")
+    except Exception as e:                          # noqa: BLE001
+        log(f"  DEAD  Wikidata  (county seats unavailable)\n        {e}")
+    try:
+        info = get_json("https://maps.nccs.nasa.gov/mapping/rest/services"
+                        "/hifld_open/law_enforcement/FeatureServer",
+                        {"f": "json"}, tries=1, timeout=30)
+        names = [str(l.get("name")) for l in (info.get("layers") or [])]
+        log(f"  OK    HIFLD LE  (sheriff contacts - seed_le_contacts.py)")
+        log(f"        layers: {', '.join(names) or '(none)'}")
+    except Exception as e:                          # noqa: BLE001
+        log(f"  DEAD  HIFLD LE  (sheriff contacts unavailable)\n        {e}")
+
+    log("")
+    if ok:
+        log("Boundaries and ACS are reachable - you can build.")
+    else:
+        log("A REQUIRED endpoint is down. If a county layer above has a different")
+        log("id than the one in the URL, rerun with:")
+        log("    --endpoint https://.../MapServer/<that id>")
     return ok
 
 

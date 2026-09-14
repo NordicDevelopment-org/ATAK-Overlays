@@ -441,3 +441,123 @@ def test_a_feature_with_no_identity_shows_no_fips(stubbed, tmp_path, monkeypatch
     kml = _doc(tmp_path / "MN_Counties_2024.kmz")
     assert "FIPS (GEOID):</b> not in dataset" in kml
     assert "27000" not in kml                       # the old fabrication
+
+
+# --------------------------------------------------------------------------
+# seed_le_contacts.py - sheriff/LE enrichment from the frozen HIFLD snapshot
+# --------------------------------------------------------------------------
+sle = _load("seed_le_contacts")
+
+
+def test_layer_is_found_by_name_not_by_a_hardcoded_index(monkeypatch):
+    """A re-host can renumber its layers. Matching the name survives that;
+    an index would silently query whatever sits at 0."""
+    monkeypatch.setattr(sle, "http_json", lambda url, params=None, **kw: {
+        "description": "HIFLD Open final snapshot, 2025",
+        "layers": [{"id": 0, "name": "correctional_facilities"},
+                   {"id": 3, "name": "local_law_enforcement_locations"}]})
+    lid, vintage = sle.resolve_layer(log=lambda *a: None)
+    assert lid == 3 and vintage == "2025"
+
+
+def test_missing_layer_fails_loudly_and_lists_what_was_there(monkeypatch):
+    monkeypatch.setattr(sle, "http_json", lambda url, params=None, **kw: {
+        "layers": [{"id": 0, "name": "fire_stations"}]})
+    with pytest.raises(RuntimeError, match="no layer matching"):
+        sle.resolve_layer(log=lambda *a: None)
+
+
+def test_unknown_snapshot_year_is_never_guessed(monkeypatch):
+    monkeypatch.setattr(sle, "http_json", lambda url, params=None, **kw: {
+        "layers": [{"id": 1, "name": "local_law_enforcement"}]})
+    _, vintage = sle.resolve_layer(log=lambda *a: None)
+    assert vintage == sle.VINTAGE_UNKNOWN
+    assert not any(ch.isdigit() for ch in vintage)
+
+
+def _le(geoid, name, phone=""):
+    return {"attributes": {"COUNTYFIPS": geoid, "NAME": name,
+                           "TELEPHONE": phone, "ADDRESS": "1 Main St", "TYPE": "LOCAL"}}
+
+
+def test_records_filed_under_a_county_they_are_not_in_are_dropped(monkeypatch):
+    monkeypatch.setattr(sle, "http_json", lambda url, params=None, **kw: {
+        "features": [_le("27025", "Chisago County Sheriff", "651-555-0100"),
+                     _le("06001", "Alameda County Sheriff", "510-555-0100"),
+                     _le("", "No County PD"), _le("bogus", "Bad PD")],
+        "exceededTransferLimit": False})
+    got = sle.fetch_state("27", 1, log=lambda *a: None)
+    assert [r["geoid"] for r in got] == ["27025"]
+
+
+def test_sheriff_is_picked_over_city_pd_and_a_phone_wins(monkeypatch):
+    recs = [
+        {"geoid": "27025", "agency": "Center City Police Department", "phone": "1", "address": "", "type": ""},
+        {"geoid": "27025", "agency": "Chisago County Sheriff's Office", "phone": "", "address": "", "type": ""},
+        {"geoid": "27025", "agency": "Chisago County Sheriff - Patrol", "phone": "651-555-0100", "address": "", "type": ""},
+        {"geoid": "27053", "agency": "Hennepin County Sheriff", "phone": "612-555-0100", "address": "", "type": ""},
+    ]
+    picked = sle.pick_sheriffs(recs)
+    assert set(picked) == {"27025", "27053"}
+    assert "Police Department" not in picked["27025"]["agency"]
+    assert picked["27025"]["phone"] == "651-555-0100"      # the one with a number
+
+
+def test_seeding_never_overwrites_a_row_you_verified(tmp_path, monkeypatch, capsys):
+    csv_path = tmp_path / "le_contacts.csv"
+    csv_path.write_text(
+        "# a comment block, like the shipped file\n"
+        "geoid,agency,phone,source,vintage\n"
+        "27025,Chisago County Sheriff's Office,651-257-4100,I called them,2026\n")
+    monkeypatch.setattr(sle, "CSV_PATH", str(csv_path))
+    monkeypatch.setattr(sle, "resolve_layer", lambda base=None, log=print: (1, "2025"))
+    monkeypatch.setattr(sle, "fetch_state", lambda sfp, lid, base=None, log=print: [
+        {"geoid": "27025", "agency": "Chisago County Sheriff", "phone": "000-000-0000",
+         "address": "", "type": ""},
+        {"geoid": "27053", "agency": "Hennepin County Sheriff", "phone": "612-555-0100",
+         "address": "", "type": ""}])
+
+    assert sle.main(["--state", "MN"]) == 0
+    rows, comments = sle.read_existing(str(csv_path))
+    # the hand-verified row survives untouched...
+    assert rows["27025"]["phone"] == "651-257-4100"
+    assert rows["27025"]["source"] == "I called them"
+    # ...and the new one is stamped with the snapshot's own vintage
+    assert rows["27053"]["phone"] == "612-555-0100"
+    assert rows["27053"]["vintage"] == "2025"
+    assert sle.SOURCE in rows["27053"]["source"]
+    assert comments and comments[0].startswith("#")       # comment block preserved
+
+    # --overwrite is opt-in and does replace
+    assert sle.main(["--state", "MN", "--overwrite"]) == 0
+    rows2, _ = sle.read_existing(str(csv_path))
+    assert rows2["27025"]["phone"] == "000-000-0000"
+
+
+def test_unreachable_source_writes_nothing_and_says_why(monkeypatch, capsys):
+    def boom(*a, **k):
+        raise RuntimeError("host unreachable")
+    monkeypatch.setattr(sle, "resolve_layer", boom)
+    assert sle.main(["--state", "MN"]) == 2
+    err = capsys.readouterr().err
+    assert "Nothing was written" in err and "stay empty" in err
+
+
+def test_seeded_rows_flow_into_the_popup_with_their_vintage(tmp_path, monkeypatch):
+    """The whole point: a seeded row must reach ATAK carrying its own year."""
+    data = tmp_path / "data"
+    data.mkdir()
+    (data / "le_contacts.csv").write_text(
+        "# comment\ngeoid,agency,phone,source,vintage\n"
+        "27000,County0 Sheriff's Office,651-555-0100,"
+        "HIFLD LE Locations (frozen snapshot),2025\n")
+    monkeypatch.setattr(bcp, "DATA_DIR", str(data))
+    monkeypatch.setattr(bcp, "fetch_counties",
+                        lambda sfp, ep=None, alts=None, log=print:
+                        (_fake_counties(1), "http://e/1", "2024"))
+    monkeypatch.setattr(bcp, "fetch_acs", lambda sfp, year=2023, log=print: {})
+    bcp.build_state("MN", str(tmp_path), log=lambda *a: None, today="2026-09-14")
+    kml = _doc(tmp_path / MN_PACK)
+    assert "County0 Sheriff&#39;s Office  [HIFLD LE Locations (frozen snapshot) 2025]" in kml \
+        or "County0 Sheriff's Office  [HIFLD LE Locations (frozen snapshot) 2025]" in kml
+    assert "651-555-0100  [HIFLD LE Locations (frozen snapshot) 2025]" in kml
