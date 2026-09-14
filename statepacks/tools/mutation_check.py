@@ -29,6 +29,7 @@ import sys
 SEED = "statepacks/seed_le_contacts.py"
 BUILD = "statepacks/build_county_pack.py"
 INV = "statepacks/atak_inventory.py"
+RPT = "statepacks/repeater_diagnose.py"
 
 MUTATIONS = {
     SEED: [
@@ -108,6 +109,18 @@ MUTATIONS = {
          "        if parse is not None:", "        if False:"),
         ("unwire --gaps-dump",
          "                            dump=a.gaps_dump)", "                            dump=None)"),
+    ],
+    RPT: [
+        ("anchor the query on a parent key the data does not carry",
+         '    "communication:amateur_radio:repeater:frequency_out",\n'
+         '    "communication:amateur_radio:repeater:frequency_in",',
+         '    "communication:amateur_radio:repeater",'),
+        ("let a generic key anchor a statewide query",
+         'TOO_GENERIC = ("name", "official_name",', 'TOO_GENERIC = ("zzz",'),
+        ("keep one cache namespace across a changed query",
+         '    h = hashlib.sha1(query.encode("utf-8")).hexdigest()[:8]\n'
+         "    return f\"repeaters{'_deep' if deep else ''}_{h}\"",
+         '    return "repeaters"'),
     ],
     INV: [
         ("read one underscore as the version boundary",

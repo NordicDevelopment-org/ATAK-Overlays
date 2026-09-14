@@ -3225,12 +3225,62 @@ def test_nothing_returned_is_reported_as_an_answer_not_a_failure():
     assert "--dump" in text            # and says how to check it
 
 
+def test_the_query_asks_about_leaf_keys_not_their_parents():
+    """The bug this file shipped with. Overpass nwr["k"] matches EXACTLY key k,
+    so anchoring on communication:amateur_radio:repeater walks past a repeater
+    whose only tag is ...:repeater:frequency_out. One MN run returned 1 object
+    from 8 tiles because of it."""
+    q = rd.build_query()
+    assert '"communication:amateur_radio:repeater:frequency_out"' in q
+    assert '"communication:amateur_radio:repeater"]' not in q
+
+
+def test_the_query_is_generated_from_the_key_list_not_written_beside_it():
+    """The two used to be separate and disagreed. Generating one from the other
+    is what stops that recurring."""
+    q = rd.build_query()
+    for k in rd.ANCHOR_KEYS:
+        assert f'nwr["{k}"]' in q, k
+
+
+def test_no_generic_key_can_anchor_a_query():
+    """nwr["name"] over Minnesota returns most of the state."""
+    for k in rd.ANCHOR_KEYS:
+        assert k not in rd.TOO_GENERIC, k
+
+
+def test_every_field_the_report_measures_is_reachable_by_some_anchor():
+    """A field measured but never queried for would always read 0%, which
+    looks like absent data rather than an unasked question."""
+    anchors = set(rd.ANCHOR_KEYS)
+    for label, cands in rd.WANTED:
+        if label in ("name", "operator / sponsor", "mode"):
+            continue           # descriptive; ride along, never anchor
+        assert anchors & set(cands), label
+
+
+def test_deep_mode_uses_a_key_regex_that_no_spelling_defeats():
+    q = rd.build_query(deep=True)
+    assert "~\"amateur_radio|repeater|gmrs\"" in q
+    assert "nwr[\"communication" not in q
+
+
+def test_changing_the_query_changes_the_cache_namespace():
+    """Editing the query while keeping the namespace would serve the OLD
+    question's answers to the new one - and would have hidden the leaf-key fix
+    behind a stale cache."""
+    a = rd.cache_prefix(rd.build_query())
+    b = rd.cache_prefix(rd.build_query(keys=["amateur_radio"]))
+    assert a != b
+    assert rd.cache_prefix(rd.build_query(deep=True), deep=True) not in (a, b)
+
+
 def test_the_repeater_query_cannot_read_the_police_tile_cache():
     """Different question, same bounding boxes. The prefix is the guard."""
     src = open(os.path.join(SP, "repeater_diagnose.py"),
                encoding="utf-8").read()
-    assert 'prefix="repeaters"' in src
-    assert "query=REPEATER_QUERY" in src
+    assert "prefix=prefix" in src and "cache_prefix(" in src
+    assert "query=query" in src
     tile = (-93.0, 45.0, -92.0, 46.0)
     assert sle._tile_cache_path(tile, "repeaters") != \
         sle._tile_cache_path(tile, "police")

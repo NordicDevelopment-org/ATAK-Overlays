@@ -17,12 +17,23 @@ It does NOT write a pack and does NOT decide anything. It reports:
   * per-field coverage for the fields a pack would need
   * a few whole records, verbatim, so the shape is visible
 
-WHY THE QUERY LOOKS LIKE THAT. The keys below are CANDIDATES, not a schema.
-OSM documents `communication:amateur_radio:repeater:*`, but documentation and
-what mappers typed are different things, and GMRS may have no established
-tagging at all. Each candidate is a plain indexed key lookup, which is cheap;
-the key histogram then tells us what is really in use. A key-REGEX query would
-ask the question more directly and is far too slow to run against a state.
+WHY THE QUERY LOOKS LIKE THAT. The keys are CANDIDATES, not a schema. OSM
+documents `communication:amateur_radio:repeater:*`, but documentation and what
+mappers typed are different things, and GMRS may have no established tagging at
+all. Each candidate is a plain indexed key lookup, which is cheap; the key
+histogram then tells us what is really in use.
+
+They are LEAF keys, and that distinction already cost one real run. Overpass's
+`nwr["k"]` matches an object carrying EXACTLY key k, so anchoring on the parent
+`communication:amateur_radio:repeater` walks past a repeater whose only tag is
+`communication:amateur_radio:repeater:frequency_out`. The first Minnesota run
+returned 1 object from 8 tiles for that reason, and the query is now GENERATED
+from the key list so the two cannot drift apart again.
+
+If a normal run still comes back thin, `--deep` re-asks with a key REGEX, which
+matches `...:repeater:whatever` without anyone predicting "whatever". It is the
+definitive question and much slower, because a key regex cannot use the tag
+index. Use it to settle thin-data-vs-wrong-guess, not as the default.
 
 Frequencies and tones are kept as STRINGS, start to finish. "023N" is a DCS
 code whose leading zero and N suffix are load-bearing, and reading it as a
@@ -30,6 +41,7 @@ number turns it into 23.0. The same mistake in the other half of this repo
 turns 146.94 MHz into 146.94 Hz.
 """
 import argparse
+import hashlib
 import json
 import os
 import sys
@@ -38,23 +50,83 @@ from collections import Counter
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import seed_le_contacts as sle                              # noqa: E402
 
-# Candidate anchors. Each is an indexed key lookup; the histogram in the report
-# is what actually establishes the scheme. A candidate returning nothing is a
-# result, not a failure - it is how "GMRS is not tagged in OSM" gets shown
-# rather than assumed.
-REPEATER_QUERY = """
-[out:json][timeout:{timeout}];
-(
-  nwr["communication:amateur_radio:repeater"]({s:.4f},{w:.4f},{n:.4f},{e:.4f});
-  nwr["amateur_radio:repeater"]({s:.4f},{w:.4f},{n:.4f},{e:.4f});
-  nwr["communication:amateur_radio"]({s:.4f},{w:.4f},{n:.4f},{e:.4f});
-  nwr["amateur_radio"]({s:.4f},{w:.4f},{n:.4f},{e:.4f});
-  nwr["repeater"]({s:.4f},{w:.4f},{n:.4f},{e:.4f});
-  nwr["communication:gmrs"]({s:.4f},{w:.4f},{n:.4f},{e:.4f});
-  nwr["gmrs"]({s:.4f},{w:.4f},{n:.4f},{e:.4f});
-);
-out center tags;
-"""
+# Keys specific enough to ANCHOR a query on. Generic keys are deliberately
+# absent: nwr["name"] over Minnesota returns most of the state.
+#
+# These are LEAF keys, and that distinction is the whole bug this file shipped
+# with. Overpass's nwr["k"] matches an object carrying EXACTLY key k. The
+# documented scheme puts the data in communication:amateur_radio:repeater:
+# frequency_out, so the parent key communication:amateur_radio:repeater does
+# not exist on it, and a query anchored on the parent walks straight past every
+# repeater in the state. The first MN run returned 1 feature from 8 tiles
+# because of this, not because OSM is empty.
+ANCHOR_KEYS = [
+    # amateur, documented hierarchy
+    "communication:amateur_radio:repeater:frequency_out",
+    "communication:amateur_radio:repeater:frequency_in",
+    "communication:amateur_radio:repeater:tone",
+    "communication:amateur_radio:repeater:shift",
+    "communication:amateur_radio:callsign",
+    "communication:amateur_radio",
+    # amateur, shorter spellings in use
+    "amateur_radio:repeater:frequency_out",
+    "amateur_radio:repeater:frequency_in",
+    "amateur_radio:repeater",
+    "amateur_radio",
+    "repeater:frequency_out",
+    "repeater",
+    # bare, used by mappers who did not follow a scheme
+    "frequency_out",
+    "frequency_in",
+    # GMRS. No established scheme is known; asking and getting nothing is how
+    # that gets shown rather than assumed.
+    "communication:gmrs",
+    "gmrs",
+]
+
+# Generic keys that must never anchor a query, however useful they are in the
+# report. A test holds this list against ANCHOR_KEYS.
+TOO_GENERIC = ("name", "official_name", "operator", "sponsor", "club", "mode",
+               "tone", "shift", "offset", "frequency", "callsign", "ctcss",
+               "dcs", "ctcss_frequency", "ref:callsign")
+
+
+def build_query(keys=None, deep=False):
+    """The Overpass query, built FROM the key list rather than beside it.
+
+    The first version of this file wrote the query by hand next to a separate
+    list of the fields the report measures, and the two disagreed. Generating
+    one from the other is what stops that recurring.
+
+    `deep` swaps exact-key lookups for a key REGEX, which matches
+    communication:amateur_radio:repeater:whatever without anyone having to
+    predict "whatever". It is the definitive question and it is much slower,
+    because a key regex cannot use the tag index - so it is opt-in, for
+    settling whether a thin result means thin data or a wrong guess.
+    """
+    box = "({s:.4f},{w:.4f},{n:.4f},{e:.4f})"
+    if deep:
+        lines = [f'  nwr[~"amateur_radio|repeater|gmrs"~"."]{box};']
+    else:
+        lines = [f'  nwr["{k}"]{box};' for k in (keys or ANCHOR_KEYS)]
+    body = "\n".join(lines)
+    return "[out:json][timeout:{timeout}];\n(\n" + body + "\n);\nout center tags;\n"
+
+
+REPEATER_QUERY = build_query()
+
+
+def cache_prefix(query, deep=False):
+    """A cache namespace that changes when the QUERY changes.
+
+    Tiles are keyed by bounding box plus this prefix. Editing the query while
+    keeping the prefix would serve the old question's answers to the new one -
+    the same trap as reading police tiles for repeaters, one level finer, and
+    the one that would have hidden this very fix behind a stale cache.
+    """
+    h = hashlib.sha1(query.encode("utf-8")).hexdigest()[:8]
+    return f"repeaters{'_deep' if deep else ''}_{h}"
+
 
 # What a pack would need, and every spelling worth looking for. Written from
 # the OPERATOR's side: the repeater's output is what you listen to, its input
@@ -168,6 +240,13 @@ def main(argv=None):
                          f"has nothing cached and is the slow one.")
     ap.add_argument("--jobs", type=int, default=sle.OSM_JOBS)
     ap.add_argument("--osm-timeout", type=int, default=sle.OSM_SERVER_TIMEOUT_S)
+    ap.add_argument("--deep", action="store_true",
+                    help="re-ask with a key REGEX instead of exact keys. "
+                         "Matches any key containing amateur_radio, repeater "
+                         "or gmrs, so it cannot be defeated by a spelling "
+                         "nobody predicted. MUCH slower - a key regex cannot "
+                         "use the tag index. Its own cache namespace, so it "
+                         "neither reads nor poisons the normal run's tiles.")
     ap.add_argument("--allow-partial", action="store_true",
                     help="report on what came back even if some tiles failed. "
                          "For a diagnostic this is usually what you want: a "
@@ -176,14 +255,28 @@ def main(argv=None):
     a = ap.parse_args(argv)
     state = a.state.strip().upper()
 
+    query = build_query(deep=a.deep)
+    # The namespace is derived FROM the query, so editing the query can never
+    # serve the old question's cached answers to the new one.
+    prefix = cache_prefix(query, deep=a.deep)
+    print(f"    asking about {1 if a.deep else len(ANCHOR_KEYS)} "
+          f"{'key pattern' if a.deep else 'candidate keys'}"
+          f"  (cache namespace {prefix})")
+    if a.deep:
+        print("    --deep: key-regex query, no tag index, expect this to be slow")
+
     rows = sle.fetch_osm(
         state, log=print, timeout=a.osm_timeout, jobs=a.jobs,
         deadline_s=a.deadline, allow_partial=a.allow_partial,
-        # A DIFFERENT question about the same boxes: its own cache namespace,
-        # or this reads the police tiles already on the device.
-        query=REPEATER_QUERY, prefix="repeaters", parse=keep_everything)
+        query=query, prefix=prefix, parse=keep_everything)
 
     report(state, rows)
+    if not a.deep and len(rows) < 5:
+        print("  THIN. Before concluding OSM has nothing here, re-ask without")
+        print("  guessing at key names:")
+        print(f"      python3 repeater_diagnose.py --state {state} --deep "
+              f"--deadline 1800 --allow-partial")
+        print("")
     if a.dump:
         with open(a.dump, "w", encoding="utf-8") as fh:
             json.dump({"state": state, "source": "OpenStreetMap (Overpass)",
