@@ -1184,6 +1184,10 @@ def _overpass_tile(tile, mirrors, timeout, attempts, log, deadline=None,
     hit = _cache_read(_tile_cache_path(tile))
     if hit and _cache_fresh(hit[1], ttl_days):
         return hit[0], True, hit[1]
+    if hit and not hit[1]:
+        # Say why a run that was instant yesterday is doing work today.
+        log("      (this tile was cached before tiles carried a fetch date; "
+            "refetching once so its rows can be stamped with a date they have)")
 
     # A tile that was served as quarters last time is still fully cached - just
     # under four keys instead of one. Without this the parent gets asked for

@@ -542,6 +542,7 @@ edition, so it has to be predictable rather than descriptive.
 | Boundaries look out of date in the LE match | `--refresh-shapes`. The cache is only used to decide which county a station falls in; overlay boundaries are always fetched fresh by the builder. |
 | `N of 9 tiles failed (... ran out of the 480s budget)` | The budget ran out, not "no data". Re-run — cached tiles are skipped — or raise `--deadline`. |
 | `... never reached a mirror because this run's own other tiles were holding them` | Self-contention, not rate limiting. Lower `--jobs`. |
+| A run that used to be instant refetches everything once | Tiles cached before they carried a fetch date are refetched once, so the rows built from them can be stamped with a date they actually have. It says so on screen, and the run after that is instant again. |
 | `fetched, but could not cache this tile` | The data is fine; `~/.cache` is not writable. Nothing is lost, but every run will refetch. |
 | The county build sits on one request | Each url gets 150s total, retries included, and every retry names the host. `--http-budget 600` on a slow link; `--http-budget 30` to fail fast. |
 

@@ -2578,3 +2578,19 @@ def test_a_state_that_mixes_descriptors_falls_back_to_the_layers_own_name(
                   [("02016", "Aleutians West Census Area"),
                    ("02020", "Anchorage Municipality")])
     assert t.startswith("AK County boundaries"), t
+
+
+def test_refetching_an_undated_tile_says_why(monkeypatch, tmp_path):
+    """A run that was instant yesterday doing work today needs a reason on
+    screen, or it reads as the cache being broken."""
+    monkeypatch.setattr(sle, "CACHE_DIR", str(tmp_path))
+    tile = (0.0, 0.0, 1.0, 1.0)
+    os.makedirs(str(tmp_path), exist_ok=True)
+    with open(sle._tile_cache_path(tile), "w", encoding="utf-8") as fh:
+        json.dump([{"type": "node", "id": 1, "lat": 1, "lon": 1}], fh)
+    monkeypatch.setattr("urllib.request.urlopen",
+                        lambda req, timeout=None, context=None:
+                        FakeHTTP({"elements": []}))
+    said = []
+    sle._overpass_tile(tile, ["https://a.invalid/i"], 5, 1, said.append)
+    assert any("fetch date" in m for m in said), said
