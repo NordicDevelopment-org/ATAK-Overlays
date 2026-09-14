@@ -1525,7 +1525,9 @@ def fetch_osm(state_abbr, mirrors=None, log=print, bbox=None,
               timeout=OSM_SERVER_TIMEOUT_S,
               attempts=1, allow_partial=False, deadline_s=OSM_DEADLINE_S,
               jobs=OSM_JOBS, shapes=None, split=True, gaps_out=None,
-              query=None, prefix="police", parse=None):
+              query=None, prefix="police", parse=None,
+              partial_note=("the counties named above have no agency because "
+                            "their tile failed, not because none exists")):
     """[{name, phone, address, city, admintype, lon, lat}] inside `bbox`.
 
     Queried as a grid of tiles rather than one statewide request, because the
@@ -1644,8 +1646,11 @@ def fetch_osm(state_abbr, mirrors=None, log=print, bbox=None,
             raise RuntimeError(msg + " Use --allow-partial to accept an "
                                      "incomplete result anyway.")
         log(f"    [!] {msg}")
-        log(f"    [!] PROCEEDING WITH A PARTIAL RESULT - the counties named above "
-            f"have no agency because their tile failed, not because none exists.")
+        # What a missing tile MEANS depends on what was being asked for. This
+        # machinery is shared now, and the sheriff wording leaked into a
+        # repeater run, telling the reader that counties it never named "have
+        # no agency". A caller that asks a different question says so itself.
+        log(f"    [!] PROCEEDING WITH A PARTIAL RESULT - {partial_note}")
 
     if cached:
         log(f"    {cached} of {len(tiles)} tiles came from the local cache")

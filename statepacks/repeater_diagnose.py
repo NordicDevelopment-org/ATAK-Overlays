@@ -189,15 +189,23 @@ def first_present(tags, keys):
     return None, None
 
 
-def report(state, rows, log=print):
+def report(state, rows, log=print, deep=False):
     log(f"\nREPEATER SOURCE REPORT for {state} - OpenStreetMap via Overpass")
     log(f"  objects returned                      : {len(rows)}")
     if not rows:
         log("")
-        log("  Nothing came back for any candidate tag. That is an ANSWER, not")
-        log("  a failure: it means OSM has no repeater tagging here that these")
-        log("  keys reach. Before concluding OSM is empty, re-run with --dump")
-        log("  and check a county you KNOW has a repeater.")
+        if deep:
+            log("  Nothing came back for a key REGEX matching any key containing")
+            log("  amateur_radio, repeater or gmrs. No spelling anyone failed to")
+            log("  predict can hide from that, so within the area actually")
+            log("  fetched this is not a guess: OSM has no repeater tagging here.")
+        else:
+            log("  Nothing came back for any candidate tag. That is an ANSWER, not")
+            log("  a failure: it means OSM has no repeater tagging here that these")
+            log("  keys reach. --deep re-asks with a key regex, which no unguessed")
+            log("  spelling defeats.")
+        log("  A tile that FAILED above is unanswered, not empty - check the")
+        log("  partial-result line before reading this as total absence.")
         return
     withpos = sum(1 for r in rows if r["lon"] is not None)
     log(f"    ...carrying coordinates             : {withpos}")
@@ -261,10 +269,11 @@ def main(argv=None):
                          "neither reads nor poisons the normal run's tiles.")
     ap.add_argument("--bbox", metavar="W,S,E,N",
                     help="ask about this box instead of the whole state. "
-                         "Pairs with --deep: a key-regex query over one dense "
-                         "metro area answers 'is this tagging used here at "
-                         "all' in minutes, where the statewide version takes "
-                         "an hour against mirrors that are already refusing.")
+                         "Pairs with --deep. The grid stays a fixed 3x3 (see "
+                         "README section 11), so this is still 9 requests - but "
+                         "9 SMALL ones. Measured over the Twin Cities: 390s, "
+                         "against an hour for the statewide version on mirrors "
+                         "that are already refusing.")
     ap.add_argument("--allow-partial", action="store_true",
                     help="report on what came back even if some tiles failed. "
                          "For a diagnostic this is usually what you want: a "
@@ -294,9 +303,11 @@ def main(argv=None):
     rows = sle.fetch_osm(
         state, log=print, timeout=a.osm_timeout, jobs=a.jobs,
         deadline_s=a.deadline, allow_partial=a.allow_partial,
-        bbox=bbox, query=query, prefix=prefix, parse=keep_everything)
+        bbox=bbox, query=query, prefix=prefix, parse=keep_everything,
+        partial_note="a failed tile is an UNANSWERED area, not an empty one. "
+                     "The count below is a floor, and re-running fills it in.")
 
-    report(state, rows)
+    report(state, rows, deep=a.deep)
     if not a.deep and len(rows) < 5:
         print("  THIN. Before concluding OSM has nothing here, re-ask without")
         print("  guessing at key names. Over ONE DENSE BOX first - a key regex")

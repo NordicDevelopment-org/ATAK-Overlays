@@ -3222,7 +3222,27 @@ def test_nothing_returned_is_reported_as_an_answer_not_a_failure():
     rd.report("MN", [], log=out.append)
     text = "\n".join(out)
     assert "That is an ANSWER, not" in text
-    assert "--dump" in text            # and says how to check it
+    assert "--deep" in text            # and names the stronger question
+
+
+def test_an_empty_deep_run_is_stated_more_strongly_than_an_empty_normal_one():
+    """A key regex cannot be defeated by a spelling nobody guessed, so an empty
+    --deep result says something an empty exact-key result cannot."""
+    shallow, deep = [], []
+    rd.report("MN", [], log=shallow.append, deep=False)
+    rd.report("MN", [], log=deep.append, deep=True)
+    assert "candidate tag" in "\n".join(shallow)
+    assert "key REGEX" in "\n".join(deep)
+    assert "not a guess" in "\n".join(deep)
+
+
+def test_an_empty_result_never_claims_a_failed_tile_was_empty():
+    """Six tiles returning nothing and three failing is not 'OSM has nothing'.
+    The report has to say which it is looking at."""
+    out = []
+    rd.report("MN", [], log=out.append, deep=True)
+    text = "\n".join(out)
+    assert "unanswered, not empty" in text
 
 
 def test_the_query_asks_about_leaf_keys_not_their_parents():

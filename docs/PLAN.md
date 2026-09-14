@@ -77,6 +77,13 @@ frequency, no callsign, no name. **Zero objects carried a listen frequency.**
 The query is confirmed working - `communication:amateur_radio` is one of its
 anchors and it matched - so this measures OSM, not the code.
 
+**1.1 settled with `--deep`, 2026-09-14.** A key regex matching ANY key
+containing `amateur_radio`, `repeater` or `gmrs`, over the Twin Cities metro -
+the densest ham population in the state - returned **0 objects** across 6
+successful tiles. No spelling anyone failed to predict can hide from a key
+regex, so OSM is closed as a repeater source. Not proof for every acre of
+Minnesota, and the report says so; it is as strong as cheap evidence gets.
+
 **1.2, the answer is no.** There is no source of MN amateur or GMRS repeater
 data with output frequency, input/offset and tone that this project can
 redistribute in a public KMZ on a licence anyone has read. Every candidate
