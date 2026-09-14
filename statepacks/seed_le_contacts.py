@@ -351,6 +351,14 @@ def main(argv=None):
                          "empty for no reason the pack can show.")
     ap.add_argument("--osm-timeout", type=int, default=90,
                     help="per-tile Overpass timeout in seconds (default 90)")
+    ap.add_argument("--deadline", type=int, default=OSM_DEADLINE_S,
+                    help=f"wall-clock budget in seconds for the WHOLE Overpass "
+                         f"fetch, tiles and retries included (default "
+                         f"{OSM_DEADLINE_S}). Tiles already fetched are cached, "
+                         f"so re-running resumes rather than starting over.")
+    ap.add_argument("--osm-attempts", type=int, default=2,
+                    help="how many times to cycle the Overpass mirrors per tile "
+                         "(default 2)")
     ap.add_argument("--raw", action="store_true",
                     help="with --show, print the server's response for one record "
                          "exactly as it arrives, before any field mapping")
@@ -714,6 +722,11 @@ OVERPASS_MIRRORS = [
 # instead of starting over.
 OSM_TILE_COLS = 3
 OSM_TILE_ROWS = 3
+# A WALL-CLOCK BUDGET for the whole fetch, not just per request. Nine tiles,
+# three attempts, three mirrors and a 120s socket multiply out to 2.7 hours of
+# a command that looks hung - which is exactly what it did. Nothing waits past
+# the deadline; what was fetched is cached, so the next run resumes.
+OSM_DEADLINE_S = 480
 CACHE_DIR = os.path.join(os.path.expanduser("~"), ".cache", "atak-statepacks")
 
 # ISO 3166-2 subdivision codes are what Overpass indexes US states by.
@@ -765,8 +778,30 @@ def _tile_cache_path(tile):
     return os.path.join(CACHE_DIR, f"osm_police_{key}.json")
 
 
-def _overpass_tile(tile, mirrors, timeout, attempts, log):
-    """One tile, cached on disk. Returns its raw elements.
+class Deadline:
+    """A shared wall-clock budget. Every request checks it before starting.
+
+    Without one, a per-request timeout is meaningless: nine tiles times three
+    attempts times three mirrors is eighty-one requests, and even a modest
+    socket timeout multiplies into hours of silence.
+    """
+
+    def __init__(self, seconds):
+        self.limit = seconds
+        self.start = time.monotonic()
+
+    def left(self):
+        return self.limit - (time.monotonic() - self.start)
+
+    def expired(self):
+        return self.left() <= 0
+
+    def elapsed(self):
+        return time.monotonic() - self.start
+
+
+def _overpass_tile(tile, mirrors, timeout, attempts, log, deadline=None):
+    """One tile, cached on disk. Returns (elements, came_from_cache).
 
     A tile that has already been fetched is not fetched again: the public
     mirrors time out under load, and without a cache every retry throws away
@@ -788,11 +823,17 @@ def _overpass_tile(tile, mirrors, timeout, attempts, log):
     last = None
     for attempt in range(attempts):
         for url in mirrors:
+            if deadline is not None:
+                if deadline.expired():
+                    raise TimeoutError("deadline reached")
+                # never wait longer than the budget has left
+                sock = max(5, min(timeout, int(deadline.left())))
+            else:
+                sock = timeout
             try:
                 data = urllib.parse.urlencode({"data": q}).encode()
                 req = urllib.request.Request(url, data=data, headers=UA)
-                with urllib.request.urlopen(req, timeout=timeout + 30,
-                                            context=SSL_CTX) as r:
+                with urllib.request.urlopen(req, timeout=sock, context=SSL_CTX) as r:
                     doc = json.loads(r.read().decode("utf-8", "replace"))
                 els = doc.get("elements") or []
                 os.makedirs(CACHE_DIR, exist_ok=True)
@@ -803,20 +844,30 @@ def _overpass_tile(tile, mirrors, timeout, attempts, log):
                 last = ex
         if attempt < attempts - 1:
             wait = 5 * (attempt + 1)
-            log(f"      all mirrors busy; waiting {wait}s before retry "
-                f"{attempt + 2}/{attempts}")
+            if deadline is not None and deadline.left() < wait:
+                break                    # no point sleeping past the budget
+            # name the actual error rather than asserting "busy" - a TLS
+            # failure and a 504 are not the same problem and only one of them
+            # is worth waiting out
+            log(f"      every mirror failed ({redact_err(last)}); waiting "
+                f"{wait}s before retry {attempt + 2}/{attempts}")
             time.sleep(wait)
     raise RuntimeError(str(last))
 
 
 def fetch_osm(state_abbr, mirrors=None, log=print, bbox=None, timeout=90,
-              attempts=3, allow_partial=False):
+              attempts=2, allow_partial=False, deadline_s=OSM_DEADLINE_S):
     """[{name, phone, address, city, admintype, lon, lat}] inside `bbox`.
 
     Queried as a grid of tiles rather than one statewide request, because the
     public mirrors return 504 for the whole-state box under load. Successful
     tiles are cached, so re-running after a failure only refetches the tiles
     that failed.
+
+    The whole fetch runs against ONE wall-clock budget (`deadline_s`). Per
+    request timeouts alone do not bound it - nine tiles times two attempts
+    times three mirrors is fifty-four requests - so without a shared deadline
+    a busy mirror turns this into hours of a command that looks hung.
 
     If any tile cannot be fetched, this RAISES rather than returning what it
     has: a partial set would put a sheriff in some counties and none in others,
@@ -827,21 +878,39 @@ def fetch_osm(state_abbr, mirrors=None, log=print, bbox=None, timeout=90,
         bbox = bbox_of_shapes(county_shapes(STATE_FIPS[state_abbr.upper()], log=log))
     mirrors = mirrors or OVERPASS_MIRRORS
     tiles = tile_bbox(bbox)
-    elements, failed, cached = [], [], 0
+    clock = Deadline(deadline_s)
+    log(f"    {len(tiles)} tile(s), {deadline_s}s budget for all of them "
+        f"(cached tiles are free)")
+    elements, failed, cached, skipped = [], [], 0, 0
     for i, tile in enumerate(tiles, 1):
         try:
-            els, from_cache = _overpass_tile(tile, mirrors, timeout, attempts, log)
+            els, from_cache = _overpass_tile(tile, mirrors, timeout, attempts, log,
+                                             deadline=clock)
             elements.extend(els)
             cached += 1 if from_cache else 0
             log(f"    tile {i}/{len(tiles)}: {len(els)} feature(s)"
-                f"{' (cached)' if from_cache else ''}")
+                f"{' (cached)' if from_cache else ''}"
+                f"   [{clock.elapsed():.0f}s used, {max(0, clock.left()):.0f}s left]")
         except Exception as ex:                     # noqa: BLE001
             failed.append((i, tile, ex))
-            log(f"    tile {i}/{len(tiles)}: FAILED - {redact_err(ex)}")
+            if isinstance(ex, TimeoutError):
+                # The budget is gone. Every remaining tile would fail the same
+                # way, so say so once instead of printing the same line nine
+                # times - but still count them as failures, because they are.
+                skipped = len(tiles) - i
+                log(f"    tile {i}/{len(tiles)}: OUT OF TIME after "
+                    f"{clock.elapsed():.0f}s")
+                for j, rest in enumerate(tiles[i:], i + 1):
+                    failed.append((j, rest, ex))
+                break
+            log(f"    tile {i}/{len(tiles)}: FAILED - {redact_err(ex)}"
+                f"   [{clock.elapsed():.0f}s used, {max(0, clock.left()):.0f}s left]")
 
     if failed:
-        msg = (f"{len(failed)} of {len(tiles)} tiles failed. "
-               f"{len(tiles) - len(failed)} succeeded and are CACHED, so running "
+        msg = (f"{len(failed)} of {len(tiles)} tiles failed"
+               + (f" ({skipped} never tried - the {deadline_s}s budget ran out; "
+                  f"raise it with --deadline)" if skipped else "")
+               + f". {len(tiles) - len(failed)} succeeded and are CACHED, so running "
                f"this again will only refetch the failures - the public mirrors "
                f"are rate-limited, not broken. Wait a minute and retry.")
         if not allow_partial:
@@ -958,7 +1027,8 @@ def _fetch_raw(state_abbr, use_osm, use_usgs, args, layer_id):
     """Whichever source is selected, in one place, returning one record shape."""
     if use_osm:
         return fetch_osm(state_abbr, allow_partial=args.allow_partial,
-                         timeout=args.osm_timeout)
+                         timeout=args.osm_timeout, attempts=args.osm_attempts,
+                         deadline_s=args.deadline)
     if use_usgs:
         return fetch_usgs(state_abbr, args.usgs_layer)
     return fetch_state(STATE_FIPS[state_abbr], layer_id, args.endpoint)
@@ -973,26 +1043,40 @@ def dump_raw(state_abbr, use_osm, use_usgs, args, layer_id):
     indistinguishable from the outside. This shows which it is.
     """
     import urllib.parse
-    import urllib.request
     if use_osm:
+        # The same tiled, cached, deadline-bounded path the real fetch uses -
+        # NOT a fresh whole-state query. A statewide box is what the mirrors
+        # 504 on, and it would ignore tiles already sitting in the cache.
         shapes = county_shapes(STATE_FIPS[state_abbr.upper()])
-        w, s_, e, n = bbox_of_shapes(shapes)
-        q = OSM_QUERY.format(timeout=180, s=s_, w=w, n=n, e=e)
-        print(f"QUERY:\n{q}")
-        for url in OVERPASS_MIRRORS:
+        tiles = tile_bbox(bbox_of_shapes(shapes))
+        clock = Deadline(getattr(args, "deadline", OSM_DEADLINE_S))
+        w, s_, e, n = tiles[0]
+        print("QUERY (one tile; the fetch runs this over "
+              f"{len(tiles)} of them):\n"
+              f"{OSM_QUERY.format(timeout=args.osm_timeout, s=s_, w=w, n=n, e=e)}")
+        for i, tile in enumerate(tiles, 1):
             try:
-                data = urllib.parse.urlencode({"data": q}).encode()
-                req = urllib.request.Request(url, data=data, headers=UA)
-                with urllib.request.urlopen(req, timeout=210, context=SSL_CTX) as r:
-                    doc = json.loads(r.read().decode("utf-8", "replace"))
-                els = doc.get("elements") or []
-                print(f"{url.split('/')[2]}: {len(els)} element(s)\n")
-                for el in els[:args.show]:
-                    print(json.dumps(el, indent=2)[:1500])
-                    print()
-                return 0
+                els, from_cache = _overpass_tile(
+                    tile, OVERPASS_MIRRORS, args.osm_timeout, 1, print,
+                    deadline=clock)
+            except TimeoutError:
+                print(f"  [!] out of time after {clock.elapsed():.0f}s "
+                      f"({i - 1} tile(s) tried). Raise it with --deadline.")
+                return 2
             except Exception as ex:                 # noqa: BLE001
-                print(f"  [!] {url.split('/')[2]} -> {redact_err(ex)}")
+                print(f"  [!] tile {i}/{len(tiles)} -> {redact_err(ex)}")
+                continue
+            if not els:
+                print(f"  tile {i}/{len(tiles)}: 0 element(s)"
+                      f"{' (cached)' if from_cache else ''} - trying the next one")
+                continue
+            print(f"  tile {i}/{len(tiles)}: {len(els)} element(s)"
+                  f"{' (cached)' if from_cache else ''}\n")
+            for el in els[:args.show]:
+                print(json.dumps(el, indent=2)[:1500])
+                print()
+            return 0
+        print("  [!] no tile returned an element")
         return 2
 
     base = USGS["url"] if use_usgs else HIFLD_LE

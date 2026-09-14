@@ -64,7 +64,7 @@ import sys
 import time
 import zipfile
 from urllib.error import HTTPError, URLError
-from urllib.parse import urlencode
+from urllib.parse import urlencode, urlsplit
 from urllib.request import Request, urlopen
 
 # --------------------------------------------------------------------------
@@ -89,6 +89,12 @@ TIGERWEB_ALTERNATES = [
     "https://tigerweb.geo.census.gov/arcgis/rest/services/TIGERweb/State_County/MapServer/0",
     "https://tigerweb.geo.census.gov/arcgis/rest/services/Basemaps/CBSA/MapServer/6",
 ]
+
+# A wall-clock budget for ONE url, retries included. Without it the retry count
+# and the socket timeout multiply: four tries at 120s is eight minutes on a
+# single url, and falling through three endpoints made 24 minutes of a command
+# that printed nothing while it waited. Verified by measurement, not guessed.
+HTTP_BUDGET_S = 150
 
 # ACS 5-year detailed tables.
 #   B01003_001E = total population
@@ -197,19 +203,46 @@ def redact(text):
     return _SECRET_PARAM.sub(r"\1<redacted>", str(text))
 
 
-def http_get(url, params=None, tries=4, timeout=120):
+def http_get(url, params=None, tries=3, timeout=60, budget=None, log=print):
+    """One request, retried, under a WALL-CLOCK BUDGET and never silently.
+
+    Retries multiply: four tries at a 120s socket is eight minutes on ONE url,
+    and with three endpoints to fall through that was 24 minutes of a command
+    printing nothing. `budget` caps the total time spent on this url no matter
+    how the tries and the socket timeout multiply out, each socket is clamped
+    to what the budget has left, and every retry says which host stalled and
+    how long is left - so a slow fetch reads as slow instead of hung.
+    """
+    # Resolved at call time, not bound as a default, so --http-budget can raise
+    # it on a slow link without every caller having to pass it through.
+    budget = HTTP_BUDGET_S if budget is None else budget
     if params:
         url = url + ("&" if "?" in url else "?") + urlencode(params)
-    last = None
+    host = urlsplit(url).netloc or redact(url)
+    start = time.monotonic()
+    last, used = None, 0
     for i in range(tries):
+        left = budget - (time.monotonic() - start)
+        if left <= 0:
+            break
+        used = i + 1
         try:
-            with urlopen(Request(url, headers=UA), timeout=timeout, context=SSL_CTX) as r:
+            sock = max(5, min(timeout, int(left)))
+            with urlopen(Request(url, headers=UA), timeout=sock, context=SSL_CTX) as r:
                 return r.read()
         except (URLError, HTTPError, TimeoutError, OSError) as e:
             last = e
-            if i < tries - 1:
-                time.sleep(1.5 * (i + 1))
-    raise RuntimeError(f"GET failed after {tries} tries: {redact(url)}\n  {redact(last)}")
+            wait = 1.5 * (i + 1)
+            left = budget - (time.monotonic() - start)
+            if i >= tries - 1 or left < wait:
+                break
+            log(f"    [!] {host} did not answer ({redact(e)}); retry "
+                f"{i + 2}/{tries} in {wait:.0f}s ({left:.0f}s of budget left)")
+            time.sleep(wait)
+    spent = time.monotonic() - start
+    raise RuntimeError(
+        f"GET failed after {used} tr{'y' if used == 1 else 'ies'} and "
+        f"{spent:.0f}s (budget {budget}s): {redact(url)}\n  {redact(last)}")
 
 
 def get_json(url, params=None, **kw):
@@ -906,7 +939,16 @@ def main(argv=None):
                                          f"or save it in {KEY_FILE}). "
                                          f"Free: {ACS_KEY_SIGNUP}")
     ap.add_argument("--probe", action="store_true", help="check endpoints and exit")
+    ap.add_argument("--http-budget", type=int, default=HTTP_BUDGET_S,
+                    metavar="SECONDS",
+                    help=f"wall-clock budget per request url, retries included "
+                         f"(default {HTTP_BUDGET_S}). Raise it on a slow link; "
+                         f"lower it to fail fast.")
     args = ap.parse_args(argv)
+
+    # http_get resolves this at call time, so setting it here reaches every
+    # request without threading a parameter through the whole builder.
+    globals()["HTTP_BUDGET_S"] = max(5, args.http_budget)
 
     if args.probe:
         return 0 if probe() else 2

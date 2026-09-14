@@ -663,7 +663,7 @@ def test_osm_reads_both_phone_spellings_and_a_way_centre(monkeypatch, tmp_path):
                   "addr:city": "Town", "operator:type": "county"}},
         {"type": "way", "id": 3, "tags": {"name": "No Geometry"}},   # dropped
     ]
-    monkeypatch.setattr(sle, "_overpass_tile", lambda tile, m, t, a, log: (els, False))
+    monkeypatch.setattr(sle, "_overpass_tile", lambda tile, m, t, a, log, deadline=None: (els, False))
     got = sle.fetch_osm("MN", log=lambda *a: None, bbox=(-97.3, 43.4, -89.4, 49.4))
 
     assert [r["name"] for r in got] == ["A PD", "B Sheriff"]
@@ -1206,7 +1206,7 @@ def test_a_failed_tile_refuses_to_pass_off_a_partial_answer(monkeypatch, tmp_pat
     monkeypatch.setattr(sle, "CACHE_DIR", str(tmp_path))
     calls = {"n": 0}
 
-    def flaky(tile, mirrors, timeout, attempts, log):
+    def flaky(tile, mirrors, timeout, attempts, log, deadline=None):
         calls["n"] += 1
         if calls["n"] == 5:
             raise RuntimeError("HTTP Error 504: Gateway Timeout")
@@ -1261,7 +1261,7 @@ def test_a_feature_on_a_tile_boundary_is_not_counted_twice(monkeypatch, tmp_path
     dup = {"type": "way", "id": 42, "center": {"lat": 1.0, "lon": 1.0},
            "tags": {"name": "Border Sheriff", "phone": "111"}}
     monkeypatch.setattr(sle, "_overpass_tile",
-                        lambda tile, m, t, a, log: ([dup], False))
+                        lambda tile, m, t, a, log, deadline=None: ([dup], False))
     got = sle.fetch_osm("MN", bbox=(0.0, 0.0, 9.0, 9.0), log=lambda *a: None)
     assert len(got) == 1                            # nine tiles, one feature
     assert got[0]["phone"] == "111"
@@ -1314,3 +1314,166 @@ def test_sector_pack_names_have_no_version_boundary():
     otherwise MN_Water would read as a newer MN_Energy-Electric."""
     for name in ("MN_Energy-Electric.kmz", "MN_Water.kmz", "SAMPLE_MN_Water.kmz"):
         assert "__" not in name
+
+
+# --------------------------------------------------------------------------
+# Wall-clock budgets. A fetch is allowed to be slow; it is not allowed to look
+# hung. Retries multiply - tries x socket timeout x mirrors - and the first
+# version of the tiled Overpass fetch worked out to 2.7 hours of silence.
+# --------------------------------------------------------------------------
+def _expired(seconds=60):
+    d = sle.Deadline(seconds)
+    d.start -= seconds + 1          # as if it had been running past its budget
+    return d
+
+
+def test_deadline_reports_what_it_has_left():
+    d = sle.Deadline(60)
+    assert not d.expired()
+    assert 0 < d.left() <= 60
+    assert d.elapsed() >= 0
+    assert _expired().expired()
+
+
+def test_overpass_tile_will_not_start_a_request_past_the_deadline(monkeypatch, tmp_path):
+    monkeypatch.setattr(sle, "CACHE_DIR", str(tmp_path))     # nothing cached
+    import urllib.request
+
+    def never(*a, **kw):
+        raise AssertionError("a request was made after the budget ran out")
+
+    monkeypatch.setattr(urllib.request, "urlopen", never)
+    with pytest.raises(TimeoutError):
+        sle._overpass_tile((-93.0, 45.0, -92.0, 46.0), ["https://example.invalid"],
+                           90, 3, lambda *a: None, deadline=_expired())
+
+
+def test_overpass_socket_never_outlives_the_remaining_budget(monkeypatch, tmp_path):
+    monkeypatch.setattr(sle, "CACHE_DIR", str(tmp_path))
+    import urllib.request
+    seen = []
+
+    def capture(req, timeout=None, **kw):
+        seen.append(timeout)
+        raise OSError("nope")
+
+    monkeypatch.setattr(urllib.request, "urlopen", capture)
+    with pytest.raises(RuntimeError):
+        sle._overpass_tile((-93.0, 45.0, -92.0, 46.0), ["https://example.invalid"],
+                           900, 1, lambda *a: None, deadline=sle.Deadline(10))
+    # asked for a 900s socket, budget says 10 - the budget wins
+    assert seen and all(0 < t <= 10 for t in seen), seen
+
+
+def test_fetch_osm_stops_at_the_budget_and_says_so(monkeypatch):
+    """Out of time must not read as 'no police stations in those counties'."""
+    tiles = sle.tile_bbox((-97.0, 43.0, -89.0, 49.0))
+    calls = []
+
+    def tile(t, mirrors, timeout, attempts, log, deadline=None):
+        calls.append(t)
+        if len(calls) > 2:
+            raise TimeoutError("deadline reached")
+        return ([], False)
+
+    monkeypatch.setattr(sle, "_overpass_tile", tile)
+    with pytest.raises(RuntimeError) as ex:
+        sle.fetch_osm("MN", bbox=(-97.0, 43.0, -89.0, 49.0), log=lambda *a: None)
+    msg = str(ex.value)
+    # every untried tile is counted as a failure, not quietly treated as empty
+    assert f"{len(tiles) - 2} of {len(tiles)} tiles failed" in msg, msg
+    assert "never tried" in msg and "--deadline" in msg, msg
+    # and it stopped instead of grinding through the rest
+    assert len(calls) == 3, calls
+
+
+def test_fetch_osm_passes_one_shared_clock_to_every_tile(monkeypatch):
+    clocks = []
+
+    def tile(t, mirrors, timeout, attempts, log, deadline=None):
+        clocks.append(deadline)
+        return ([], True)
+
+    monkeypatch.setattr(sle, "_overpass_tile", tile)
+    sle.fetch_osm("MN", bbox=(-97.0, 43.0, -89.0, 49.0), log=lambda *a: None)
+    assert clocks and all(c is clocks[0] for c in clocks)
+    assert isinstance(clocks[0], sle.Deadline)
+
+
+def test_osm_deadline_is_reachable_from_the_command_line():
+    """A budget nobody can change is a budget that blocks somebody."""
+    import contextlib
+    import io
+    buf = io.StringIO()
+    with contextlib.redirect_stdout(buf), pytest.raises(SystemExit):
+        sle.main(["--help"])
+    out = buf.getvalue()
+    assert "--deadline" in out and "--osm-attempts" in out
+
+
+def test_http_get_gives_up_on_its_budget_without_sleeping_past_it(monkeypatch):
+    # register the attribute so monkeypatch restores it for the next test
+    monkeypatch.setattr(bcp, "HTTP_BUDGET_S", bcp.HTTP_BUDGET_S)
+    slept = []
+    monkeypatch.setattr(bcp.time, "sleep", lambda s: slept.append(s))
+
+    def slow(*a, **kw):
+        raise OSError("timed out")
+
+    monkeypatch.setattr(bcp, "urlopen", slow)
+    with pytest.raises(RuntimeError) as ex:
+        bcp.http_get("https://example.invalid/x", budget=0.01,
+                     log=lambda *a: None)
+    assert not slept, "slept past a budget that was already spent"
+    assert "budget 0.01s" in str(ex.value)
+
+
+def test_http_get_clamps_the_socket_to_the_budget(monkeypatch):
+    monkeypatch.setattr(bcp, "HTTP_BUDGET_S", bcp.HTTP_BUDGET_S)
+    seen = []
+
+    def capture(req, timeout=None, **kw):
+        seen.append(timeout)
+        raise OSError("nope")
+
+    monkeypatch.setattr(bcp, "urlopen", capture)
+    monkeypatch.setattr(bcp.time, "sleep", lambda s: None)
+    with pytest.raises(RuntimeError):
+        bcp.http_get("https://example.invalid/x", timeout=600, budget=8,
+                     log=lambda *a: None)
+    assert seen and all(0 < t <= 8 for t in seen), seen
+
+
+def test_http_get_names_the_host_that_stalled_before_retrying(monkeypatch):
+    monkeypatch.setattr(bcp, "HTTP_BUDGET_S", bcp.HTTP_BUDGET_S)
+    monkeypatch.setattr(bcp, "urlopen",
+                        lambda *a, **kw: (_ for _ in ()).throw(OSError("boom")))
+    monkeypatch.setattr(bcp.time, "sleep", lambda s: None)
+    lines = []
+    with pytest.raises(RuntimeError):
+        bcp.http_get("https://tigerweb.geo.census.gov/x", budget=60,
+                     log=lines.append)
+    assert lines, "a retry printed nothing - that is what 'hung' looks like"
+    assert "tigerweb.geo.census.gov" in lines[0]
+    assert "retry 2/" in lines[0]
+
+
+def test_http_get_never_prints_a_key_while_reporting_a_failure(monkeypatch):
+    monkeypatch.setattr(bcp, "HTTP_BUDGET_S", bcp.HTTP_BUDGET_S)
+    monkeypatch.setattr(bcp, "urlopen",
+                        lambda *a, **kw: (_ for _ in ()).throw(OSError("boom")))
+    monkeypatch.setattr(bcp.time, "sleep", lambda s: None)
+    lines = []
+    with pytest.raises(RuntimeError) as ex:
+        bcp.http_get("https://api.census.gov/data/2023/acs/acs5",
+                     {"key": "deadbeefcafe0000deadbeefcafe0000deadbeef"},
+                     budget=60, log=lines.append)
+    assert "deadbeefcafe" not in str(ex.value)
+    assert not any("deadbeefcafe" in l for l in lines)
+
+
+def test_http_budget_flag_reaches_every_request(monkeypatch):
+    monkeypatch.setattr(bcp, "HTTP_BUDGET_S", bcp.HTTP_BUDGET_S)
+    monkeypatch.setattr(bcp, "probe", lambda *a, **kw: True)
+    assert bcp.main(["--probe", "--http-budget", "7"]) == 0
+    assert bcp.HTTP_BUDGET_S == 7
