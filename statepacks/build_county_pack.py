@@ -72,9 +72,15 @@ from urllib.request import Request, urlopen
 # --probe tells you which ones answer before you spend a download on them.
 # --------------------------------------------------------------------------
 
-# TIGERweb "Current" county polygons. In the State_County service, layer 0 is
-# States and layer 1 is Counties - so this points at 1. Confirm with --probe,
-# which prints each layer's reported name.
+# TIGERweb county polygons, layer 1. VERIFIED on-device 2026-09-14: returns
+# exactly 87 Minnesota counties with GEOID, NAME, BASENAME, AREALAND, AREAWATER.
+#
+# The service carries 71 layers because it stacks four VINTAGES - the top level
+# (Current), then groups "BAS 2026", "ACS 2025" and "Census 2020" - and within
+# each vintage the same counties appear at several GENERALIZATION levels for
+# different map scales. Layer 1 is the first Counties layer of the current
+# vintage. Run tiger_diagnose.py to see the whole tree, and --detail to compare
+# how much boundary detail each generalization level actually carries.
 TIGERWEB = ("https://tigerweb.geo.census.gov/arcgis/rest/services"
             "/TIGERweb/State_County/MapServer/1")
 # Fallbacks tried in order if the primary will not answer. Different vintages
@@ -170,22 +176,37 @@ def get_json(url, params=None, **kw):
 # Fetch: county polygons
 # --------------------------------------------------------------------------
 def service_vintage(url, log=print):
-    """The TIGER year the service itself reports, or TIGER_VINTAGE_UNKNOWN.
+    """The vintage of the layer at `url`, read from the service's own layer tree.
 
-    Asserting a hardcoded "2024" on every value would be a claim no response
-    backs up - and the whole point of stamping a year on a field is that the
-    year is true. So ask the service and use what it says; if it says nothing,
-    the popup reads "vintage not reported" rather than a number.
+    TIGERweb stacks several vintages in one service and names them as GROUP
+    layers - "BAS 2026", "ACS 2025", "Census 2020" - with the current vintage
+    sitting at the top level. So a layer's vintage is its parent group's name,
+    which is a fact the service states, not a year scraped out of prose.
+
+    Returns TIGER_VINTAGE_UNKNOWN rather than guessing, so the popup can say
+    "vintage not reported" instead of asserting a year nothing returned.
     """
+    m = re.search(r"/(\d+)/?$", url)
+    root = re.sub(r"/\d+/?$", "", url)
     try:
-        info = get_json(url, {"f": "json"}, tries=2, timeout=30)
+        info = get_json(root, {"f": "json"}, tries=2, timeout=30)
     except Exception as e:                          # noqa: BLE001
         log(f"    [!] could not read service metadata ({e}); vintage unknown")
         return TIGER_VINTAGE_UNKNOWN
+
+    layers = {l.get("id"): l for l in (info.get("layers") or [])}
+    if m and int(m.group(1)) in layers:
+        lyr = layers[int(m.group(1))]
+        parent = lyr.get("parentLayerId", -1)
+        if parent in layers:
+            return str(layers[parent].get("name") or "").strip() or TIGER_VINTAGE_UNKNOWN
+        # top level of a service that groups its older vintages = the current one
+        if any(l.get("subLayerIds") for l in layers.values()):
+            return "Current"
     for key in ("name", "description", "serviceDescription", "copyrightText"):
-        m = _YEAR_RE.search(str(info.get(key) or ""))
-        if m:
-            return m.group(0)
+        found = _YEAR_RE.search(str(info.get(key) or ""))
+        if found:
+            return found.group(0)
     return TIGER_VINTAGE_UNKNOWN
 
 
@@ -594,7 +615,15 @@ def build_state(state_abbr, out_dir, acs_year=ACS_YEAR, per_county=False,
     # The filename carries the boundary vintage when the service reported one,
     # and the build date when it did not - so a pack is always datable from its
     # name, and never claims a year nothing returned.
-    stamp = vintage if vintage != TIGER_VINTAGE_UNKNOWN else f"built{built}"
+    # A pack must be datable from its filename alone. A vintage that already
+    # names a year ("Census 2020") is enough; one that does not ("Current") gets
+    # the build date appended, because "Current" ages the moment it is written.
+    if vintage == TIGER_VINTAGE_UNKNOWN:
+        stamp = f"built{built}"
+    elif _YEAR_RE.search(vintage):
+        stamp = vintage
+    else:
+        stamp = f"{vintage}_{built}"
     title = f"{state_abbr} Counties - boundaries and reference data ({vintage})"
     kml = state_kml(state_abbr, placemarks, {
         "title": title, "boundary_source": boundary_source, "boundary_url": used_url,

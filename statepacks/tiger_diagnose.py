@@ -64,6 +64,9 @@ def main(argv=None):
     ap = argparse.ArgumentParser(description="Find the right TIGERweb county layer.")
     ap.add_argument("--service", default=SERVICE)
     ap.add_argument("--state", default="MN")
+    ap.add_argument("--detail", action="store_true",
+                    help="also fetch one county's geometry from each candidate and "
+                         "count vertices, to compare generalization levels")
     a = ap.parse_args(argv)
     st = a.state.upper()
     if st not in STATE_FIPS:
@@ -154,6 +157,49 @@ def main(argv=None):
                                               "AREALAND", "AREAWATER") if k in attrs}
             print(f"       sample: {show}")
         results.append((lid, grp, n, not missing))
+        print()
+
+    # ---- optional: how much boundary detail does each layer actually carry? --
+    if a.detail and results:
+        print("=" * 62)
+        print("BOUNDARY DETAIL (vertices in one county's outline)\n")
+        print("  A map service repeats the same counties at several")
+        print("  GENERALIZATION levels for different zoom scales. More vertices")
+        print("  means a more faithful outline - which is what you want on a")
+        print("  tactical map, at the cost of file size.\n")
+        probe_geoid = f"{sfp}001"
+        rows = []
+        for lid, grp, n, _ok in results:
+            try:
+                d = get(f"{a.service}/{lid}/query", {
+                    "where": f"GEOID='{probe_geoid}'",
+                    "outFields": "NAME", "returnGeometry": "true",
+                    "outSR": "4326", "f": "geojson"})
+                feats = d.get("features") or []
+                if not feats:
+                    print(f"  layer {lid:>3}  (no feature {probe_geoid})")
+                    continue
+                g = feats[0].get("geometry") or {}
+                c = g.get("coordinates") or []
+                if g.get("type") == "Polygon":
+                    rings = [r for r in c if r]
+                elif g.get("type") == "MultiPolygon":
+                    rings = [r for poly in c for r in poly if r]
+                else:
+                    rings = []
+                verts = sum(len(r) for r in rings)
+                nm = (feats[0].get("properties") or {}).get("NAME", "?")
+                rows.append((verts, lid, grp, len(rings), nm))
+            except Exception as e:                  # noqa: BLE001
+                print(f"  layer {lid:>3}  detail check failed: {e}")
+        for verts, lid, grp, nrings, nm in sorted(rows, reverse=True):
+            print(f"  layer {lid:>3}  {verts:>6} vertices  {nrings} ring(s)  "
+                  f"{nm}  (under {grp})")
+        if rows:
+            best = max(rows)
+            print(f"\n  MOST DETAILED: layer {best[1]} ({best[0]} vertices, "
+                  f"under {best[2]})")
+            print(f"  Use --endpoint {a.service}/{best[1]} for the sharpest outlines.")
         print()
 
     good = [r for r in results if r[3] and (EXPECTED.get(st) in (None, r[2]))]

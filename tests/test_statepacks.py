@@ -406,15 +406,47 @@ def test_acs_degrades_instead_of_killing_the_pack(monkeypatch):
         assert any("unexpected shape" in m or "unavailable" in m for m in msgs)
 
 
-def test_vintage_comes_from_the_service_not_a_constant(monkeypatch):
+def test_vintage_is_the_layers_own_group_not_a_guess(monkeypatch):
+    """TIGERweb stacks vintages as GROUP layers - "Census 2020", "ACS 2025" -
+    with the current one at top level. The vintage is that group's name, which
+    the service states, rather than a year scraped out of prose."""
+    tree = {"layers": [
+        {"id": 0, "name": "States"},
+        {"id": 1, "name": "Counties"},                       # top level = Current
+        {"id": 53, "name": "Census 2020", "subLayerIds": [55]},
+        {"id": 55, "name": "Counties", "parentLayerId": 53},
+    ]}
+    monkeypatch.setattr(bcp, "get_json", lambda url, params=None, **kw: tree)
+    assert bcp.service_vintage("http://e/MapServer/55", log=lambda *a: None) == "Census 2020"
+    assert bcp.service_vintage("http://e/MapServer/1", log=lambda *a: None) == "Current"
+
+    # a flat service with no groups falls back to a year in its own metadata
     monkeypatch.setattr(bcp, "get_json", lambda url, params=None, **kw:
-                        {"name": "TIGERweb/State_County", "description": "TIGER 2025 current"})
-    assert bcp.service_vintage("http://e/1", log=lambda *a: None) == "2025"
+                        {"layers": [], "description": "TIGER 2025 edition"})
+    assert bcp.service_vintage("http://e/MapServer/0", log=lambda *a: None) == "2025"
 
     def boom(*a, **k):
         raise RuntimeError("down")
     monkeypatch.setattr(bcp, "get_json", boom)
     assert bcp.service_vintage("http://e/1", log=lambda *a: None) == bcp.TIGER_VINTAGE_UNKNOWN
+
+
+def test_a_vintage_with_no_year_still_dates_the_filename(monkeypatch, tmp_path):
+    """"Current" ages the moment it is written, so the build date goes in the
+    name too - a pack must be datable from its filename alone."""
+    monkeypatch.setattr(bcp, "fetch_counties",
+                        lambda sfp, ep=None, alts=None, log=print:
+                        (_fake_counties(1), "http://e/1", "Current"))
+    monkeypatch.setattr(bcp, "fetch_acs", lambda sfp, year=2023, log=print: {})
+    r = bcp.build_state("MN", str(tmp_path), log=lambda *a: None, today="2026-09-14")
+    assert os.path.basename(r["path"]) == "MN_Counties_Current_2026_09_14.kmz"
+
+    # one that already names a year needs no date appended
+    monkeypatch.setattr(bcp, "fetch_counties",
+                        lambda sfp, ep=None, alts=None, log=print:
+                        (_fake_counties(1), "http://e/55", "Census 2020"))
+    r2 = bcp.build_state("MN", str(tmp_path), log=lambda *a: None, today="2026-09-14")
+    assert os.path.basename(r2["path"]) == "MN_Counties_Census_2020.kmz"
 
 
 def test_unknown_vintage_is_never_shown_as_a_year(monkeypatch, tmp_path):
