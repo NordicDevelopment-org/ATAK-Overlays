@@ -162,6 +162,20 @@ class Sourced:
 # --------------------------------------------------------------------------
 # HTTP. Retries with backoff; never silently returns a partial body.
 # --------------------------------------------------------------------------
+_SECRET_PARAM = re.compile(r"([?&](?:key|api_key|token)=)[^&\s]+", re.I)
+
+
+def redact(text):
+    """Strip API keys out of anything that might be printed, logged or pasted.
+
+    A failed request used to raise with the full URL in the message, and the
+    diagnostics print every URL they try - so a key in a query string ends up in
+    console output that people copy into chats and bug reports. The key is the
+    one part of a URL that must never travel with it.
+    """
+    return _SECRET_PARAM.sub(r"\1<redacted>", str(text))
+
+
 def http_get(url, params=None, tries=4, timeout=120):
     if params:
         url = url + ("&" if "?" in url else "?") + urlencode(params)
@@ -174,7 +188,7 @@ def http_get(url, params=None, tries=4, timeout=120):
             last = e
             if i < tries - 1:
                 time.sleep(1.5 * (i + 1))
-    raise RuntimeError(f"GET failed after {tries} tries: {url}\n  {last}")
+    raise RuntimeError(f"GET failed after {tries} tries: {redact(url)}\n  {redact(last)}")
 
 
 def get_json(url, params=None, **kw):
@@ -345,7 +359,7 @@ def fetch_counties(state_fips, endpoint=TIGERWEB, alternates=None, log=print):
                 if not batch or not more:
                     break
                 if guard > 20:      # a server ignoring resultOffset would loop forever
-                    log(f"    [!] {url} kept reporting more results after "
+                    log(f"    [!] {redact(url)} kept reporting more results after "
                         f"{len(feats)} features; stopping")
                     break
                 offset += len(batch)
@@ -359,7 +373,7 @@ def fetch_counties(state_fips, endpoint=TIGERWEB, alternates=None, log=print):
                     if (county_geoid(f.get("properties")) or "").startswith(state_fips)]
             dropped = len(feats) - len(kept)
             if dropped:
-                log(f"    [!] {url} returned {dropped} feature(s) that are not "
+                log(f"    [!] {redact(url)} returned {dropped} feature(s) that are not "
                     f"counties of state {state_fips} - the filter was not "
                     f"honoured; they were dropped")
             if kept:
@@ -369,7 +383,7 @@ def fetch_counties(state_fips, endpoint=TIGERWEB, alternates=None, log=print):
             last_err = f"0 counties for state {state_fips} (of {len(feats)} returned)"
         except Exception as e:                      # noqa: BLE001 - try the next one
             last_err = e
-            log(f"    [!] {url} -> {e}")
+            log(f"    [!] {redact(url)} -> {redact(e)}")
     raise RuntimeError(f"no county endpoint answered for state {state_fips}: {last_err}")
 
 
@@ -398,7 +412,7 @@ def fetch_acs(state_fips, year=ACS_YEAR, log=print, key=None):
     try:
         raw = http_get(url, params).decode("utf-8", "replace")
     except Exception as e:                          # noqa: BLE001
-        log(f"    [!] ACS {year} unavailable ({e}); population/housing omitted")
+        log(f"    [!] ACS {year} unavailable ({redact(e)}); population/housing omitted")
         return {}
 
     # The API answers a bad or missing key with HTTP 200 and an HTML page, so a

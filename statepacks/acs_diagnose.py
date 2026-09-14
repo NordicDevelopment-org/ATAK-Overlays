@@ -23,6 +23,7 @@ USAGE
 """
 import argparse
 import json
+import re
 import ssl
 import sys
 import urllib.error
@@ -38,10 +39,18 @@ STATE_FIPS = {"MN": "27", "WI": "55", "IA": "19", "TX": "48", "CA": "06",
               "ND": "38", "SD": "46", "MI": "26", "IL": "17"}
 
 
+_SECRET_PARAM = re.compile(r"([?&](?:key|api_key|token)=)[^&\s]+", re.I)
+
+
+def redact(text):
+    """Never print a key. This script exists to have its output pasted back."""
+    return _SECRET_PARAM.sub(r"\1<redacted>", str(text))
+
+
 def attempt(label, url, timeout=45):
     """Fetch and report what really came back, without assuming it is JSON."""
     print(f"  {label}")
-    print(f"    {url}")
+    print(f"    {redact(url)}")
     try:
         req = urllib.request.Request(url, headers=UA)
         with urllib.request.urlopen(req, timeout=timeout, context=CTX) as r:
@@ -54,7 +63,7 @@ def attempt(label, url, timeout=45):
         print(f"    body[:300]: {body[:300]!r}")
         return None
     except Exception as e:                          # noqa: BLE001
-        print(f"    FAILED: {e}")
+        print(f"    FAILED: {redact(e)}")
         return None
 
     print(f"    HTTP {status}  {ctype}  {len(body)} bytes")

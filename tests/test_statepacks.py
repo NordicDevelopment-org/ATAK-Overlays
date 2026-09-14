@@ -710,3 +710,63 @@ def test_key_flows_from_build_state_into_the_popup(monkeypatch, tmp_path):
     kml = _doc(tmp_path / "MN_Counties_Current_2026_09_14.kmz")
     assert "15,900  [ACS 5-year 2023]" in kml
     assert "11,000  [ACS 5-year 2023]" in kml
+
+
+# --------------------------------------------------------------------------
+# A key must never reach console output. These scripts are written to have
+# their output pasted into chats and bug reports.
+# --------------------------------------------------------------------------
+# A FAKE key shaped like a real one. Never put a live credential in a test.
+SECRET = "deadbeefcafe0000deadbeefcafe0000deadbeef"
+
+
+def test_redact_strips_keys_from_urls():
+    u = f"https://api.census.gov/data/2023/acs/acs5?get=NAME&key={SECRET}"
+    assert SECRET not in bcp.redact(u)
+    assert "key=<redacted>" in bcp.redact(u)
+    # mid-query, and other secret-ish names
+    assert SECRET not in bcp.redact(f"http://x/y?a=1&key={SECRET}&b=2")
+    assert "b=2" in bcp.redact(f"http://x/y?a=1&key={SECRET}&b=2")
+    assert SECRET not in bcp.redact(f"http://x?api_key={SECRET}")
+    assert SECRET not in bcp.redact(f"http://x?token={SECRET}")
+    # leaves ordinary URLs alone
+    plain = "https://tigerweb.geo.census.gov/x/MapServer/1/query?where=STATE%3D%2727%27"
+    assert bcp.redact(plain) == plain
+
+
+def test_a_failed_acs_request_does_not_print_the_key(monkeypatch):
+    """http_get raises with the URL in the message, and the URL carries the key."""
+    monkeypatch.setenv("CENSUS_API_KEY", SECRET)
+
+    def boom(url, params=None, **kw):
+        # mimic the real http_get: params are appended, then the URL is raised
+        import urllib.parse
+        full = url + "?" + urllib.parse.urlencode(params or {})
+        raise RuntimeError(f"GET failed after 4 tries: {bcp.redact(full)}")
+
+    monkeypatch.setattr(bcp, "http_get", boom)
+    msgs = []
+    assert bcp.fetch_acs("27", 2023, log=msgs.append) == {}
+    blob = "\n".join(msgs)
+    assert SECRET not in blob, "the API key leaked into log output"
+    assert "unavailable" in blob
+
+
+def test_real_http_get_redacts_before_raising(monkeypatch):
+    """Drive the actual failure path, not a stand-in."""
+    import urllib.error
+
+    def always_fail(req, timeout=None, context=None):
+        raise urllib.error.URLError("boom")
+
+    monkeypatch.setattr(bcp, "urlopen", always_fail, raising=False)
+    monkeypatch.setattr("urllib.request.urlopen", always_fail)
+    monkeypatch.setattr(bcp.time, "sleep", lambda *_a: None, raising=False)
+    try:
+        bcp.http_get("https://api.census.gov/data/2023/acs/acs5",
+                     {"get": "NAME", "key": SECRET}, tries=1)
+    except RuntimeError as e:
+        assert SECRET not in str(e), "the API key leaked into the exception"
+        assert "key=<redacted>" in str(e)
+    else:
+        pytest.fail("expected the request to fail")
