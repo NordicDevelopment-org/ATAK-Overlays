@@ -345,6 +345,12 @@ def main(argv=None):
                     help="auto tries OSM first (the only reachable source with "
                          "phone numbers), then USGS for names only. hifld/usgs/osm "
                          "force one.")
+    ap.add_argument("--allow-partial", action="store_true",
+                    help="accept an incomplete OSM result when some tiles fail. "
+                         "Off by default: a partial set leaves some counties "
+                         "empty for no reason the pack can show.")
+    ap.add_argument("--osm-timeout", type=int, default=90,
+                    help="per-tile Overpass timeout in seconds (default 90)")
     ap.add_argument("--raw", action="store_true",
                     help="with --show, print the server's response for one record "
                          "exactly as it arrives, before any field mapping")
@@ -693,12 +699,22 @@ def usgs_vintage(records):
 # row records that it came from OSM and when it was fetched.
 # ---------------------------------------------------------------------------
 OSM = SOURCES[2]
+# overpass.osm.jp is deliberately absent: it serves a certificate that is not
+# valid for its own hostname, so every request there fails TLS verification.
+# Verified on-device 2026-09-14. Keeping it only wastes a retry.
 OVERPASS_MIRRORS = [
     "https://overpass-api.de/api/interpreter",
     "https://overpass.kumi.systems/api/interpreter",
-    "https://overpass.osm.jp/api/interpreter",
     "https://overpass.private.coffee/api/interpreter",
 ]
+# A whole state in one query is what the public mirrors time out on - the same
+# query returned 511 features when a mirror was not busy, so it is load, not an
+# impossible request. Tiling makes each request small enough to get served, and
+# a tile that succeeds is CACHED, so a retry only refetches what actually failed
+# instead of starting over.
+OSM_TILE_COLS = 3
+OSM_TILE_ROWS = 3
+CACHE_DIR = os.path.join(os.path.expanduser("~"), ".cache", "atak-statepacks")
 
 # ISO 3166-2 subdivision codes are what Overpass indexes US states by.
 # A bbox query, NOT an area lookup. `area["ISO3166-2"=...]` makes Overpass
@@ -735,42 +751,118 @@ def bbox_of_shapes(shapes, pad=0.02):
     return (min(xs) - pad, min(ys) - pad, max(xs) + pad, max(ys) + pad)
 
 
-def fetch_osm(state_abbr, mirrors=None, log=print, bbox=None, timeout=180):
-    """[{name, phone, address, city, admintype, lon, lat}] inside `bbox`.
+def tile_bbox(bbox, cols=OSM_TILE_COLS, rows=OSM_TILE_ROWS):
+    """Split (w, s, e, n) into cols x rows boxes, left-to-right, bottom-to-top."""
+    w, s_, e, n = bbox
+    dx = (e - w) / cols
+    dy = (n - s_) / rows
+    return [(w + i * dx, s_ + j * dy, w + (i + 1) * dx, s_ + (j + 1) * dy)
+            for j in range(rows) for i in range(cols)]
 
-    `out center tags` gives a single representative coordinate for ways and
-    relations as well as nodes, so a police station mapped as a building
-    footprint still lands somewhere.
+
+def _tile_cache_path(tile):
+    key = "_".join(f"{v:.4f}" for v in tile).replace("-", "m").replace(".", "p")
+    return os.path.join(CACHE_DIR, f"osm_police_{key}.json")
+
+
+def _overpass_tile(tile, mirrors, timeout, attempts, log):
+    """One tile, cached on disk. Returns its raw elements.
+
+    A tile that has already been fetched is not fetched again: the public
+    mirrors time out under load, and without a cache every retry throws away
+    the tiles that did work.
     """
     import urllib.parse
     import urllib.request
-    if bbox is None:
-        bbox = bbox_of_shapes(county_shapes(STATE_FIPS[state_abbr.upper()], log=log))
-    w, s_, e, n = bbox
+
+    path = _tile_cache_path(tile)
+    if os.path.exists(path):
+        try:
+            with open(path, encoding="utf-8") as fh:
+                return json.load(fh), True
+        except (OSError, ValueError):
+            pass                         # a corrupt cache file just gets refetched
+
+    w, s_, e, n = tile
     q = OSM_QUERY.format(timeout=timeout, s=s_, w=w, n=n, e=e)
     last = None
-    for url in (mirrors or OVERPASS_MIRRORS):
-        try:
-            data = urllib.parse.urlencode({"data": q}).encode()
-            req = urllib.request.Request(url, data=data, headers=UA)
-            with urllib.request.urlopen(req, timeout=timeout + 30, context=SSL_CTX) as r:
-                doc = json.loads(r.read().decode("utf-8", "replace"))
-            log(f"    {url.split('/')[2]} answered")
-            break
-        except Exception as e:                      # noqa: BLE001
-            last = e
-            log(f"    [!] {url.split('/')[2]} -> {redact_err(e)}")
-    else:
-        raise RuntimeError(
-            f"no Overpass mirror answered: {last}. The public mirrors rate-limit "
-            f"and time out under load - this is usually worth retrying in a few "
-            f"minutes rather than a permanent failure.")
+    for attempt in range(attempts):
+        for url in mirrors:
+            try:
+                data = urllib.parse.urlencode({"data": q}).encode()
+                req = urllib.request.Request(url, data=data, headers=UA)
+                with urllib.request.urlopen(req, timeout=timeout + 30,
+                                            context=SSL_CTX) as r:
+                    doc = json.loads(r.read().decode("utf-8", "replace"))
+                els = doc.get("elements") or []
+                os.makedirs(CACHE_DIR, exist_ok=True)
+                with open(path, "w", encoding="utf-8") as fh:
+                    json.dump(els, fh)
+                return els, False
+            except Exception as ex:                 # noqa: BLE001
+                last = ex
+        if attempt < attempts - 1:
+            wait = 5 * (attempt + 1)
+            log(f"      all mirrors busy; waiting {wait}s before retry "
+                f"{attempt + 2}/{attempts}")
+            time.sleep(wait)
+    raise RuntimeError(str(last))
 
-    out = []
-    for el in doc.get("elements") or []:
+
+def fetch_osm(state_abbr, mirrors=None, log=print, bbox=None, timeout=90,
+              attempts=3, allow_partial=False):
+    """[{name, phone, address, city, admintype, lon, lat}] inside `bbox`.
+
+    Queried as a grid of tiles rather than one statewide request, because the
+    public mirrors return 504 for the whole-state box under load. Successful
+    tiles are cached, so re-running after a failure only refetches the tiles
+    that failed.
+
+    If any tile cannot be fetched, this RAISES rather than returning what it
+    has: a partial set would put a sheriff in some counties and none in others,
+    with nothing in the pack to say which. Pass allow_partial=True to accept an
+    incomplete result knowingly.
+    """
+    if bbox is None:
+        bbox = bbox_of_shapes(county_shapes(STATE_FIPS[state_abbr.upper()], log=log))
+    mirrors = mirrors or OVERPASS_MIRRORS
+    tiles = tile_bbox(bbox)
+    elements, failed, cached = [], [], 0
+    for i, tile in enumerate(tiles, 1):
+        try:
+            els, from_cache = _overpass_tile(tile, mirrors, timeout, attempts, log)
+            elements.extend(els)
+            cached += 1 if from_cache else 0
+            log(f"    tile {i}/{len(tiles)}: {len(els)} feature(s)"
+                f"{' (cached)' if from_cache else ''}")
+        except Exception as ex:                     # noqa: BLE001
+            failed.append((i, tile, ex))
+            log(f"    tile {i}/{len(tiles)}: FAILED - {redact_err(ex)}")
+
+    if failed:
+        msg = (f"{len(failed)} of {len(tiles)} tiles failed. "
+               f"{len(tiles) - len(failed)} succeeded and are CACHED, so running "
+               f"this again will only refetch the failures - the public mirrors "
+               f"are rate-limited, not broken. Wait a minute and retry.")
+        if not allow_partial:
+            raise RuntimeError(msg + " Use --allow-partial to accept an "
+                                     "incomplete result anyway.")
+        log(f"    [!] {msg}")
+        log(f"    [!] PROCEEDING WITH A PARTIAL RESULT - some counties will have "
+            f"no agency purely because their tile failed, not because none exists.")
+
+    if cached:
+        log(f"    {cached} of {len(tiles)} tiles came from the local cache")
+
+    # Tiles overlap at their edges and a way can be returned by two of them.
+    seen, out = set(), []
+    for el in elements:
+        key = (el.get("type"), el.get("id"))
+        if key in seen:
+            continue
+        seen.add(key)
         t = el.get("tags") or {}
-        lon = el.get("lon")
-        lat = el.get("lat")
+        lon, lat = el.get("lon"), el.get("lat")
         if lon is None or lat is None:
             c = el.get("center") or {}
             lon, lat = c.get("lon"), c.get("lat")
@@ -865,7 +957,8 @@ def today_iso():
 def _fetch_raw(state_abbr, use_osm, use_usgs, args, layer_id):
     """Whichever source is selected, in one place, returning one record shape."""
     if use_osm:
-        return fetch_osm(state_abbr)
+        return fetch_osm(state_abbr, allow_partial=args.allow_partial,
+                         timeout=args.osm_timeout)
     if use_usgs:
         return fetch_usgs(state_abbr, args.usgs_layer)
     return fetch_state(STATE_FIPS[state_abbr], layer_id, args.endpoint)

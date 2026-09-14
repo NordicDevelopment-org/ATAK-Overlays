@@ -623,7 +623,7 @@ def test_auto_prefers_osm_because_it_is_the_only_source_with_phone_numbers(
     monkeypatch.setattr(sle, "CSV_PATH", str(tmp_path / "le.csv"))
     monkeypatch.setattr(sle, "fetch_usgs",
                         lambda *a, **k: pytest.fail("USGS used when OSM was available"))
-    monkeypatch.setattr(sle, "fetch_osm", lambda st, mirrors=None, log=print: [
+    monkeypatch.setattr(sle, "fetch_osm", lambda st, mirrors=None, log=print, **kw: [
         {"name": "Chisago County Sheriff", "phone": "651-257-4100", "address": "1 Main",
          "city": "Center City", "admintype": "county", "loaddate": "",
          "lon": 1.0, "lat": 1.0},
@@ -647,41 +647,21 @@ def test_auto_prefers_osm_because_it_is_the_only_source_with_phone_numbers(
     assert "community-maintained" in out
 
 
-def test_osm_reads_both_phone_spellings_and_a_way_centre(monkeypatch):
+def test_osm_reads_both_phone_spellings_and_a_way_centre(monkeypatch, tmp_path):
     """OSM uses `phone` and `contact:phone` interchangeably, and a station
     mapped as a building has no lat/lon of its own - only `center`."""
-    import json as _json
-    captured = {}
-
-    class FakeResp:
-        def __init__(self, payload):
-            self._p = _json.dumps(payload).encode()
-        def read(self):
-            return self._p
-        def __enter__(self):
-            return self
-        def __exit__(self, *a):
-            return False
-
-    payload = {"elements": [
-        {"type": "node", "lat": 45.5, "lon": -92.8,
+    monkeypatch.setattr(sle, "CACHE_DIR", str(tmp_path))
+    els = [
+        {"type": "node", "id": 1, "lat": 45.5, "lon": -92.8,
          "tags": {"name": "A PD", "phone": "111"}},
-        {"type": "way", "center": {"lat": 45.6, "lon": -92.9},
+        {"type": "way", "id": 2, "center": {"lat": 45.6, "lon": -92.9},
          "tags": {"name": "B Sheriff", "contact:phone": "222",
                   "addr:housenumber": "12", "addr:street": "Main St",
                   "addr:city": "Town", "operator:type": "county"}},
-        {"type": "way", "tags": {"name": "No Geometry"}},      # dropped
-    ]}
-
-    def fake_urlopen(req, timeout=None, context=None):
-        captured["url"] = req.full_url
-        captured["body"] = req.data.decode()
-        return FakeResp(payload)
-
-    monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
-    # an explicit bbox, so nothing reaches out for county shapes
-    got = sle.fetch_osm("MN", log=lambda *a: None,
-                        bbox=(-97.3, 43.4, -89.4, 49.4))
+        {"type": "way", "id": 3, "tags": {"name": "No Geometry"}},   # dropped
+    ]
+    monkeypatch.setattr(sle, "_overpass_tile", lambda tile, m, t, a, log: (els, False))
+    got = sle.fetch_osm("MN", log=lambda *a: None, bbox=(-97.3, 43.4, -89.4, 49.4))
 
     assert [r["name"] for r in got] == ["A PD", "B Sheriff"]
     assert got[0]["phone"] == "111"
@@ -689,11 +669,34 @@ def test_osm_reads_both_phone_spellings_and_a_way_centre(monkeypatch):
     assert (got[1]["lon"], got[1]["lat"]) == (-92.9, 45.6)   # way centre used
     assert got[1]["address"] == "12 Main St"
     assert got[1]["admintype"] == "county"
+
+
+def test_the_overpass_query_is_a_bbox_not_an_area_lookup(monkeypatch, tmp_path):
+    """area["ISO3166-2"=...] makes the server resolve the state boundary first,
+    and that is what every public mirror answered with 504."""
+    import json as _json
     import urllib.parse
-    body = urllib.parse.unquote_plus(captured["body"])
+    monkeypatch.setattr(sle, "CACHE_DIR", str(tmp_path))
+    captured = {}
+
+    class FakeResp:
+        def read(self):
+            return _json.dumps({"elements": []}).encode()
+        def __enter__(self):
+            return self
+        def __exit__(self, *a):
+            return False
+
+    def fake_urlopen(req, timeout=None, context=None):
+        captured["body"] = urllib.parse.unquote_plus(req.data.decode())
+        return FakeResp()
+
+    monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
+    sle._overpass_tile((-97.3, 43.4, -89.4, 49.4), sle.OVERPASS_MIRRORS, 90, 1,
+                       lambda *a: None)
+    body = captured["body"]
     assert 'amenity"="police' in body
-    assert "out center tags" in body                   # centres for ways/relations
-    # a bbox, NOT an area lookup - the area form 504'd on every public mirror
+    assert "out center tags" in body
     assert "area[" not in body
     assert "(43.4000,-97.3000,49.4000,-89.4000)" in body   # s,w,n,e order
 
@@ -1052,7 +1055,7 @@ def test_records_that_all_fail_the_filter_are_reported_not_silently_zero(
     def dead(*a, **k):
         raise RuntimeError("gone")
     monkeypatch.setattr(sle, "resolve_layer", dead)
-    monkeypatch.setattr(sle, "fetch_osm", lambda st, mirrors=None, log=print: [
+    monkeypatch.setattr(sle, "fetch_osm", lambda st, mirrors=None, log=print, **kw: [
         {"name": "MINNEAPOLIS POLICE DEPT", "phone": "", "address": "", "city": "",
          "admintype": "Local", "loaddate": "", "lon": 1.0, "lat": 1.0},
         {"name": "ST PAUL POLICE", "phone": "", "address": "", "city": "",
@@ -1072,7 +1075,7 @@ def test_show_dumps_records_and_reports_what_the_filter_would_match(
         monkeypatch, capsys):
     monkeypatch.setattr(sle, "resolve_layer",
                         lambda *a, **k: (_ for _ in ()).throw(RuntimeError("gone")))
-    monkeypatch.setattr(sle, "fetch_osm", lambda st, mirrors=None, log=print: [
+    monkeypatch.setattr(sle, "fetch_osm", lambda st, mirrors=None, log=print, **kw: [
         {"name": "Chisago County Sheriff", "phone": "651-1", "address": "1 Main",
          "city": "X", "admintype": "County", "loaddate": "", "lon": 1.0, "lat": 1.0},
         {"name": "Center City Police", "phone": "", "address": "2 Main",
@@ -1178,3 +1181,91 @@ def test_a_value_containing_markup_cannot_escape_its_bold_run():
         "title": "T", "boundary_source": "s", "boundary_url": "u",
         "acs_label": "a", "tiger_vintage": "2024", "built": "b"})
     minidom.parseString(kml)
+
+
+# --------------------------------------------------------------------------
+# Overpass reliability. The public mirrors 504 on a statewide box under load -
+# the same query returned 511 features when a mirror was idle, so it is
+# contention, not an impossible request.
+# --------------------------------------------------------------------------
+def test_tile_bbox_covers_the_whole_box_without_gaps():
+    tiles = sle.tile_bbox((0.0, 0.0, 9.0, 9.0), cols=3, rows=3)
+    assert len(tiles) == 9
+    assert min(t[0] for t in tiles) == 0.0 and max(t[2] for t in tiles) == 9.0
+    assert min(t[1] for t in tiles) == 0.0 and max(t[3] for t in tiles) == 9.0
+    assert all(t[2] > t[0] and t[3] > t[1] for t in tiles)
+    assert abs(sum((t[2] - t[0]) * (t[3] - t[1]) for t in tiles) - 81.0) < 1e-9
+
+
+def test_a_failed_tile_refuses_to_pass_off_a_partial_answer(monkeypatch, tmp_path):
+    """Some counties populated and others empty, with nothing in the pack to say
+    which is which, is worse than a clean failure."""
+    monkeypatch.setattr(sle, "CACHE_DIR", str(tmp_path))
+    calls = {"n": 0}
+
+    def flaky(tile, mirrors, timeout, attempts, log):
+        calls["n"] += 1
+        if calls["n"] == 5:
+            raise RuntimeError("HTTP Error 504: Gateway Timeout")
+        return ([{"type": "node", "id": calls["n"], "lat": 1.0, "lon": 1.0,
+                  "tags": {"name": f"PD {calls['n']}"}}], False)
+
+    monkeypatch.setattr(sle, "_overpass_tile", flaky)
+    with pytest.raises(RuntimeError, match="tiles failed"):
+        sle.fetch_osm("MN", bbox=(0.0, 0.0, 9.0, 9.0), log=lambda *a: None)
+
+    calls["n"] = 0
+    got = sle.fetch_osm("MN", bbox=(0.0, 0.0, 9.0, 9.0), log=lambda *a: None,
+                        allow_partial=True)
+    assert len(got) == 8                            # 9 tiles, 1 failed
+
+
+def test_successful_tiles_are_cached_so_a_retry_only_refetches_failures(
+        monkeypatch, tmp_path):
+    """Without a cache, every retry throws away the tiles that did work - which
+    is the whole problem when the mirrors are rate-limiting."""
+    monkeypatch.setattr(sle, "CACHE_DIR", str(tmp_path))
+    fetched = []
+
+    class FakeResp:
+        def __init__(self, payload):
+            self._p = json.dumps(payload).encode()
+        def read(self):
+            return self._p
+        def __enter__(self):
+            return self
+        def __exit__(self, *a):
+            return False
+
+    def fake_urlopen(req, timeout=None, context=None):
+        fetched.append(req.full_url)
+        return FakeResp({"elements": [
+            {"type": "node", "id": len(fetched), "lat": 1.0, "lon": 1.0,
+             "tags": {"name": "PD"}}]})
+
+    monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
+    sle.fetch_osm("MN", bbox=(0.0, 0.0, 3.0, 3.0), log=lambda *a: None)
+    first = len(fetched)
+    assert first == 9
+
+    sle.fetch_osm("MN", bbox=(0.0, 0.0, 3.0, 3.0), log=lambda *a: None)
+    assert len(fetched) == first                    # nothing refetched
+
+
+def test_a_feature_on_a_tile_boundary_is_not_counted_twice(monkeypatch, tmp_path):
+    """Tiles share edges, so the same way comes back from two of them."""
+    monkeypatch.setattr(sle, "CACHE_DIR", str(tmp_path))
+    dup = {"type": "way", "id": 42, "center": {"lat": 1.0, "lon": 1.0},
+           "tags": {"name": "Border Sheriff", "phone": "111"}}
+    monkeypatch.setattr(sle, "_overpass_tile",
+                        lambda tile, m, t, a, log: ([dup], False))
+    got = sle.fetch_osm("MN", bbox=(0.0, 0.0, 9.0, 9.0), log=lambda *a: None)
+    assert len(got) == 1                            # nine tiles, one feature
+    assert got[0]["phone"] == "111"
+
+
+def test_the_misconfigured_mirror_is_not_retried():
+    """overpass.osm.jp serves a certificate invalid for its own hostname, so
+    every request there fails TLS. Keeping it only burns a retry."""
+    assert not any("osm.jp" in m for m in sle.OVERPASS_MIRRORS)
+    assert len(sle.OVERPASS_MIRRORS) >= 2
