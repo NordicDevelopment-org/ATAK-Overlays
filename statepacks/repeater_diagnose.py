@@ -159,6 +159,18 @@ WANTED = [
 ]
 
 
+# One dense box per state, for the --deep spot check. A key-regex query cannot
+# use the tag index, so asking about a whole state takes an hour; asking about
+# the metro area where mappers are most active answers "is this tagging used
+# here at all" in minutes. Absence over the densest part of a state is the
+# strongest cheap evidence there is - it is not proof of absence statewide, and
+# the report says so rather than implying otherwise.
+METRO_BOX = {
+    "MN": "-93.55,44.75,-92.95,45.15",      # Twin Cities
+    "WI": "-88.15,42.90,-87.80,43.15",      # Milwaukee
+}
+
+
 def keep_everything(tags, lon, lat, fetched, el):
     """Diagnostic parse: drop nothing, interpret nothing, convert nothing.
 
@@ -247,6 +259,12 @@ def main(argv=None):
                          "nobody predicted. MUCH slower - a key regex cannot "
                          "use the tag index. Its own cache namespace, so it "
                          "neither reads nor poisons the normal run's tiles.")
+    ap.add_argument("--bbox", metavar="W,S,E,N",
+                    help="ask about this box instead of the whole state. "
+                         "Pairs with --deep: a key-regex query over one dense "
+                         "metro area answers 'is this tagging used here at "
+                         "all' in minutes, where the statewide version takes "
+                         "an hour against mirrors that are already refusing.")
     ap.add_argument("--allow-partial", action="store_true",
                     help="report on what came back even if some tiles failed. "
                          "For a diagnostic this is usually what you want: a "
@@ -255,6 +273,14 @@ def main(argv=None):
     a = ap.parse_args(argv)
     state = a.state.strip().upper()
 
+    bbox = None
+    if a.bbox:
+        try:
+            bbox = tuple(float(x) for x in a.bbox.split(","))
+            if len(bbox) != 4:
+                raise ValueError("need four numbers")
+        except ValueError as ex:
+            raise SystemExit(f"--bbox wants W,S,E,N in degrees: {ex}")
     query = build_query(deep=a.deep)
     # The namespace is derived FROM the query, so editing the query can never
     # serve the old question's cached answers to the new one.
@@ -268,14 +294,17 @@ def main(argv=None):
     rows = sle.fetch_osm(
         state, log=print, timeout=a.osm_timeout, jobs=a.jobs,
         deadline_s=a.deadline, allow_partial=a.allow_partial,
-        query=query, prefix=prefix, parse=keep_everything)
+        bbox=bbox, query=query, prefix=prefix, parse=keep_everything)
 
     report(state, rows)
     if not a.deep and len(rows) < 5:
         print("  THIN. Before concluding OSM has nothing here, re-ask without")
-        print("  guessing at key names:")
-        print(f"      python3 repeater_diagnose.py --state {state} --deep "
-              f"--deadline 1800 --allow-partial")
+        print("  guessing at key names. Over ONE DENSE BOX first - a key regex")
+        print("  cannot use the tag index, so statewide is an hour and a metro")
+        print("  is minutes, and either one answers 'is this tagging used':")
+        print(f"      python3 repeater_diagnose.py --state {state} --deep \\")
+        print(f"          --bbox {METRO_BOX.get(state, 'W,S,E,N')} "
+              f"--deadline 900 --allow-partial")
         print("")
     if a.dump:
         with open(a.dump, "w", encoding="utf-8") as fh:

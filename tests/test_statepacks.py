@@ -3402,3 +3402,21 @@ def test_quick_mode_does_not_open_the_files(tmp_path):
     row = ainv.scan(str(tmp_path), deep=False)[0]
     assert row["bytes"] > 0
     assert row["placemarks"] is None       # not counted, not guessed at
+
+
+def test_the_deep_hint_names_a_real_box_for_the_state():
+    """The hint has to be paste-able. A placeholder would send someone to a
+    shell with 'W,S,E,N' in it."""
+    assert "MN" in rd.METRO_BOX
+    w, s, e, n = (float(x) for x in rd.METRO_BOX["MN"].split(","))
+    assert w < e and s < n
+    assert -97.3 < w < -89.4 and 43.4 < s < 49.4      # inside Minnesota
+
+
+def test_a_bbox_is_parsed_as_four_numbers_or_refused():
+    import subprocess
+    r = subprocess.run([sys.executable, os.path.join(SP, "repeater_diagnose.py"),
+                        "--state", "MN", "--bbox", "1,2,3"],
+                       capture_output=True, text=True)
+    assert r.returncode != 0
+    assert "W,S,E,N" in (r.stderr + r.stdout)
