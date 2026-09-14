@@ -4,7 +4,8 @@
 #   ./make-state-pack.sh MN                # fetch everything, build into ~/atak-packs
 #   ./make-state-pack.sh MN --install      # ...and install it, force-stopping ATAK
 #   ./make-state-pack.sh MN --skip-le      # skip the OpenStreetMap sheriff step
-#   ./make-state-pack.sh MN --gaps         # print the per-county gap report too
+#   ./make-state-pack.sh MN --gaps         # print the per-county gap report,
+#                                          # and keep the full list as JSON
 #
 # It runs the four steps that make a pack, in the order their data depends on:
 #
@@ -50,7 +51,7 @@ while [ $# -gt 0 ]; do
     --skip-le)     skip_le=1 ;;
     --skip-seats)  skip_seats=1 ;;
     --gaps)        gaps="--gaps" ;;
-    -h|--help)     sed -n '2,30p' "$0"; exit 0 ;;
+    -h|--help)     sed -n '2,33p' "$0"; exit 0 ;;
     -*)            die "unknown option: $1" ;;
     *)             [ -z "$state" ] || die "one state at a time, got '$state' and '$1'"
                    state="$1" ;;
@@ -112,11 +113,17 @@ fi
 if [ "$skip_le" -eq 0 ]; then
   banner "sheriff / primary LE for $state (OpenStreetMap)"
   say "      filter: /$MATCH/i"
+  # With --gaps, also keep the full unmatched list. The printed report samples
+  # 20 counties so it stays readable on a phone; on a state nobody has fetched
+  # before, the names it does not print are the evidence that decides the
+  # filter, and they are gone once the terminal scrolls.
+  dump=""
+  [ -n "$gaps" ] && dump="--gaps-dump $STAGE_DIR/${state}_le_gaps.json"
   # shellcheck disable=SC2086
   soft "sheriff / primary LE" \
-       "python3 $SP/seed_le_contacts.py --state $state --match '$MATCH'" \
+       "python3 $SP/seed_le_contacts.py --state $state --match '$MATCH' $gaps $dump" \
        python3 "$SP/seed_le_contacts.py" \
-       --state "$state" --match "$MATCH" $gaps
+       --state "$state" --match "$MATCH" $gaps $dump
 else
   banner "sheriff / primary LE - SKIPPED (--skip-le)"
 fi
