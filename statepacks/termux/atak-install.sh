@@ -82,6 +82,25 @@ for f in "${files[@]}"; do
               "$(basename "$old")" "(superseded, removed)"
             retired=$((retired+1))
           done < <(find "$ATAK_DIR/" -maxdepth 1 -type f -name "${family}__*.kmz" -print0)
+
+          # A pack built before the "__" convention has only one underscore, so
+          # it matches neither the retire glob above nor its own - nothing ever
+          # retires it, and ATAK draws the state twice with no sign why. That
+          # happened for real: MN_Counties_Current_2026_09_14.kmz sat alongside
+          # MN_Counties__Current_2026_09_14.kmz for a day. Deleting a file on a
+          # guess is not this script's call, so it says so and leaves it.
+          while IFS= read -r -d '' anc; do
+            ab="$(basename "$anc")"
+            [ "$ab" != "$base" ] || continue
+            case "$ab" in
+              *__*) continue ;;
+            esac
+            warn "  $ab"
+            warn "      looks like a pre-'__' edition of ${family}. It carries no"
+            warn "      version, so nothing will ever retire it and ATAK will draw"
+            warn "      this pack twice. Remove it when you have checked it:"
+            warn "        $HERE/atak-remove.sh '$ab'"
+          done < <(find "$ATAK_DIR/" -maxdepth 1 -type f -name "${family}_*.kmz" -print0)
         fi
         ;;
     esac

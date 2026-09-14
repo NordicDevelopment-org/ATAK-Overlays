@@ -97,6 +97,14 @@ MUTATIONS = {
          "            if False:\n"
          "                continue\n"
          "            for w in re.split"),
+        ("serve one query's cached tiles to a different query",
+         'return os.path.join(CACHE_DIR, f"osm_{prefix}_{key}.json")',
+         'return os.path.join(CACHE_DIR, f"osm_police_{key}.json")'),
+        ("ignore the caller's query and always ask about police",
+         "    q = (query or OSM_QUERY).format(timeout=timeout, s=s_, w=w, n=n, e=e)",
+         "    q = OSM_QUERY.format(timeout=timeout, s=s_, w=w, n=n, e=e)"),
+        ("drop the caller's parse and hand back police rows",
+         "        if parse is not None:", "        if False:"),
         ("unwire --gaps-dump",
          "                            dump=a.gaps_dump)", "                            dump=None)"),
     ],

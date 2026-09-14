@@ -2695,6 +2695,84 @@ def test_gaps_dump_reaches_report_gaps_from_the_command_line(monkeypatch,
     assert json.loads(dest.read_text())["state"] == "MN"
 
 
+# --- one cache, more than one question ---------------------------------------
+# Tiles are keyed by bounding box. A second pack type asking a DIFFERENT
+# question about the same box must not be served the first one's answer.
+
+def test_two_queries_over_the_same_box_do_not_share_a_cache_entry():
+    tile = (-93.0, 45.0, -92.0, 46.0)
+    assert sle._tile_cache_path(tile, "police") != \
+        sle._tile_cache_path(tile, "repeaters")
+
+
+def test_the_default_prefix_keeps_tiles_already_on_a_device_valid():
+    """Every tile cached before this change was written as osm_police_*."""
+    tile = (-93.0, 45.0, -92.0, 46.0)
+    assert os.path.basename(sle._tile_cache_path(tile)).startswith("osm_police_")
+
+
+def test_a_repeater_fetch_never_reads_a_police_tile(monkeypatch, tmp_path):
+    """The trap this guards: same box, different question, silently wrong pack."""
+    monkeypatch.setattr(sle, "CACHE_DIR", str(tmp_path))
+    tile = (0.0, 0.0, 1.0, 1.0)
+    police = [{"type": "node", "id": 1, "lon": 0.5, "lat": 0.5,
+               "tags": {"amenity": "police", "name": "Somewhere PD"}}]
+    sle._write_cache(sle._tile_cache_path(tile, "police"), police,
+                     sle.today_iso())
+    # asking as "police" is a cache hit; asking as "repeaters" must not be
+    assert sle._overpass_tile(tile, [], 30, 1, lambda *a: None,
+                              prefix="police")[1] is True
+    with pytest.raises(RuntimeError):          # no mirrors, so: a real fetch
+        sle._overpass_tile(tile, [], 30, 1, lambda *a: None, prefix="repeaters")
+
+
+def test_the_query_actually_reaches_the_request(monkeypatch, tmp_path):
+    monkeypatch.setattr(sle, "CACHE_DIR", str(tmp_path))
+    sent = []
+
+    def fake(req, timeout=None, context=None):
+        sent.append(req.data.decode() if req.data else req.full_url)
+        return FakeHTTP({"elements": []})
+
+    monkeypatch.setattr("urllib.request.urlopen", fake)
+    sle._overpass_tile((0.0, 0.0, 1.0, 1.0), ["https://a.invalid/i"], 30, 1,
+                       lambda *a: None, query=OSM_MARKER, prefix="marker")
+    assert sent and "MARKER_TAG_HERE" in sent[0], sent
+
+
+OSM_MARKER = """
+[out:json][timeout:{timeout}];
+nwr["MARKER_TAG_HERE"]({s:.4f},{w:.4f},{n:.4f},{e:.4f});
+out center tags;
+"""
+
+
+def test_parse_replaces_the_row_shape_and_can_drop_an_element(monkeypatch,
+                                                              tmp_path):
+    """A second pack type wants different fields off the same element, and the
+    de-duplication, ordering and per-tile date stamping are the shared part."""
+    monkeypatch.setattr(sle, "CACHE_DIR", str(tmp_path))
+    els = [{"type": "node", "id": 7, "lon": 0.5, "lat": 0.5,
+            "tags": {"name": "Keep", "frequency": "146.94"}},
+           {"type": "node", "id": 8, "lon": 0.6, "lat": 0.6,
+            "tags": {"name": "Drop"}}]
+    monkeypatch.setattr(sle, "_overpass_tile",
+                        lambda *a, **k: (els, False, "2026-09-14"))
+
+    def parse(tags, lon, lat, fetched, el):
+        if not tags.get("frequency"):
+            return None                       # dropped, not defaulted
+        return {"call": tags.get("name"), "freq_mhz": tags["frequency"],
+                "lon": lon, "lat": lat, "loaddate": fetched}
+
+    got = sle.fetch_osm("MN", bbox=(0.0, 0.0, 1.0, 1.0), log=lambda *a: None,
+                        parse=parse, prefix="repeaters")
+    assert len(got) == 1
+    assert got[0]["call"] == "Keep"
+    assert got[0]["freq_mhz"] == "146.94"     # a string, never a float
+    assert got[0]["loaddate"] == "2026-09-14"
+
+
 def test_the_socket_gets_more_time_than_the_server(monkeypatch, tmp_path):
     """Cutting the socket at exactly the server's own timeout would abandon a
     server that is about to answer - the slack is the point."""

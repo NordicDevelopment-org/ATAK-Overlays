@@ -1071,9 +1071,18 @@ def counties_in_tile(shapes, tile):
     return sorted(out)
 
 
-def _tile_cache_path(tile):
+def _tile_cache_path(tile, prefix="police"):
+    """Cache path for one tile OF ONE QUERY.
+
+    The query identity is part of the key, not decoration. These tiles are
+    keyed by bounding box, and a second pack type asking a different question
+    about the same box would otherwise be served the first one's answer - a
+    repeater fetch quietly reading police stations, with nothing to show for
+    it but a wrong pack. The prefix defaults to the original so every tile
+    already on a device stays valid.
+    """
     key = "_".join(f"{v:.4f}" for v in tile).replace("-", "m").replace(".", "p")
-    return os.path.join(CACHE_DIR, f"osm_police_{key}.json")
+    return os.path.join(CACHE_DIR, f"osm_{prefix}_{key}.json")
 
 
 class Deadline:
@@ -1243,7 +1252,7 @@ def _cache_read(path):
 
 def _overpass_tile(tile, mirrors, timeout, attempts, log, deadline=None,
                    locks=None, start=0, ttl_days=OSM_CACHE_TTL_DAYS,
-                   cooldowns=None):
+                   cooldowns=None, query=None, prefix="police"):
     """One tile. Returns (elements, came_from_cache, fetched_iso).
 
     A tile that has already been fetched is not fetched again: the public
@@ -1265,7 +1274,7 @@ def _overpass_tile(tile, mirrors, timeout, attempts, log, deadline=None,
     import urllib.parse
     import urllib.request
 
-    hit = _cache_read(_tile_cache_path(tile))
+    hit = _cache_read(_tile_cache_path(tile, prefix))
     if hit and _cache_fresh(hit[1], ttl_days):
         return hit[0], True, hit[1]
     if hit and not hit[1]:
@@ -1277,7 +1286,8 @@ def _overpass_tile(tile, mirrors, timeout, attempts, log, deadline=None,
     # under four keys instead of one. Without this the parent gets asked for
     # again on every run, and it is exactly the tile the mirrors would not
     # serve, so every run pays for it. Edge duplicates are dropped downstream.
-    quarters = [_cache_read(_tile_cache_path(x)) for x in split_tile(tile)]
+    quarters = [_cache_read(_tile_cache_path(x, prefix))
+                for x in split_tile(tile)]
     if all(quarters) and all(_cache_fresh(h[1], ttl_days) for h in quarters):
         els = [e for h in quarters for e in h[0]]
         dates = [h[1] for h in quarters if h[1]]
@@ -1286,7 +1296,7 @@ def _overpass_tile(tile, mirrors, timeout, attempts, log, deadline=None,
     if not mirrors:
         raise RuntimeError("no Overpass mirror to ask")
     w, s_, e, n = tile
-    q = OSM_QUERY.format(timeout=timeout, s=s_, w=w, n=n, e=e)
+    q = (query or OSM_QUERY).format(timeout=timeout, s=s_, w=w, n=n, e=e)
     order = list(mirrors)
     k = start % len(order)
     order = order[k:] + order[:k]
@@ -1395,7 +1405,8 @@ def _overpass_tile(tile, mirrors, timeout, attempts, log, deadline=None,
                     # blaming the wrong thing for it.
                     fetched = today_iso()
                     try:
-                        _write_cache(_tile_cache_path(tile), els, fetched)
+                        _write_cache(_tile_cache_path(tile, prefix), els,
+                                     fetched)
                     except OSError as ex:
                         log(f"      (fetched, but could not cache this tile: "
                             f"{redact_err(ex)})")
@@ -1455,7 +1466,7 @@ def _write_cache(path, els, fetched=None):
 
 
 def _run_tiles(items, mirrors, timeout, attempts, log, clock, jobs, locks,
-               cooldowns=None):
+               cooldowns=None, query=None, prefix="police"):
     """Fetch `items` ([(key, tile)]) concurrently. Returns (ok, bad).
 
     ok  = {key: (elements, from_cache, fetched_iso)}
@@ -1476,7 +1487,7 @@ def _run_tiles(items, mirrors, timeout, attempts, log, clock, jobs, locks,
     def work(i, key, tile):
         return _overpass_tile(tile, mirrors, timeout, attempts, say,
                               deadline=clock, locks=locks, start=i,
-                              cooldowns=cooldowns)
+                              cooldowns=cooldowns, query=query, prefix=prefix)
 
     pool = ThreadPoolExecutor(max_workers=max(1, jobs))
     try:
@@ -1513,7 +1524,8 @@ def _run_tiles(items, mirrors, timeout, attempts, log, clock, jobs, locks,
 def fetch_osm(state_abbr, mirrors=None, log=print, bbox=None,
               timeout=OSM_SERVER_TIMEOUT_S,
               attempts=1, allow_partial=False, deadline_s=OSM_DEADLINE_S,
-              jobs=OSM_JOBS, shapes=None, split=True, gaps_out=None):
+              jobs=OSM_JOBS, shapes=None, split=True, gaps_out=None,
+              query=None, prefix="police", parse=None):
     """[{name, phone, address, city, admintype, lon, lat}] inside `bbox`.
 
     Queried as a grid of tiles rather than one statewide request, because the
@@ -1553,7 +1565,7 @@ def fetch_osm(state_abbr, mirrors=None, log=print, bbox=None,
 
     items = [(f"tile {i}/{len(tiles)}", t) for i, t in enumerate(tiles, 1)]
     ok, bad = _run_tiles(items, mirrors, timeout, attempts, log, clock, jobs,
-                         locks, cooldowns)
+                         locks, cooldowns, query=query, prefix=prefix)
 
     # A tile the mirrors would not serve is retried SMALLER, not again. Only
     # real failures are split - running out of budget is not a tile the mirrors
@@ -1573,7 +1585,8 @@ def fetch_osm(state_abbr, mirrors=None, log=print, bbox=None,
         sub = [(f"{k} q{j}", q)
                for k, t in retry for j, q in enumerate(split_tile(t), 1)]
         sok, sbad = _run_tiles(sub, mirrors, timeout, attempts, log, clock,
-                               jobs, locks, cooldowns)
+                               jobs, locks, cooldowns, query=query,
+                               prefix=prefix)
         for k, _t in retry:
             quarters = [f"{k} q{j}" for j in range(1, 5)]
             if all(q in sok for q in quarters):
@@ -1666,6 +1679,15 @@ def fetch_osm(state_abbr, mirrors=None, log=print, bbox=None,
             c = el.get("center") or {}
             lon, lat = c.get("lon"), c.get("lat")
         if lon is None or lat is None:
+            continue
+        if parse is not None:
+            # A second pack type wants different fields off the same element.
+            # It gets the raw tags, the coordinates and this element's own tile
+            # date, and returns a row or None to drop it - the de-duplication,
+            # ordering and date stamping above are the parts worth sharing.
+            row = parse(t, float(lon), float(lat), fetched, el)
+            if row is not None:
+                out.append(row)
             continue
         street = " ".join(x for x in (t.get("addr:housenumber"), t.get("addr:street")) if x)
         out.append({
