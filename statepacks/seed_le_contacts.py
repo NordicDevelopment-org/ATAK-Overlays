@@ -912,6 +912,15 @@ OSM_TIMEOUTS_BEFORE_SPLIT = 2
 # served silently while every row it produced was stamped with today's date -
 # a fetch date invented for data that was not fetched today.
 OSM_CACHE_TTL_DAYS = 30
+# How long a mirror is left alone after it says 429. Overpass sends Retry-After
+# sometimes; when it does not, this is the fallback. A mirror that rate-limits
+# ONE tile is rate-limiting the whole run, so the cooldown is shared - without
+# it the other eight tiles queue up behind the same refusal.
+OSM_COOLDOWN_S = 20
+# Rate limiting is the one failure where WAITING is the right answer, so it
+# gets its own retry budget. Every other failure is retried by asking a
+# different mirror or a smaller box, neither of which helps here.
+OSM_RATE_LIMIT_PASSES = 3
 
 # ISO 3166-2 subdivision codes are what Overpass indexes US states by.
 # A bbox query, NOT an area lookup. `area["ISO3166-2"=...]` makes Overpass
@@ -1067,6 +1076,54 @@ class Deadline:
         return time.monotonic() - self.start
 
 
+class RateLimited(RuntimeError):
+    """A mirror told us to slow down (HTTP 429, or 509 on some instances).
+
+    Distinct from every other failure because the correct response is the
+    opposite one. Splitting the tile would turn one refused request into four
+    against a server that just said there were too many; asking another mirror
+    immediately is what got us rate-limited. The only thing that helps is
+    waiting, so this is never split and never counted as evidence about the
+    size of the box.
+    """
+
+    def __init__(self, msg, retry_after=None):
+        super().__init__(msg)
+        self.retry_after = retry_after
+
+
+def _retry_after(ex):
+    """The server's own Retry-After in seconds, or None.
+
+    Honoured when it is there rather than guessing a back-off over the top of
+    it - the server knows when it will serve us again and we do not.
+    """
+    hdrs = getattr(ex, "headers", None)
+    raw = None
+    if hdrs is not None:
+        try:
+            raw = hdrs.get("Retry-After")
+        except Exception:                           # noqa: BLE001
+            raw = None
+    if not raw:
+        return None
+    try:
+        return max(0, int(str(raw).strip()))
+    except ValueError:
+        return None                      # an HTTP-date form; not worth parsing
+
+
+def _as_rate_limit(ex):
+    """RateLimited when `ex` is a rate-limit refusal, else None."""
+    code = getattr(ex, "code", None)
+    # 429 is the standard one; some Overpass instances answer 509 Bandwidth
+    # Limit Exceeded instead. Both mean the same thing to us.
+    if code in (429, 509):
+        return RateLimited(f"HTTP {code}: {getattr(ex, 'reason', 'rate limited')}",
+                           retry_after=_retry_after(ex))
+    return None
+
+
 def _is_timeout(ex):
     """True when a request ran out of time, as opposed to being refused.
 
@@ -1163,7 +1220,8 @@ def _cache_read(path):
 
 
 def _overpass_tile(tile, mirrors, timeout, attempts, log, deadline=None,
-                   locks=None, start=0, ttl_days=OSM_CACHE_TTL_DAYS):
+                   locks=None, start=0, ttl_days=OSM_CACHE_TTL_DAYS,
+                   cooldowns=None):
     """One tile. Returns (elements, came_from_cache, fetched_iso).
 
     A tile that has already been fetched is not fetched again: the public
@@ -1177,6 +1235,10 @@ def _overpass_tile(tile, mirrors, timeout, attempts, log, deadline=None,
     first tried WITHOUT waiting; only if all of them are busy with our own
     other tiles does it wait for one. Reporting a tile as failed because we
     were busy ourselves would blame the mirrors for our own scheduling.
+
+    `cooldowns` is shared across tiles: a mirror that answers 429 is left alone
+    until its Retry-After (or OSM_COOLDOWN_S) has passed, so one tile's refusal
+    is not re-earned by the other eight.
     """
     import urllib.parse
     import urllib.request
@@ -1206,7 +1268,12 @@ def _overpass_tile(tile, mirrors, timeout, attempts, log, deadline=None,
     order = list(mirrors)
     k = start % len(order)
     order = order[k:] + order[:k]
-    state = {"last": None, "timeouts": 0}
+    state = {"last": None, "timeouts": 0, "limited": 0, "wait": 0}
+    cooldowns = {} if cooldowns is None else cooldowns
+
+    def cool(url):
+        """Seconds this mirror still wants to be left alone."""
+        return max(0.0, cooldowns.get(url, 0.0) - time.monotonic())
 
     def ask(url):
         """Returns elements, or None having recorded why not."""
@@ -1226,21 +1293,59 @@ def _overpass_tile(tile, mirrors, timeout, attempts, log, deadline=None,
                 raise bad
             return doc.get("elements") or []
         except Exception as ex:                     # noqa: BLE001
+            limited = _as_rate_limit(ex)
+            if limited is not None:
+                # Do not ask this mirror again until it says it is ready. This
+                # is shared with every other tile in the run.
+                pause = limited.retry_after or OSM_COOLDOWN_S
+                cooldowns[url] = time.monotonic() + pause
+                state["limited"] += 1
+                state["wait"] = max(state["wait"], pause)
+                state["last"] = limited
+                return None
             state["last"] = ex
             if _is_timeout(ex):
                 state["timeouts"] += 1
             return None
 
-    for _attempt in range(max(1, attempts)):
+    # Ordinary failures get `attempts` passes; a pass that ended in nothing but
+    # rate limiting gets extra ones, because waiting is the only thing that
+    # helps it and a different mirror or a smaller box does not.
+    for _attempt in range(max(1, attempts) + OSM_RATE_LIMIT_PASSES):
+        if _attempt >= max(1, attempts):
+            if not state["limited"]:
+                break                    # not a rate-limit problem; stop here
+            pause = state["wait"] or OSM_COOLDOWN_S
+            if deadline is not None and deadline.left() < pause + 5:
+                break                    # no budget to wait it out
+            log(f"      every mirror is rate-limiting; waiting {pause:.0f}s "
+                f"(they asked, and asking again sooner only makes it worse)")
+            time.sleep(pause)
+            # The pause they asked for has now been served, so stop treating
+            # those mirrors as cooling. Only the ones this wait actually
+            # covered - another tile may have earned a longer one.
+            now = time.monotonic()
+            for u in [u for u, until in cooldowns.items() if until - now <= pause]:
+                cooldowns.pop(u, None)
+            state["limited"], state["wait"] = 0, 0
         # Pass 1: every mirror that is free right now. Pass 2: wait for one,
         # but only for the mirrors we skipped - never re-ask one that answered
         # with a failure, since that is the same question again.
         busy = []
         for phase in (0, 1):
-            for url in (order if phase == 0 else busy):
+            # A SNAPSHOT. Phase 1 walks what phase 0 put aside, and appending
+            # to the list being iterated spins: the loop keeps finding the
+            # entry it just added and burns the budget doing nothing.
+            for url in (order if phase == 0 else list(busy)):
                 if deadline is not None:
                     if deadline.expired():
                         raise TimeoutError("deadline reached")
+                if cool(url) > 0:
+                    # It asked to be left alone. Honour that rather than
+                    # spending the budget re-earning the same refusal.
+                    if phase == 0:
+                        busy.append(url)
+                    continue
                 lock = (locks or {}).get(url)
                 if lock is not None:
                     if phase == 0:
@@ -1251,6 +1356,9 @@ def _overpass_tile(tile, mirrors, timeout, attempts, log, deadline=None,
                         wait = (30 if deadline is None
                                 else max(1, min(30, deadline.left())))
                         if not lock.acquire(timeout=wait):
+                            continue
+                        if cool(url) > 0:           # started cooling while we waited
+                            lock.release()
                             continue
                 try:
                     els = ask(url)
@@ -1284,6 +1392,8 @@ def _overpass_tile(tile, mirrors, timeout, attempts, log, deadline=None,
         # failure, and it must not be reported as one or split as if the box
         # were too big.
         raise MirrorsBusy("every mirror was busy with this run's other tiles")
+    if isinstance(state["last"], RateLimited):
+        raise state["last"]              # kept as RateLimited: never split
     # EVERY server failure leaves here as a RuntimeError, deliberately. The
     # only TimeoutError this function raises is the shared deadline, above -
     # which is what lets the caller tell "out of budget" (do not split, do not
@@ -1322,7 +1432,8 @@ def _write_cache(path, els, fetched=None):
                               "elements": els})
 
 
-def _run_tiles(items, mirrors, timeout, attempts, log, clock, jobs, locks):
+def _run_tiles(items, mirrors, timeout, attempts, log, clock, jobs, locks,
+               cooldowns=None):
     """Fetch `items` ([(key, tile)]) concurrently. Returns (ok, bad).
 
     ok  = {key: (elements, from_cache, fetched_iso)}
@@ -1342,7 +1453,8 @@ def _run_tiles(items, mirrors, timeout, attempts, log, clock, jobs, locks):
 
     def work(i, key, tile):
         return _overpass_tile(tile, mirrors, timeout, attempts, say,
-                              deadline=clock, locks=locks, start=i)
+                              deadline=clock, locks=locks, start=i,
+                              cooldowns=cooldowns)
 
     pool = ThreadPoolExecutor(max_workers=max(1, jobs))
     try:
@@ -1411,28 +1523,34 @@ def fetch_osm(state_abbr, mirrors=None, log=print, bbox=None, timeout=30,
     tiles = [t for b in boxes for t in tile_bbox(b)]
     clock = Deadline(deadline_s)
     locks = {u: threading.Lock() for u in mirrors}
+    # Shared across every tile: one tile's 429 protects the other eight.
+    cooldowns = {}
     log(f"    {len(tiles)} tile(s), {min(jobs, len(mirrors))} at a time, "
         f"{deadline_s}s budget for all of them (cached tiles are free)")
 
     items = [(f"tile {i}/{len(tiles)}", t) for i, t in enumerate(tiles, 1)]
-    ok, bad = _run_tiles(items, mirrors, timeout, attempts, log, clock, jobs, locks)
+    ok, bad = _run_tiles(items, mirrors, timeout, attempts, log, clock, jobs,
+                         locks, cooldowns)
 
     # A tile the mirrors would not serve is retried SMALLER, not again. Only
     # real failures are split - running out of budget is not a tile the mirrors
     # refused, and splitting it would just spend a budget that is already gone.
     parts = {}
-    # Split only what a SERVER refused. Running out of budget is not evidence
-    # the box is too big, and neither is our own scheduling holding the
-    # mirrors - splitting either just spends what is already gone.
+    # Split only what a SERVER refused ON ITS MERITS. Running out of budget is
+    # not evidence the box is too big; neither is our own scheduling holding
+    # the mirrors; and a 429 is the opposite of evidence - splitting one
+    # refused request into four against a server that just said "too many"
+    # makes the problem it is reporting worse.
     retry = [(k, t) for k, t in items
-             if k in bad and not isinstance(bad[k], (TimeoutError, MirrorsBusy))]
+             if k in bad and not isinstance(bad[k], (TimeoutError, MirrorsBusy,
+                                                     RateLimited))]
     if split and retry and not clock.expired():
         log(f"    retrying {len(retry)} failed tile(s) as quarters - a smaller "
             f"box is a cheaper question than the same one again")
         sub = [(f"{k} q{j}", q)
                for k, t in retry for j, q in enumerate(split_tile(t), 1)]
         sok, sbad = _run_tiles(sub, mirrors, timeout, attempts, log, clock,
-                               jobs, locks)
+                               jobs, locks, cooldowns)
         for k, _t in retry:
             quarters = [f"{k} q{j}" for j in range(1, 5)]
             if all(q in sok for q in quarters):
@@ -1463,6 +1581,7 @@ def fetch_osm(state_abbr, mirrors=None, log=print, bbox=None, timeout=30,
     if failed:
         out_of_time = sum(1 for k, _ in failed if isinstance(bad[k], TimeoutError))
         busy = sum(1 for k, _ in failed if isinstance(bad[k], MirrorsBusy))
+        limited = sum(1 for k, _ in failed if isinstance(bad[k], RateLimited))
         why = []
         if out_of_time:
             why.append(f"{out_of_time} ran out of the {deadline_s}s budget - "
@@ -1470,6 +1589,11 @@ def fetch_osm(state_abbr, mirrors=None, log=print, bbox=None, timeout=30,
         if busy:
             why.append(f"{busy} never reached a mirror because this run's own "
                        f"other tiles were holding them - lower --jobs")
+        if limited:
+            why.append(f"{limited} were RATE-LIMITED (HTTP 429) - the mirrors "
+                       f"are asking for a pause, not refusing the query. Wait "
+                       f"a few minutes and re-run; what succeeded is cached, "
+                       f"and --jobs 1 asks for less at a time")
         msg = (f"{len(failed)} of {len(tiles)} tiles failed"
                + (f" ({'; '.join(why)})" if why else "")
                + f". {len(tiles) - len(failed)} succeeded and are CACHED, so running "

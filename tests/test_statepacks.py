@@ -2235,7 +2235,7 @@ def test_self_contention_is_not_reported_as_a_mirror_failure(monkeypatch, tmp_pa
     monkeypatch.setattr("urllib.request.urlopen", never)
     with pytest.raises(sle.MirrorsBusy):
         sle._overpass_tile((0.0, 0.0, 1.0, 1.0), mirrors, 5, 1, lambda *a: None,
-                           deadline=sle.Deadline(2), locks=locks)
+                           deadline=sle.Deadline(0.2), locks=locks)
 
 
 class RecordingLock:
@@ -2594,3 +2594,109 @@ def test_refetching_an_undated_tile_says_why(monkeypatch, tmp_path):
     said = []
     sle._overpass_tile(tile, ["https://a.invalid/i"], 5, 1, said.append)
     assert any("fetch date" in m for m in said), said
+
+
+# --------------------------------------------------------------------------
+# HTTP 429. The one failure where waiting is the answer and every other
+# response - another mirror, a smaller box - makes it worse.
+# --------------------------------------------------------------------------
+def _http_error(code, retry_after=None):
+    import email.message
+    import urllib.error
+    hdrs = email.message.Message()
+    if retry_after is not None:
+        hdrs["Retry-After"] = str(retry_after)
+    return urllib.error.HTTPError("https://a.invalid/i", code, "Too Many Requests",
+                                  hdrs, None)
+
+
+def test_a_rate_limit_is_told_apart_from_every_other_failure():
+    assert isinstance(sle._as_rate_limit(_http_error(429)), sle.RateLimited)
+    assert isinstance(sle._as_rate_limit(_http_error(509)), sle.RateLimited)
+    assert sle._as_rate_limit(_http_error(504)) is None
+    assert sle._as_rate_limit(OSError("refused")) is None
+    # and it is not mistaken for a timeout, which WOULD split the tile
+    assert not sle._is_timeout(_http_error(429))
+
+
+def test_the_servers_own_retry_after_is_honoured():
+    assert sle._retry_after(_http_error(429, retry_after=42)) == 42
+    assert sle._retry_after(_http_error(429)) is None
+    # an HTTP-date form is not guessed at
+    assert sle._retry_after(_http_error(429, retry_after="Wed, 21 Oct 2026 07:28:00 GMT")) is None
+
+
+def test_a_rate_limited_tile_is_never_split(monkeypatch, tmp_path):
+    """Splitting turns one refused request into four against a server that
+    just said there were too many."""
+    monkeypatch.setattr(sle, "CACHE_DIR", str(tmp_path))
+    bbox = (0.0, 0.0, 9.0, 9.0)
+    quarters = {q for t in sle.tile_bbox(bbox) for q in sle.split_tile(t)}
+    seen = []
+
+    def tile(t, m, to, at, log, deadline=None, locks=None, start=0, **kw):
+        seen.append(t)
+        raise sle.RateLimited("HTTP 429: Too Many Requests")
+
+    monkeypatch.setattr(sle, "_overpass_tile", tile)
+    with pytest.raises(RuntimeError) as ex:
+        sle.fetch_osm("MN", bbox=bbox, log=lambda *a: None)
+    assert not [t for t in seen if t in quarters], "split a rate-limited tile"
+    assert "RATE-LIMITED" in str(ex.value), ex.value
+    assert "--jobs 1" in str(ex.value)
+
+
+def test_one_tiles_429_stops_the_other_tiles_asking_that_mirror(monkeypatch, tmp_path):
+    """Otherwise eight more tiles line up to earn the same refusal."""
+    monkeypatch.setattr(sle, "CACHE_DIR", str(tmp_path))
+    mirrors = ["https://a.invalid/i", "https://b.invalid/i"]
+    cooldowns = {}
+    asked = []
+
+    def fake(req, timeout=None, context=None):
+        asked.append(req.full_url)
+        if req.full_url == mirrors[0]:
+            raise _http_error(429, retry_after=60)
+        return FakeHTTP({"elements": []})
+
+    monkeypatch.setattr("urllib.request.urlopen", fake)
+    for i in range(4):
+        sle._overpass_tile((float(i), 0.0, float(i) + 1, 1.0), mirrors, 5, 1,
+                           lambda *a: None, start=0, cooldowns=cooldowns)
+    # the first tile earns the 429; nothing asks that mirror again
+    assert asked.count(mirrors[0]) == 1, asked
+    assert asked.count(mirrors[1]) == 4, asked
+
+
+def test_a_rate_limit_waits_instead_of_giving_up(monkeypatch, tmp_path):
+    """Waiting is the whole remedy, so it gets its own retry budget."""
+    monkeypatch.setattr(sle, "CACHE_DIR", str(tmp_path))
+    slept, calls = [], []
+    monkeypatch.setattr(sle.time, "sleep", slept.append)
+
+    def fake(req, timeout=None, context=None):
+        calls.append(req.full_url)
+        if len(calls) <= 2:
+            raise _http_error(429, retry_after=3)
+        return FakeHTTP({"elements": [{"type": "node", "id": 1,
+                                       "lat": 1, "lon": 1}]})
+
+    monkeypatch.setattr("urllib.request.urlopen", fake)
+    els, _c, _f = sle._overpass_tile((0.0, 0.0, 1.0, 1.0),
+                                     ["https://a.invalid/i"], 5, 1,
+                                     lambda *a: None, deadline=sle.Deadline(600))
+    assert [e["id"] for e in els] == [1]
+    assert slept == [3, 3], slept            # the server's own Retry-After
+
+
+def test_a_rate_limit_does_not_wait_past_the_budget(monkeypatch, tmp_path):
+    monkeypatch.setattr(sle, "CACHE_DIR", str(tmp_path))
+    slept = []
+    monkeypatch.setattr(sle.time, "sleep", slept.append)
+    monkeypatch.setattr("urllib.request.urlopen",
+                        lambda req, timeout=None, context=None:
+                        (_ for _ in ()).throw(_http_error(429, retry_after=600)))
+    with pytest.raises(sle.RateLimited):
+        sle._overpass_tile((0.0, 0.0, 1.0, 1.0), ["https://a.invalid/i"], 5, 1,
+                           lambda *a: None, deadline=sle.Deadline(30))
+    assert not slept, "waited 600s inside a 30s budget"

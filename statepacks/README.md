@@ -403,6 +403,7 @@ whole-state box gets a 504. On top of that:
 |---|---|
 | **Tiles run concurrently** | Three at a time, one in-flight request per mirror. Nine tiles one after another is nine round trips of waiting; three at a time is three. |
 | **Every tile is cached on disk** | `~/.cache/atak-statepacks/`. A re-run only fetches what is actually missing. |
+| **A 429 is waited out, never split** | Rate limiting is the one failure where waiting is the remedy. Splitting would turn one refused request into four against a server that just said "too many", and a mirror that says 429 is left alone — for the whole run, not just that tile — until its `Retry-After` has passed. |
 | **A stuck tile is split, not repeated** | A tile that times out on two mirrors is retried as four quarters. Asking a busy mirror the same large question again is what turned one slow tile into a stalled run. |
 | **A tile already served as quarters is not re-requested** | Otherwise every run pays the timeout for the one tile the mirrors would not serve. |
 | **Two boxes when a state crosses the date line** | Alaska's Aleutians sit near +172 and the mainland near -130; min/max longitude over both is a 302-degree box — most of the northern hemisphere in one query. Detected from the coordinates, never from a list of states. |
@@ -542,6 +543,7 @@ edition, so it has to be predictable rather than descriptive.
 | Boundaries look out of date in the LE match | `--refresh-shapes`. The cache is only used to decide which county a station falls in; overlay boundaries are always fetched fresh by the builder. |
 | `N of 9 tiles failed (... ran out of the 480s budget)` | The budget ran out, not "no data". Re-run — cached tiles are skipped — or raise `--deadline`. |
 | `... never reached a mirror because this run's own other tiles were holding them` | Self-contention, not rate limiting. Lower `--jobs`. |
+| `N were RATE-LIMITED (HTTP 429)` | The mirrors are asking for a pause, not refusing the query. The run already waits and retries; if it still fails, wait a few minutes and re-run — what succeeded is cached — or use `--jobs 1`. |
 | A run that used to be instant refetches everything once | Tiles cached before they carried a fetch date are refetched once, so the rows built from them can be stamped with a date they actually have. It says so on screen, and the run after that is instant again. |
 | `fetched, but could not cache this tile` | The data is fine; `~/.cache` is not writable. Nothing is lost, but every run will refetch. |
 | The county build sits on one request | Each url gets 150s total, retries included, and every retry names the host. `--http-budget 600` on a slow link; `--http-budget 30` to fail fast. |
