@@ -2209,6 +2209,89 @@ def test_the_descriptor_comes_from_the_source_not_a_word_list():
     assert any("law enforcement center" in t for t in terms), terms
 
 
+# --- spellings found on real data, both states ------------------------------
+
+def test_every_sheriff_spelling_seen_on_real_data_matches():
+    """MN doubles the r ("Steele County Sherriff's"), WI doubles the r AND
+    drops an f ("Clark County Sherrif", found 2026-09-14). The default has to
+    reach both or a county silently goes empty."""
+    for name in ("Chisago County Sheriff's Office",
+                 "Steele County Sherriff's Office and Detention Center",
+                 "Clark County Sherrif"):
+        assert re.search(sle.SHERIFF_RX, name, re.I), name
+
+
+def test_the_sheriff_filter_does_not_reach_a_lookalike_place_name():
+    for name in ("Sheridan Police Department", "Sherwood Police Department",
+                 "Shelby County Courthouse"):
+        assert not re.search(sle.SHERIFF_RX, name, re.I), name
+
+
+# --- near misses: the typo discover_terms structurally cannot find -----------
+
+def test_a_one_county_typo_is_found_even_though_discovery_cannot_see_it():
+    """discover_terms needs two counties, and a misspelling reaches exactly
+    one - so the rule that keeps county names out also keeps typos out."""
+    unmatched = {"55019": ["Clark County Sherrif"]}
+    names = {"55019": "Clark County", "55009": "Brown County"}
+    assert not sle.discover_terms(unmatched, "sherr?iff", names)   # blind to it
+    chosen = {"55009": {"agency": "Brown County Sheriff's Office"}}
+    got = sle.near_misses(unmatched, chosen, names)
+    assert got and got[0][2] == "sherrif" and got[0][3] == "sheriff"
+
+
+def test_near_misses_learns_its_vocabulary_from_what_matched_here():
+    """No word list: it asks 'is this nearly a word that worked in this
+    state', so it adapts to whatever the filter happens to be."""
+    unmatched = {"55019": ["Clark County Constabulry"]}
+    names = {"55019": "Clark County", "55009": "Brown County"}
+    assert not sle.near_misses(
+        unmatched, {"55009": {"agency": "Brown County Sheriff"}}, names)
+    assert sle.near_misses(
+        unmatched, {"55009": {"agency": "Brown County Constabulary"}}, names)
+
+
+def test_near_misses_leaves_genuinely_different_words_alone():
+    names = {"55019": "Clark County", "55009": "Brown County"}
+    chosen = {"55009": {"agency": "Brown County Sheriff's Office"}}
+    for other in ("Clark County Detention Center", "Clark County Dispatch",
+                  "Clark County Marshal", "Clark County District Court"):
+        assert not sle.near_misses({"55019": [other]}, chosen, names), other
+
+
+def test_a_near_miss_in_a_city_pd_is_not_reported_as_the_countys():
+    names = {"55019": "Clark County", "55009": "Brown County"}
+    chosen = {"55009": {"agency": "Brown County Sheriff's Office"}}
+    assert not sle.near_misses({"55019": ["Neillsville Sherrif"]}, chosen, names)
+
+
+# --- records that exist but carry no name ------------------------------------
+
+def test_a_nameless_record_is_not_called_widenable(capsys):
+    """WI had three counties (Fond du Lac, Forest, Green Lake) whose records
+    were all nameless. No filter can match a blank, so counting them under
+    'widening --match may fix these' promises a fix that does not exist."""
+    names = {"55039": "Fond du Lac County", "55001": "Adams County"}
+    records = [{"geoid": "55039", "agency": ""},
+               {"geoid": "55001", "agency": "Adams Police Department"}]
+    sle.report_gaps("WI", list(names), names, records, {}, "sherr?if")
+    out = capsys.readouterr().out
+    assert "records present but every one unnamed : 1" in out
+    assert "none matched the filter : 1" in out       # Adams only, not both
+    assert "no filter can match a blank name" in out
+
+
+def test_a_nameless_county_is_not_counted_as_having_no_record_either(capsys):
+    """It is its own thing: 'no record at all' points at the source, a
+    nameless record points at the tagging."""
+    names = {"55039": "Fond du Lac County", "55013": "Burnett County"}
+    records = [{"geoid": "55039", "agency": ""}]
+    sle.report_gaps("WI", list(names), names, records, {}, "sherr?if")
+    out = capsys.readouterr().out
+    assert "records present but every one unnamed : 1" in out
+    assert "no law-enforcement record at all      : 1" in out
+
+
 def test_a_phrase_reaching_one_county_is_that_countys_name_not_vocabulary():
     assert not sle.discover_terms({"55025": ["Dane County Jail Annex"]},
                                   "sherr?iff", WI_NAMES)

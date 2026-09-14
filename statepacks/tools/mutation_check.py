@@ -82,6 +82,21 @@ MUTATIONS = {
          '        {g: [r["agency"] for r in by_county[g]] for g in unmatched},'
          "\n        match, names)",
          "    found = []"),
+        ("require the second f, and lose Clark County WI",
+         'SHERIFF_RX = r"sherr?if"', 'SHERIFF_RX = r"sherr?iff"'),
+        ("call a record with no name at all widenable",
+         "    unmatched = sorted(g for g in geoids if g not in chosen and named(g))",
+         "    unmatched = sorted(g for g in geoids if g not in chosen and by_county.get(g))"),
+        ("miss a two-edit typo, which is the only kind there is",
+         "def near_misses(unmatched, chosen, county_names, min_len=6, limit=2):",
+         "def near_misses(unmatched, chosen, county_names, min_len=6, limit=1):"),
+        ("report a city PD's typo as the county's",
+         "            if not is_county_level(a, county_names.get(geoid, \"\")):\n"
+         "                continue\n"
+         "            for w in re.split",
+         "            if False:\n"
+         "                continue\n"
+         "            for w in re.split"),
         ("unwire --gaps-dump",
          "                            dump=a.gaps_dump)", "                            dump=None)"),
     ],

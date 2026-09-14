@@ -289,12 +289,16 @@ def fetch_state(sfp, layer_id, base=HIFLD_LE, log=print):
     return out
 
 
-# OSM spells it "Sherriff" in at least one place - "Steele County Sherriff's
-# Office and Detention Center", found by the gap report on 2026-09-14. That is
-# the same word misspelled by whoever typed it, not a different agency, so the
-# default filter tolerates the doubled r. The name is still written out exactly
-# as the source has it.
-SHERIFF_RX = r"sherr?iff"
+# OSM misspells the word in both directions, and both were found by a gap
+# report on real data rather than guessed at:
+#   "Steele County Sherriff's Office and Detention Center"  MN, doubled r
+#   "Clark County Sherrif"                                  WI, doubled r, ONE f
+# The trailing f is therefore not optional-to-taste either: `sherr?iff` reads
+# the second f as required and silently drops Clark County. `sherr?if` matches
+# sheriff, sherriff, sherrif and sherif, and nothing else in these names begins
+# "sherif" - "Sheridan", "Sherwood" and "Shelby" are all untouched. The agency
+# is still written out exactly as the source spells it, typo included.
+SHERIFF_RX = r"sherr?if"
 
 # Facility names that are COUNTY-level law enforcement under another word.
 # Each was read off a real gap report, never guessed at: Minnesota files
@@ -1862,6 +1866,71 @@ def discover_terms(unmatched, match, county_names, min_counties=2,
     return kept[:max_terms]
 
 
+def _edits_within(a, b, limit=1):
+    """Is the edit distance between two words at most `limit`? Bounded, so a
+    pair that is obviously far apart costs a length check and nothing else."""
+    if abs(len(a) - len(b)) > limit:
+        return False
+    if a == b:
+        return True
+    prev = list(range(len(b) + 1))
+    for i, ca in enumerate(a, 1):
+        cur = [i]
+        for j, cb in enumerate(b, 1):
+            cur.append(min(prev[j] + 1, cur[j - 1] + 1,
+                           prev[j - 1] + (ca != cb)))
+        if min(cur) > limit:
+            return False
+        prev = cur
+    return prev[-1] <= limit
+
+
+def near_misses(unmatched, chosen, county_names, min_len=6, limit=2):
+    """[(geoid, agency, word, looks_like)] for names one small slip from a hit.
+
+    `discover_terms` cannot find these. It offers a phrase only when it reaches
+    two or more counties, because a phrase reaching one is that county's own
+    name - and a MISSPELLING reaches exactly one county, so the rule that keeps
+    "dane county jail" out also keeps "Sherrif" out. Wisconsin filed one
+    sheriff as "Clark County Sherrif": doubled r, single f, one edit away from
+    a word already in the filter, invisible to every other check here.
+
+    The reference vocabulary is learnt from the agencies that DID match in this
+    state, so it needs no word list and adapts to whatever the filter is: it
+    asks "is this nearly a word that worked here?", not "is this nearly
+    'sheriff'?".
+
+    Two edits, not one: "sherrif" to "sheriff" is two substitutions, so a
+    limit of 1 misses the very name this was written for. Two costs nothing in
+    noise at `min_len` 6 - patrol, marshal, district, detention, dispatch and
+    deputy are all still more than two edits from anything.
+
+    Reported, never applied. A near miss is usually a source typo worth
+    tolerating in the regex, but deciding that is reading, not matching.
+    """
+    ref = set()
+    for rec in chosen.values():
+        for w in re.split(r"[^a-z]+", (rec.get("agency") or "").lower()):
+            if len(w) >= min_len:
+                ref.add(w)
+    out = []
+    for geoid, agencies in sorted(unmatched.items()):
+        for a in agencies:
+            if not is_county_level(a, county_names.get(geoid, "")):
+                continue
+            for w in re.split(r"[^a-z]+", a.lower()):
+                if len(w) < min_len or w in ref:
+                    continue
+                for r in ref:
+                    if _edits_within(w, r, limit):
+                        out.append((geoid, a, w, r))
+                        break
+                else:
+                    continue
+                break
+    return out
+
+
 def dump_gaps(path, state, unmatched_by_county, names, match):
     """Write every unmatched county and all its agency names, uncapped.
 
@@ -1913,7 +1982,19 @@ def report_gaps(state, geoids, names, records, chosen, match, log=print,
     # source. Calling it "no law-enforcement record at all - not in the source"
     # states something this run never established, and points at the wrong fix.
     lost = set(uncovered or ())
-    unmatched = sorted(g for g in geoids if g not in chosen and by_county.get(g))
+    # A record with no name at all cannot match ANY filter, so listing its
+    # county under "widening --match may fix these" promises a fix that does
+    # not exist. Wisconsin had three of these (Fond du Lac, Forest, Green
+    # Lake): records present, every one of them nameless, and the report
+    # printed the county with a blank beside it and counted it as widenable.
+    # It is a fourth thing, and the three that were already separated were
+    # separated for exactly this reason.
+    def named(g):
+        return [r for r in by_county.get(g, []) if r.get("agency")]
+
+    unmatched = sorted(g for g in geoids if g not in chosen and named(g))
+    unnamed = sorted(g for g in geoids
+                     if g not in chosen and by_county.get(g) and not named(g))
     empty = sorted(g for g in geoids
                    if g not in chosen and not by_county.get(g) and g not in lost)
     notfetched = sorted(g for g in geoids
@@ -1975,11 +2056,28 @@ def report_gaps(state, geoids, names, records, chosen, match, log=print,
         wider = "|".join([base] + [t for t, _n in found])
         log(f"    python3 seed_le_contacts.py --state {state} --gaps \\")
         log(f"        --match '{wider}'")
+    slips = near_misses({g: [r["agency"] for r in by_county[g]]
+                         for g in unmatched}, chosen, names)
+    if slips:
+        log(f"  one small slip from a name that matched: {len(slips)}"
+            f"  <- probably a source typo, read it")
+        for geoid, agency, word, looks in slips[:8]:
+            log(f"      {label(geoid):26s} \"{word}\" looks like \"{looks}\""
+                f"   in: {agency}")
+        if len(slips) > 8:
+            log(f"      ... and {len(slips) - 8} more")
     if dump and unmatched:
         where = dump_gaps(dump, state,
                           {g: [r["agency"] for r in by_county[g]]
                            for g in unmatched}, names, match)
         log(f"    all {len(unmatched)} unmatched counties written to {where}")
+    if unnamed:
+        log(f"  records present but every one unnamed : {len(unnamed)}"
+            f"  <- no filter can match a blank name")
+        for i in range(0, min(len(unnamed), 12), 3):
+            log("      " + "  ".join(f"{label(g):26s}" for g in unnamed[i:i + 3]))
+        if len(unnamed) > 12:
+            log(f"      ... and {len(unnamed) - 12} more")
     if notfetched:
         log(f"  NOT FETCHED - their tile failed        : {len(notfetched)}"
             f"  <- unknown, not absent; re-run to fill")
