@@ -18,11 +18,19 @@ IT REVERTS WITH `git checkout --`, so it refuses to run against uncommitted
 changes and restores the file in a finally. It has eaten uncommitted work once;
 that is why both guards are here.
 
+A `finally` does not run when the process is KILLED, so a `timeout`, a Ctrl-C
+or a closed terminal used to leave a deliberately-broken file in the tree -
+which happened, leaving build_county_pack.py with the "__" boundary removed and
+a stop-hook asking to commit it. SIGTERM and SIGINT now restore before exiting,
+and a run that dies some other way leaves `git checkout -- <file>` as the fix.
+This takes minutes: do not wrap it in a short `timeout`.
+
 Add an entry whenever you fix something that a test should have caught. The
 question it answers is not "is there a test for this" but "would the test fail
 if the behaviour went away".
 """
 import re
+import signal
 import subprocess
 import sys
 
@@ -193,6 +201,17 @@ def check(path, entries):
     print(f"\n{path}")
     original = open(path, encoding="utf-8").read()
     survivors = 0
+
+    # A finally does not run on SIGTERM. Without this, a killed run leaves the
+    # file broken on purpose and says nothing about it.
+    def restore_and_die(signum, _frame):
+        open(path, "w", encoding="utf-8").write(original)
+        print(f"\n  interrupted ({signal.Signals(signum).name}) - {path} "
+              f"restored", file=sys.stderr)
+        sys.exit(130)
+
+    previous = [(sig, signal.signal(sig, restore_and_die))
+                for sig in (signal.SIGTERM, signal.SIGINT)]
     try:
         for desc, old, new in entries:
             if old not in original:
@@ -207,6 +226,8 @@ def check(path, entries):
             print(f"  {desc:52s} {n} test(s) fail{flag}")
     finally:
         open(path, "w", encoding="utf-8").write(original)
+        for sig, handler in previous:
+            signal.signal(sig, handler)
     return survivors
 
 
