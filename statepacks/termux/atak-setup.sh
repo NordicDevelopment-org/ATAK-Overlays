@@ -4,7 +4,8 @@
 # Installs every dependency the other scripts need and wires up storage access.
 # Safe to re-run.
 set -euo pipefail
-cd "$(dirname "$0")" && . ./atak-env.sh
+HERE="$(cd -- "$(dirname -- "$0")" && pwd -P)"
+. "$HERE/atak-env.sh"
 
 say "[1/4] Updating package lists"
 pkg update -y && pkg upgrade -y

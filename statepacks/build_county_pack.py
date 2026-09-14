@@ -72,7 +72,9 @@ from urllib.request import Request, urlopen
 # --probe tells you which ones answer before you spend a download on them.
 # --------------------------------------------------------------------------
 
-# TIGERweb "Current" county polygons. Layer 0 of this service is Counties.
+# TIGERweb "Current" county polygons. In the State_County service, layer 0 is
+# States and layer 1 is Counties - so this points at 1. Confirm with --probe,
+# which prints each layer's reported name.
 TIGERWEB = ("https://tigerweb.geo.census.gov/arcgis/rest/services"
             "/TIGERweb/State_County/MapServer/1")
 # Fallbacks tried in order if the primary will not answer. Different vintages
@@ -89,7 +91,12 @@ ACS_YEAR = 2023
 ACS_BASE = "https://api.census.gov/data/{year}/acs/acs5"
 ACS_VARS = {"population": "B01003_001E", "housing_units": "B25001_001E"}
 
-TIGER_VINTAGE = "2024"          # what TIGERweb "Current" tracks; shown in popups
+# The boundary vintage is READ FROM THE SERVICE at build time (see
+# service_vintage). This is only the fallback label used when the service does
+# not report a year anywhere - in which case the popup says so instead of
+# asserting a year nobody returned.
+TIGER_VINTAGE_UNKNOWN = "vintage not reported"
+_YEAR_RE = re.compile(r"\b(19|20)\d{2}\b")
 SQ_M_PER_SQ_MI = 2589988.110336  # exact, by definition of the survey mile
 
 SSL_CTX = ssl.create_default_context()
@@ -162,35 +169,93 @@ def get_json(url, params=None, **kw):
 # --------------------------------------------------------------------------
 # Fetch: county polygons
 # --------------------------------------------------------------------------
-def state_of_feature(props, default_len=2):
-    """The 2-digit state FIPS a returned county belongs to, or None.
+def service_vintage(url, log=print):
+    """The TIGER year the service itself reports, or TIGER_VINTAGE_UNKNOWN.
 
-    Read from GEOID (first two digits) or from a STATE/STATEFP column. Used to
-    check that the server honoured our filter - see fetch_counties.
+    Asserting a hardcoded "2024" on every value would be a claim no response
+    backs up - and the whole point of stamping a year on a field is that the
+    year is true. So ask the service and use what it says; if it says nothing,
+    the popup reads "vintage not reported" rather than a number.
+    """
+    try:
+        info = get_json(url, {"f": "json"}, tries=2, timeout=30)
+    except Exception as e:                          # noqa: BLE001
+        log(f"    [!] could not read service metadata ({e}); vintage unknown")
+        return TIGER_VINTAGE_UNKNOWN
+    for key in ("name", "description", "serviceDescription", "copyrightText"):
+        m = _YEAR_RE.search(str(info.get(key) or ""))
+        if m:
+            return m.group(0)
+    return TIGER_VINTAGE_UNKNOWN
+
+
+def county_geoid(props):
+    """The 5-digit state+county FIPS of a returned feature, or None.
+
+    None means "this is not an identifiable county" - a state polygon, a metro
+    area, a row with no identity columns. Two things depend on being strict
+    here:
+
+    * fetch_counties uses it to drop anything the server should not have sent.
+      A 2-digit state GEOID shares its first two digits with every county in
+      that state, so a looser check would let a whole state polygon through as
+      if it were a county.
+    * build_state uses it as the FIPS shown in the popup. It returns None
+      rather than padding a blank out to "27000", which would be a FIPS code no
+      source returned, stamped with TIGER's name.
     """
     p = {str(k).upper(): v for k, v in (props or {}).items()}
-    geoid = str(p.get("GEOID") or "")
-    if len(geoid) >= default_len and geoid[:default_len].isdigit():
-        return geoid[:default_len]
+    geoid = str(p.get("GEOID") or p.get("GEOID20") or "").strip()
+    if len(geoid) == 5 and geoid.isdigit():
+        return geoid
+    sfp = ""
     for key in ("STATE", "STATEFP", "STATE_FIPS"):
         v = p.get(key)
         if v not in (None, ""):
-            return str(v).zfill(default_len)[:default_len]
+            sfp = str(v).strip().zfill(2)[:2]
+            break
+    cfp = ""
+    for key in ("COUNTY", "COUNTYFP", "COUNTY_FIPS"):
+        v = p.get(key)
+        if v not in (None, ""):
+            cfp = str(v).strip().zfill(3)[:3]
+            break
+    if len(sfp) == 2 and sfp.isdigit() and len(cfp) == 3 and cfp.isdigit():
+        return sfp + cfp
     return None
+
+
+def county_label(props):
+    """The county's name as its own source spells it.
+
+    TIGER's NAME already carries the legal descriptor - "Chisago County",
+    "Acadia Parish", "Nome Census Area", "Alexandria city", "Adjuntas
+    Municipio". Appending a literal " County" to it produces "Chisago County
+    County" and, worse, relabels 15 states' jurisdictions as something they are
+    not. BASENAME is the bare name, so only that one gets a suffix.
+    """
+    p = {str(k).upper(): v for k, v in (props or {}).items()}
+    for key in ("NAMELSAD", "NAME"):
+        v = p.get(key)
+        if v:
+            return str(v).strip()
+    base = p.get("BASENAME")
+    return f"{str(base).strip()} County" if base else "Unknown"
 
 
 def fetch_counties(state_fips, endpoint=TIGERWEB, alternates=None, log=print):
     """Every county in one state, as GeoJSON features, paged.
 
-    Returns (features, endpoint_actually_used). The endpoint is returned
-    because if a fallback answered, the pack must say so rather than claim
-    it came from the primary.
+    Returns (features, endpoint_actually_used, vintage). The endpoint is
+    returned because if a fallback answered, the pack must say so rather than
+    claim it came from the primary; the vintage is read from that service
+    rather than hardcoded, for the same reason.
     """
     tried = [endpoint] + list(alternates or [])
     last_err = None
     for url in tried:
         try:
-            feats, offset = [], 0
+            feats, offset, guard = [], 0, 0
             while True:
                 page = get_json(f"{url}/query", {
                     "where": f"STATE='{state_fips}'",
@@ -205,7 +270,18 @@ def fetch_counties(state_fips, endpoint=TIGERWEB, alternates=None, log=print):
                     raise RuntimeError(page["error"])
                 batch = page.get("features") or []
                 feats.extend(batch)
-                if len(batch) < 1000:
+                # Page on the server's own signal, not on our requested size. A
+                # service whose maxRecordCount is below 1000 returns a short
+                # first page that is NOT the last one, and treating it as the
+                # last silently truncates the state.
+                more = bool(page.get("exceededTransferLimit")
+                            or (page.get("properties") or {}).get("exceededTransferLimit"))
+                guard += 1
+                if not batch or not more:
+                    break
+                if guard > 20:      # a server ignoring resultOffset would loop forever
+                    log(f"    [!] {url} kept reporting more results after "
+                        f"{len(feats)} features; stopping")
                     break
                 offset += len(batch)
 
@@ -215,16 +291,17 @@ def fetch_counties(state_fips, endpoint=TIGERWEB, alternates=None, log=print):
             # quietly ship California inside MN_Counties.kmz. Keep only the
             # features that actually belong to the state we asked for.
             kept = [f for f in feats
-                    if state_of_feature(f.get("properties")) == state_fips]
+                    if (county_geoid(f.get("properties")) or "").startswith(state_fips)]
             dropped = len(feats) - len(kept)
             if dropped:
-                log(f"    [!] {url} returned {dropped} feature(s) outside state "
-                    f"{state_fips} - the filter was not honoured; they were dropped")
+                log(f"    [!] {url} returned {dropped} feature(s) that are not "
+                    f"counties of state {state_fips} - the filter was not "
+                    f"honoured; they were dropped")
             if kept:
                 if url != endpoint:
                     log(f"    [!] primary endpoint failed; used fallback {url}")
-                return kept, url
-            last_err = f"0 features for state {state_fips} (of {len(feats)} returned)"
+                return kept, url, service_vintage(url, log=log)
+            last_err = f"0 counties for state {state_fips} (of {len(feats)} returned)"
         except Exception as e:                      # noqa: BLE001 - try the next one
             last_err = e
             log(f"    [!] {url} -> {e}")
@@ -251,6 +328,15 @@ def fetch_acs(state_fips, year=ACS_YEAR, log=print):
         log(f"    [!] ACS {year} unavailable ({e}); population/housing omitted")
         return {}
 
+    # The docstring promises this degrades rather than kills the pack, so the
+    # parse has to be as guarded as the fetch: a short body, a renamed column or
+    # a variable the year does not carry would otherwise raise out of here.
+    if (not isinstance(rows, list) or not rows or not isinstance(rows[0], list)
+            or "county" not in rows[0]
+            or not all(v in rows[0] for v in ACS_VARS.values())):
+        log(f"    [!] ACS {year} returned an unexpected shape; "
+            f"population/housing omitted")
+        return {}
     header, out = rows[0], {}
     idx = {name: header.index(var) for name, var in ACS_VARS.items()}
     cty_i = header.index("county")
@@ -284,10 +370,16 @@ def load_csv_table(filename):
         return {}
     out = {}
     with open(path, newline="", encoding="utf-8") as fh:
-        for row in csv.DictReader(fh):
-            geoid = (row.get("geoid") or "").strip()
-            if geoid:
-                out[geoid] = {k: (v or "").strip() for k, v in row.items()}
+        # The shipped CSVs lead with a "#" comment block explaining what they
+        # are for. csv.DictReader has no notion of comments, so it would adopt
+        # the first comment line as the one and only field name and then drop
+        # every real row on the floor - silently, because a dropped row just
+        # renders as "not in dataset" like any other absence.
+        body = [line for line in fh if not line.lstrip().startswith("#")]
+    for row in csv.DictReader(body):
+        geoid = (row.get("geoid") or "").strip()
+        if geoid:
+            out[geoid] = {k: (v or "").strip() for k, v in row.items() if k}
     return out
 
 
@@ -300,8 +392,15 @@ def sourced_from_row(row, field):
 # --------------------------------------------------------------------------
 # KML
 # --------------------------------------------------------------------------
+# XML 1.0 forbids these outright - they cannot be escaped, only removed. One of
+# them anywhere in a name or a CSV value makes the whole doc.kml unparseable, so
+# ATAK rejects the entire pack rather than the one bad field.
+_XML_ILLEGAL = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]")
+
+
 def esc(s):
-    return (str(s).replace("&", "&amp;").replace("<", "&lt;")
+    s = _XML_ILLEGAL.sub("", str(s))            # tab/newline/CR are legal, kept
+    return (s.replace("&", "&amp;").replace("<", "&lt;")
             .replace(">", "&gt;").replace('"', "&quot;"))
 
 
@@ -329,7 +428,7 @@ def county_placemark(props, geom, meta, precision=6):
     name = meta["name"]
     rows = [
         ("County", Sourced(f"{name}, {meta['state_abbr']}", "TIGER", meta["tiger_vintage"])),
-        ("FIPS (GEOID)", Sourced(meta["geoid"], "TIGER", meta["tiger_vintage"])),
+        ("FIPS (GEOID)", meta["geoid"]),
         ("County seat", meta["seat"]),
         ("Population", meta["population"]),
         ("Housing units", meta["housing_units"]),
@@ -363,7 +462,8 @@ def county_placemark(props, geom, meta, precision=6):
     shape = geoms[0] if len(geoms) == 1 else f"<MultiGeometry>{''.join(geoms)}</MultiGeometry>"
 
     # KML 2.2 child order: name, visibility, description, styleUrl, geometry
-    return (f"<Placemark><name>{esc(name)} County</name>"
+    # The name is used exactly as the source spells it - see county_label.
+    return (f"<Placemark><name>{esc(name)}</name>"
             f"<description><![CDATA[{body}{footer}]]></description>"
             f"<styleUrl>#county</styleUrl>{shape}</Placemark>")
 
@@ -417,8 +517,8 @@ def build_state(state_abbr, out_dir, acs_year=ACS_YEAR, per_county=False,
     sfp = STATE_FIPS[state_abbr]
 
     log(f"[*] {state_abbr}: fetching county boundaries ...")
-    feats, used_url = fetch_counties(sfp, endpoint, TIGERWEB_ALTERNATES, log=log)
-    log(f"    {len(feats)} counties")
+    feats, used_url, vintage = fetch_counties(sfp, endpoint, TIGERWEB_ALTERNATES, log=log)
+    log(f"    {len(feats)} counties (boundary vintage: {vintage})")
 
     log(f"[*] {state_abbr}: fetching ACS {acs_year} population + housing ...")
     acs = fetch_acs(sfp, acs_year, log=log)
@@ -427,7 +527,7 @@ def build_state(state_abbr, out_dir, acs_year=ACS_YEAR, per_county=False,
     seats = load_csv_table("county_seats.csv")
     le = load_csv_table("le_contacts.csv")
 
-    boundary_source = f"US Census TIGERweb (vintage {TIGER_VINTAGE})"
+    boundary_source = f"US Census TIGERweb ({vintage})"
     acs_label = (f"US Census ACS 5-year {acs_year}" if acs
                  else "not retrieved - population and housing show as not in dataset")
 
@@ -437,27 +537,34 @@ def build_state(state_abbr, out_dir, acs_year=ACS_YEAR, per_county=False,
         geom = f.get("geometry")
         # TIGERweb spells these upper-case; be forgiving about case anyway.
         p = {str(k).upper(): v for k, v in props.items()}
-        name = p.get("NAME") or p.get("BASENAME") or "Unknown"
-        geoid = p.get("GEOID") or (sfp + str(p.get("COUNTY") or "").zfill(3))
-        cty3 = geoid[2:5] if len(geoid) >= 5 else ""
+        name = county_label(props)
+        # None when the feature carries no usable identity. It is NOT padded out
+        # to "<state>000" - that would be a FIPS code no source returned, shown
+        # under TIGER's name.
+        geoid = county_geoid(props)
+        cty3 = geoid[2:5] if geoid else ""
 
-        def area(key, label):
-            raw = p.get(key)
-            try:
-                return Sourced(round(float(raw) / SQ_M_PER_SQ_MI, 1),
-                               f"TIGER {label}", TIGER_VINTAGE)
-            except (TypeError, ValueError):
-                return Sourced()
+        def area(label, *keys):
+            for key in keys:
+                if key in p:
+                    try:
+                        return Sourced(round(float(p[key]) / SQ_M_PER_SQ_MI, 1),
+                                       f"TIGER {label}", vintage)
+                    except (TypeError, ValueError):
+                        return Sourced()
+            return Sourced()
 
-        rec = acs.get(cty3, {})
+        rec = acs.get(cty3, {}) if cty3 else {}
         meta = {
-            "name": name, "geoid": geoid, "state_abbr": state_abbr,
-            "tiger_vintage": TIGER_VINTAGE, "built": built,
+            "name": name, "state_abbr": state_abbr,
+            "geoid_str": geoid or "",
+            "geoid": Sourced(geoid, "TIGER", vintage) if geoid else Sourced(),
+            "tiger_vintage": vintage, "built": built,
             "boundary_source": boundary_source, "boundary_url": used_url,
             "population": rec.get("population", Sourced()),
             "housing_units": rec.get("housing_units", Sourced()),
-            "land_area": area("AREALAND", "ALAND") if "AREALAND" in p else area("ALAND", "ALAND"),
-            "water_area": area("AREAWATER", "AWATER") if "AREAWATER" in p else area("AWATER", "AWATER"),
+            "land_area": area("ALAND", "AREALAND", "ALAND"),
+            "water_area": area("AWATER", "AREAWATER", "AWATER"),
             "seat": sourced_from_row(seats.get(geoid), "seat"),
             "le_agency": sourced_from_row(le.get(geoid), "agency"),
             "le_phone": sourced_from_row(le.get(geoid), "phone"),
@@ -476,19 +583,23 @@ def build_state(state_abbr, out_dir, acs_year=ACS_YEAR, per_county=False,
 
         if per_county:
             one = state_kml(state_abbr, [pm], {
-                "title": f"{name} County, {state_abbr}", "boundary_source": boundary_source,
+                "title": f"{name}, {state_abbr}", "boundary_source": boundary_source,
                 "boundary_url": used_url, "acs_label": acs_label,
-                "tiger_vintage": TIGER_VINTAGE, "built": built})
-            write_kmz(os.path.join(out_dir, f"{state_abbr}_{safe(name)}_County.kmz"), one)
+                "tiger_vintage": vintage, "built": built})
+            write_kmz(os.path.join(out_dir, f"{state_abbr}_{safe(name)}.kmz"), one)
 
     if not placemarks:
         raise RuntimeError(f"{state_abbr}: no counties with usable geometry")
 
-    title = f"{state_abbr} Counties - boundaries and reference data ({TIGER_VINTAGE})"
+    # The filename carries the boundary vintage when the service reported one,
+    # and the build date when it did not - so a pack is always datable from its
+    # name, and never claims a year nothing returned.
+    stamp = vintage if vintage != TIGER_VINTAGE_UNKNOWN else f"built{built}"
+    title = f"{state_abbr} Counties - boundaries and reference data ({vintage})"
     kml = state_kml(state_abbr, placemarks, {
         "title": title, "boundary_source": boundary_source, "boundary_url": used_url,
-        "acs_label": acs_label, "tiger_vintage": TIGER_VINTAGE, "built": built})
-    path = os.path.join(out_dir, f"{state_abbr}_Counties_{TIGER_VINTAGE}.kmz")
+        "acs_label": acs_label, "tiger_vintage": vintage, "built": built})
+    path = os.path.join(out_dir, f"{state_abbr}_Counties_{safe(stamp)}.kmz")
     size = write_kmz(path, kml)
 
     filled = sum(1 for m in built_rows if m["population"])
@@ -496,6 +607,7 @@ def build_state(state_abbr, out_dir, acs_year=ACS_YEAR, per_county=False,
         f"-> {os.path.basename(path)} ({size / 1024:.0f} KB)")
     return {"state": state_abbr, "path": path, "counties": len(placemarks),
             "with_population": filled, "boundary_url": used_url,
+            "boundary_vintage": vintage,
             "acs_year": acs_year if acs else None, "built": built}
 
 

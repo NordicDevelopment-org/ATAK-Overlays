@@ -80,14 +80,23 @@ python3 build_county_pack.py --state MN --acs-year 2022            # older vinta
 
 ```bash
 cd ~/atak-packs/ATAK-Overlays/statepacks
+./termux/atak-install.sh ~/atak-packs/out
+```
+
+That installs everything in the folder. To install one file, name it — the
+builder prints the exact filename it wrote:
+
+```bash
 ./termux/atak-install.sh ~/atak-packs/out/MN_Counties_2024.kmz
 ```
 
-Or install everything you just built:
+The `2024` in that name is **the boundary vintage the Census service reported**,
+not a fixed string — so the filename tells you how old the boundaries are. If
+the service reports no year, the pack is named `..._built<date>.kmz` instead and
+the popup reads `vintage not reported` rather than claiming a year.
 
-```bash
-./termux/atak-install.sh ~/atak-packs/out
-```
+Copies go in through a temp file and an atomic rename, so a copy interrupted by
+a full card leaves your existing pack intact rather than a truncated one.
 
 Then: **open ATAK → Overlay Manager (stacked-layers button) → your pack is
 listed by filename → tap the eye to toggle it.**
@@ -145,16 +154,21 @@ does — a deleted file can linger in the UI until the app restarts.
 **Every value in a popup is followed by its source and year:**
 
 ```
-County:               Chisago, MN          [TIGER 2024]
+County:               Chisago County, MN   [TIGER 2024]
 FIPS (GEOID):         27025                [TIGER 2024]
 County seat:          Center City          [Wikidata (community-maintained) 2026-09-14]
 Population:           58,241               [ACS 5-year 2023]
 Housing units:        23,110               [ACS 5-year 2023]
-Land area:            414.2 sq mi          [TIGER ALAND 2024]
+Land area:            413.9 sq mi          [TIGER ALAND 2024]
 Water area:           28.5 sq mi           [TIGER AWATER 2024]
 Sheriff / primary LE: not in dataset
 LE non-emergency:     not in dataset
 ```
+
+The `2024` is read from the Census service at build time, not hardcoded. The
+county is named exactly as its own source spells it — `Acadia Parish`,
+`Nome Census Area`, `Juneau City and Borough`, `Adjuntas Municipio` — because
+15 states do not call their county-equivalents counties.
 
 **`not in dataset` means no source returned a value. It does not mean zero.**
 Nothing here is estimated, rounded from memory, or filled in to look complete.
@@ -207,6 +221,9 @@ If you came here from a script that hit one state's GIS server directly:
 | One state's GIS server | a new schema for every state you add | TIGERweb — one schema, all 52 |
 | No provenance in the KML | no way to tell where a pack came from or how old it is | source + vintage on every value, endpoint recorded in every placemark |
 | Primary endpoint dies | build fails | falls back through alternates, and **records which one actually answered** |
+| `" County"` appended to every name | `Acadia Parish County`, `District of Columbia County` | uses the source's own full name |
+| Boundary year hardcoded | the pack asserts a vintage nothing returned | read from the service; `vintage not reported` when it says nothing |
+| Paging stops at the requested page size | a service capped below 1000 silently truncates the state | pages on the server's `exceededTransferLimit`, with a loop guard |
 
 ---
 
@@ -221,6 +238,8 @@ If you came here from a script that hit one state's GIS server directly:
 | Population all `not in dataset` | ACS didn't answer. Build still works. Re-run later, or `--acs-year 2022`. |
 | Pack is huge / ATAK is sluggish | `--precision 5` (~1 m accuracy, roughly 40% smaller). |
 | `permission denied` running a script | `chmod +x termux/*.sh` |
+| `unknown option: --x` from remove | deliberate — an unrecognised flag is never treated as a filename pattern |
+| Seats/contacts still say `not in dataset` after editing a CSV | check the row has a 5-digit `geoid` in the first column and that you kept the `geoid,...` header line |
 
 ---
 

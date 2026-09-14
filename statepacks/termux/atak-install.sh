@@ -11,7 +11,10 @@
 # copies the files and then force-stops ATAK so the next launch re-reads the
 # folder. Reopen ATAK yourself afterwards.
 set -euo pipefail
-cd "$(dirname "$0")" && . ./atak-env.sh
+# Resolve our own directory WITHOUT chdir'ing into it: the caller's relative
+# paths ("./packs/MN.kmz") have to keep resolving against THEIR cwd, not ours.
+HERE="$(cd -- "$(dirname -- "$0")" && pwd -P)"
+. "$HERE/atak-env.sh"
 
 [ $# -ge 1 ] || die "usage: $0 <file.kmz|folder> [more...]"
 [ -d "$ATAK_DIR" ] || die "ATAK overlays folder not found: $ATAK_DIR
@@ -32,12 +35,38 @@ done
 [ ${#files[@]} -gt 0 ] || die "nothing to install"
 
 say "Installing ${#files[@]} file(s) into $ATAK_DIR"
+copied=0
+failed=0
 for f in "${files[@]}"; do
   base="$(basename "$f")"
-  # -f so a re-download replaces the old copy instead of failing
-  cp -f "$f" "$ATAK_DIR/$base"
-  printf '  %-46s %s\n' "$base" "$(du -h "$ATAK_DIR/$base" | cut -f1)"
+  dest="$ATAK_DIR/$base"
+
+  # Already the same file (re-running against the ATAK folder itself)? Skip,
+  # otherwise the copy-through-temp below would delete it.
+  if [ "$f" -ef "$dest" ] 2>/dev/null; then
+    printf '  %-46s %s\n' "$base" "(already installed, skipped)"
+    continue
+  fi
+
+  # Copy to a temp name in the SAME folder, then rename. A plain "cp over the
+  # destination" truncates the live file first, so a copy interrupted by a full
+  # card or a yanked SD leaves a corrupt overlay where a working one used to
+  # be. Same-filesystem rename is atomic: the old file survives until the new
+  # one is complete.
+  tmp="$ATAK_DIR/.${base}.part.$$"
+  if cp -f -- "$f" "$tmp" 2>/dev/null && mv -f -- "$tmp" "$dest"; then
+    copied=$((copied+1))
+    printf '  %-46s %s\n' "$base" "$(du -h "$dest" | cut -f1)"
+  else
+    rm -f -- "$tmp" 2>/dev/null || true
+    failed=$((failed+1))
+    warn "  FAILED: $base (existing copy left untouched)"
+  fi
 done
+
+if [ "$copied" -eq 0 ]; then
+  die "nothing was copied ($failed failure(s)); ATAK not restarted"
+fi
 
 say ""
 say "Force-stopping ATAK so it re-reads the overlay folder"
@@ -52,6 +81,7 @@ else
 fi
 
 say ""
+[ "$failed" -eq 0 ] || warn "$failed file(s) failed to copy; $copied succeeded"
 say "Done. Now:"
 say "  1. Open ATAK."
 say "  2. Overlay Manager (the stacked-layers button)."
