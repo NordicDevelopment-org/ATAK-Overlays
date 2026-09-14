@@ -2050,3 +2050,51 @@ def test_a_sheriff_without_a_phone_still_beats_a_jail_with_one():
     ]
     got = sle.pick_sheriffs(recs, "sheriff|jail")["27005"]
     assert got["agency"] == "Becker County Sheriff" and got["phone"] == ""
+
+
+def test_the_default_filter_tolerates_the_spelling_the_source_actually_uses():
+    """OSM has "Steele County Sherriff's Office and Detention Center". That is
+    the same word misspelled by whoever typed it, not a different agency."""
+    recs = [{"geoid": "27147", "phone": "", "website": "",
+             "agency": "Steele County Sherriff's Office and Detention Center"}]
+    got = sle.pick_sheriffs(recs)
+    assert "27147" in got
+    # and it is written out exactly as the source spells it, typo included
+    assert got["27147"]["agency"].startswith("Steele County Sherriff's")
+
+
+def test_widening_is_suggested_from_the_names_that_actually_came_back():
+    """A suggestion computed from this state's own unmatched names can only
+    ever recommend a term that reaches a real county here."""
+    unmatched = {
+        "27131": ["Faribault Police Department", "Rice County Public Safety Center"],
+        "27105": ["Adrian Police Department", "Prairie Justice Center"],
+        "27001": ["Hill City Police Department"],          # nothing would help
+    }
+    got = dict(sle.suggest_widening(unmatched, "sherr?iff"))
+    assert got.get("county public safety") == 1
+    assert got.get("justice cent") == 1
+    # a city PD is never a county agency, so no term is offered for it
+    assert not any(re.search(p, "Hill City Police Department", re.I) for p in got)
+
+
+def test_a_term_already_in_the_filter_is_not_suggested_again():
+    unmatched = {"27007": ["Beltrami County Law Enforcement Center"]}
+    assert sle.suggest_widening(unmatched, "sherr?iff")          # worth offering
+    assert not sle.suggest_widening(
+        unmatched, "sherr?iff|law enforcement cent")             # already on
+
+
+def test_the_report_prints_a_runnable_widening_command(capsys):
+    names = {"27131": "Rice County", "27001": "Aitkin County"}
+    records = [
+        {"geoid": "27131", "agency": "Rice County Public Safety Center",
+         "phone": "", "website": ""},
+        {"geoid": "27001", "agency": "Hill City Police Department",
+         "phone": "", "website": ""},
+    ]
+    out = _gap_lines(capsys, state="MN", geoids=list(names), names=names,
+                     records=records, chosen={}, match="sherr?iff")
+    assert "would reach 1 of those 2 counties" in out, out
+    assert "--match 'sherr?iff|county public safety'" in out, out
+    assert "python3 seed_le_contacts.py --state MN --gaps" in out, out

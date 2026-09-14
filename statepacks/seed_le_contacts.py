@@ -27,7 +27,7 @@ source and the current year in it - the builder shows whatever is there.
 WHAT IT WRITES
 --------------
 One row per county, for agencies whose name looks like a county sheriff
-(--match, default "sheriff"). Use --all-agencies to take every law-enforcement
+(--match, default "sherr?iff"). Use --all-agencies to take every law-enforcement
 record instead and pick through them by hand.
 
 USAGE
@@ -289,6 +289,22 @@ def fetch_state(sfp, layer_id, base=HIFLD_LE, log=print):
     return out
 
 
+# OSM spells it "Sherriff" in at least one place - "Steele County Sherriff's
+# Office and Detention Center", found by the gap report on 2026-09-14. That is
+# the same word misspelled by whoever typed it, not a different agency, so the
+# default filter tolerates the doubled r. The name is still written out exactly
+# as the source has it.
+SHERIFF_RX = r"sherr?iff"
+
+# Facility names that are COUNTY-level law enforcement under another word.
+# Each was read off a real gap report, never guessed at: Minnesota files
+# sheriffs under "<County> Law Enforcement Center", "<County> Jail" and
+# "<County> Public Safety Center". They are offered as widenings, with a count
+# of how many counties each would actually reach, rather than switched on.
+COUNTY_LE_HINTS = ("law enforcement cent", "county jail", "county public safety",
+                   "justice cent", "county detention")
+
+
 def _rank(rec):
     """How good a match is, most significant first. Higher wins.
 
@@ -301,11 +317,11 @@ def _rank(rec):
         number is the part that cannot be looked up anywhere else.
     Ties keep the first record seen, which is tile order - deterministic.
     """
-    return (1 if re.search(r"sheriff", rec["agency"], re.I) else 0,
+    return (1 if re.search(SHERIFF_RX, rec["agency"], re.I) else 0,
             1 if rec.get("phone") else 0)
 
 
-def pick_sheriffs(records, match="sheriff"):
+def pick_sheriffs(records, match=SHERIFF_RX):
     """One agency per county: the best matching record.
 
     A county has many law-enforcement records (city PDs, campus police, a
@@ -356,8 +372,11 @@ def main(argv=None):
     ap.add_argument("--state", help="two-letter abbreviation, e.g. MN")
     ap.add_argument("--all", action="store_true", help="every state")
     ap.add_argument("--probe", action="store_true", help="resolve the layer and exit")
-    ap.add_argument("--match", default="sheriff",
-                    help="regex an agency name must match (default: sheriff)")
+    ap.add_argument("--match", default=SHERIFF_RX,
+                    help=f"regex an agency name must match (default: "
+                         f"{SHERIFF_RX} - the doubled r is deliberate, the "
+                         f"source misspells it in places). Run --gaps to see "
+                         f"what a wider one would reach.")
     ap.add_argument("--all-agencies", action="store_true",
                     help="write every LE record, not just sheriffs (one per county, first wins)")
     ap.add_argument("--overwrite", action="store_true",
@@ -1348,6 +1367,26 @@ def discover_arcgis(root, pattern="", log=print):
     return found
 
 
+def suggest_widening(unmatched, match, hints=COUNTY_LE_HINTS):
+    """[(pattern, counties_it_would_reach)] for the filter terms that help.
+
+    Derived from the agency names that actually came back unmatched, so it can
+    only ever suggest a term that reaches a real county in THIS state's data.
+    A term already in `match` is skipped - there is no point recommending what
+    is already switched on.
+    """
+    out = []
+    for h in hints:
+        if re.search(re.escape(h), match, re.I):
+            continue
+        rx = re.compile(h, re.I)
+        n = sum(1 for agencies in unmatched.values()
+                if any(rx.search(a) for a in agencies))
+        if n:
+            out.append((h, n))
+    return sorted(out, key=lambda t: (-t[1], t[0]))
+
+
 def report_gaps(state, geoids, names, records, chosen, match, log=print):
     """Say exactly WHY each county came back without a sheriff.
 
@@ -1391,6 +1430,20 @@ def report_gaps(state, geoids, names, records, chosen, match, log=print):
         log(f"      {label(g):34s} {got}")
     if len(unmatched) > 20:
         log(f"      ... and {len(unmatched) - 20} more")
+    helps = suggest_widening(
+        {g: [r["agency"] for r in by_county[g]] for g in unmatched}, match)
+    if helps:
+        total = len({g for g in unmatched
+                     if any(re.search(h, a, re.I)
+                            for h, _n in helps for a in
+                            [r["agency"] for r in by_county[g]])})
+        log(f"    these terms would reach {total} of those "
+            f"{len(unmatched)} counties:")
+        for h, n in helps:
+            log(f"      +{n:<3d} {h}")
+        wider = "|".join([match] + [h for h, _n in helps])
+        log(f"    python3 seed_le_contacts.py --state {state} --gaps \\")
+        log(f"        --match '{wider}'")
     log(f"  no law-enforcement record at all      : {len(empty)}"
         f"{'  <- not in the source; no filter fixes this' if empty else ''}")
     for i in range(0, min(len(empty), 24), 3):

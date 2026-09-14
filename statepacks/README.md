@@ -306,9 +306,43 @@ must not outrank the sheriff's office just by being returned first, and a phone
 number attached to the wrong agency is worse than no phone number on the right
 one.
 
+**The report works out the next widening for you.** It scans the names that
+actually came back unmatched and prints the terms that would reach a real
+county *in this state's data*, with a count each and a runnable command:
+
+```
+    these terms would reach 2 of those 23 counties:
+      +1   county public safety
+      +1   justice cent
+    python3 seed_le_contacts.py --state MN --gaps \
+        --match 'sherr?iff|county public safety|justice cent'
+```
+
+It can only ever suggest a term that reaches a county here, because it is
+computed from the names rather than from a list of what such places are
+usually called.
+
+The default filter is `sherr?iff`, and the doubled `r` is deliberate: OSM
+carries "Steele County **Sherriff**'s Office and Detention Center". That is the
+same word misspelled by whoever typed it, not a different agency — and the name
+is still written out exactly as the source has it.
+
 The rest of the unmatched counties have only **city** police departments.
 Writing one of those as a county's primary LE would be wrong, so they stay
 empty.
+
+### Minnesota, measured
+
+| filter | counties with an agency |
+|---|---|
+| `sheriff` | 52 of 87 |
+| `sherr?iff` (default — catches the typo) | 53 |
+| `+ law enforcement cent \| county jail` | 63 |
+| `+ county public safety \| justice cent` | 65 |
+| counties with only city PDs, left empty | 20 |
+| counties with no LE record at all | 2 (Cottonwood, Kanabec) |
+
+Phone numbers, at every one of those filters: **3**.
 
 ### What OSM actually has for Minnesota, measured 2026-09-14
 
