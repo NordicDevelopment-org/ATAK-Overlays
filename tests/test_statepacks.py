@@ -3167,3 +3167,76 @@ def test_the_pack_filename_keeps_its_identity_version_boundary(
     assert name.count("__") == 1, name
     family, _, edition = name.partition("__")
     assert family == "MN_Counties" and edition.endswith(".kmz") and edition != ".kmz"
+
+
+# ============================================================================
+# repeater_diagnose - step 1 of the repeater work. It asks OSM what is really
+# there; it writes no pack and decides nothing.
+# ============================================================================
+
+rd = _load("repeater_diagnose")
+
+
+def test_a_dcs_code_is_never_read_as_a_number():
+    """023N has a load-bearing leading zero and an N suffix. Read as a number
+    it becomes 23.0, which is a different tone or no tone at all."""
+    row = rd.keep_everything({"tone": "023N"}, -93.1, 45.4, "2026-09-14",
+                             {"type": "node", "id": 1})
+    assert row["tags"]["tone"] == "023N"
+    assert isinstance(row["tags"]["tone"], str)
+
+
+def test_a_frequency_stays_the_string_the_source_wrote():
+    row = rd.keep_everything({"frequency_out": "146.940"}, -93.1, 45.4,
+                             "2026-09-14", {"type": "node", "id": 1})
+    assert row["tags"]["frequency_out"] == "146.940"     # not 146.94
+
+
+def test_the_diagnostic_parse_drops_nothing_and_converts_nothing():
+    tags = {"man_made": "mast", "communication:amateur_radio": "yes",
+            "note": "seasonal"}
+    row = rd.keep_everything(tags, 1.0, 2.0, "2026-09-14",
+                             {"type": "way", "id": 9})
+    assert row["tags"] == tags
+    assert (row["type"], row["id"]) == ("way", 9)
+
+
+def test_coverage_is_counted_across_every_spelling():
+    """Two objects, two different tagging schemes, one real field."""
+    rows = [
+        {"type": "node", "id": 1, "lon": -93.1, "lat": 45.4, "tags": {
+            "communication:amateur_radio:repeater:frequency_out": "146.940"}},
+        {"type": "node", "id": 2, "lon": -93.3, "lat": 45.0, "tags": {
+            "frequency_out": "444.150"}},
+    ]
+    out = []
+    rd.report("MN", rows, log=out.append)
+    text = "\n".join(out)
+    assert "listen (repeater output)         2 of 2" in text
+    assert "objects with coordinates AND a listen frequency: 2" in text
+
+
+def test_nothing_returned_is_reported_as_an_answer_not_a_failure():
+    out = []
+    rd.report("MN", [], log=out.append)
+    text = "\n".join(out)
+    assert "That is an ANSWER, not" in text
+    assert "--dump" in text            # and says how to check it
+
+
+def test_the_repeater_query_cannot_read_the_police_tile_cache():
+    """Different question, same bounding boxes. The prefix is the guard."""
+    src = open(os.path.join(SP, "repeater_diagnose.py"),
+               encoding="utf-8").read()
+    assert 'prefix="repeaters"' in src
+    assert "query=REPEATER_QUERY" in src
+    tile = (-93.0, 45.0, -92.0, 46.0)
+    assert sle._tile_cache_path(tile, "repeaters") != \
+        sle._tile_cache_path(tile, "police")
+
+
+def test_the_query_asks_about_gmrs_too_so_its_absence_is_evidence():
+    """GMRS may have no established OSM tagging. Asking and getting nothing
+    is how that gets shown rather than assumed."""
+    assert "gmrs" in rd.REPEATER_QUERY.lower()
+    assert "amateur_radio" in rd.REPEATER_QUERY
