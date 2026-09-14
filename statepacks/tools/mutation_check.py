@@ -41,6 +41,7 @@ RPT = "statepacks/repeater_diagnose.py"
 NWR = "statepacks/build_nwr_pack.py"
 PWR = "statepacks/build_power_pack.py"
 GLY = "statepacks/glyphs.py"
+REP = "statepacks/build_repeater_pack.py"
 
 MUTATIONS = {
     SEED: [
@@ -120,6 +121,21 @@ MUTATIONS = {
          "        if parse is not None:", "        if False:"),
         ("unwire --gaps-dump",
          "                            dump=a.gaps_dump)", "                            dump=None)"),
+    ],
+    REP: [
+        ("ship a frequency in the tone column as if it were a tone",
+         '    if re.match(r"^\\d{2,3}\\.\\d$", t):\n'
+         '        return "unrecognised", "not a CTCSS tone - looks like a frequency"',
+         '    if False:\n        return "unrecognised", ""'),
+        ("let a 4x join fan-out through as 2080 real repeaters",
+         "        if key in seen:\n            continue", "        if False:\n            continue"),
+        ("compute a missing input frequency from the usual band offset",
+         '         "" if in_mhz else "not in the source; not computed from an offset"),',
+         '         ""),'),
+        ("call a town centroid a tower location",
+         '    src_note = ("approximate - this is the centre of the town, not the tower"\n'
+         '                if "centroid" in src.lower() else "")',
+         '    src_note = ""'),
     ],
     GLY: [
         ("fall back to a circle for a glyph nobody defined",

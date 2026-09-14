@@ -182,10 +182,29 @@ def g_tower():
              (-0.16, 0.92), (-0.16, 0.56)]]
 
 
+def g_repeater():
+    """A lattice tower with arcs on both sides. An amateur repeater.
+
+    Deliberately not the broadcast mast: NWR is one-way and this is not, and
+    two layers that mean different things must not share a silhouette. The
+    lattice legs are what tells them apart at icon size.
+    """
+    subs = [[(-0.46, -0.95), (-0.26, -0.95), (-0.08, 0.30), (0.08, 0.30),
+             (0.26, -0.95), (0.46, -0.95), (0.14, 0.42), (0.14, 0.62),
+             (-0.14, 0.62), (-0.14, 0.42)]]
+    for r in (0.40, 0.66):
+        for sign in (1, -1):
+            band = arc_band(0, 0.50, r, r - 0.15,
+                            math.radians(24), math.radians(72), n=16)
+            subs.append([(sign * x, y) for x, y in band])
+    return subs
+
+
 GLYPHS = {
     "bolt": g_bolt, "trefoil": g_trefoil, "flame": g_flame,
     "droplet": g_droplet, "turbine": g_turbine, "sun": g_sun,
     "battery": g_battery, "broadcast": g_broadcast, "tower": g_tower,
+    "repeater": g_repeater,
 }
 
 

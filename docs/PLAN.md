@@ -38,8 +38,37 @@ tone that opens it.
 |---|---|---|
 | 1.1 | Diagnostic: what does OSM actually carry for MN repeaters? | `DONE` and the answer is nothing |
 | 1.2 | Decide sources from 1.1's numbers | `DONE` no redistributable source exists |
-| 1.3 | `MN_Repeaters__<vintage>.kmz` from a public source | `BLOCKED` on permission, see below |
-| 1.3b | Bring-your-own-data repeater layer | `OPEN` the only unblocked path |
+| 1.3 | `MN_Repeaters__<vintage>.kmz` | `BUILT` 648 coordinated repeaters |
+
+**1.3 built 2026-09-14 from a maintainer-assembled list**, which is the path
+that was always going to work: there is no endpoint, because a coordination
+list is a PDF a council publishes.
+
+**The gate is FREQUENCY COORDINATION**, by the Minnesota Repeater Council. That
+is the objective bar for an established machine, and it is a better filter than
+the duplex-and-over-1-watt heuristic proposed here earlier: a Raspberry Pi on a
+desk is never coordinated. It is a privacy line as much as a quality one, since
+hotspot coordinates are people's homes.
+
+**The builder checks its input rather than trusting it**, and the first real
+file had two faults worth the code:
+
+- A **4x join fan-out**: 2,080 features held 648 distinct records, and one
+  callsign appeared 16 times. Stacked pins look like one pin, so this is
+  invisible on a map until someone counts. Only exactly-identical records are
+  collapsed; one callsign running FM and DMR from one tower stays two rows.
+- **Tones that are not tones**: `23.0` is DCS 023 that went through a float,
+  and `443.4` is a 70cm frequency sitting in the tone column. 8 records. They
+  are still shown, because that is what the source says, but labelled - keyed
+  into a radio the first opens nothing and the second is not a tone at all.
+
+An input frequency is carried only where the source has one, never computed
+from a band's usual offset. A position from a town centroid says so in its own
+popup, because one that does not invites someone to drive to it.
+
+Still open: GMRS. Not in any coordination list, since GMRS is not ham-
+coordinated, and myGMRS is account-gated with per-owner tone consent. See the
+maintainer decision in README section 11.
 | 1.4 | NOAA Weather Radio transmitters | `BUILT` 37 MN, coordinates found |
 
 **1.4 UNBLOCKED and built 2026-09-14.** The coordinates exist after all, in

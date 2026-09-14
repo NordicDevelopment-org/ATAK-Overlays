@@ -3739,3 +3739,103 @@ def test_write_kmz_still_works_with_no_icons(tmp_path):
     bcp.write_kmz(p, "<kml/>")
     with zipfile.ZipFile(p) as z:
         assert z.namelist() == ["doc.kml"]
+
+
+# ============================================================================
+# build_repeater_pack - coordinated repeaters only, and it checks its input.
+# ============================================================================
+
+rep = _load("build_repeater_pack")
+
+
+def _rpt(**kw):
+    p = {"callsign": "W0ABC", "output_mhz": "146.94", "input_mhz": "146.34",
+         "tone": "114.8", "mode": "FM", "band": "2m", "sponsor": "Club",
+         "access": "O", "city": "ANOKA", "coordinated": "yes (MRC)",
+         "update": "10/16/25", "coord_source": "hearham(site)"}
+    p.update(kw)
+    return {"type": "Feature", "properties": p,
+            "geometry": {"type": "Point", "coordinates": [-93.4, 45.2]}}
+
+
+def test_a_valid_ctcss_tone_is_accepted_without_a_note():
+    assert rep.classify_tone("114.8") == ("ctcss", "")
+    assert rep.classify_tone("67.0")[0] == "ctcss"
+
+
+def test_a_dcs_code_keeps_its_letter_and_its_leading_zero():
+    assert rep.classify_tone("D023")[0] == "dcs"
+    assert rep.classify_tone("D172")[0] == "dcs"
+    assert rep.classify_tone("CC15")[0] == "colour-code"
+
+
+def test_a_dcs_code_read_as_a_number_is_caught():
+    """'23.0' is DCS 023 that went through a float. Keyed into a radio as a
+    CTCSS tone it opens nothing."""
+    kind, note = rep.classify_tone("23.0")
+    assert kind == "unrecognised"
+    assert "DCS 023" in note
+
+
+def test_a_frequency_in_the_tone_column_is_caught():
+    """443.4 is a 70cm frequency, not a tone. Seen in a real file."""
+    kind, note = rep.classify_tone("443.4")
+    assert kind == "unrecognised"
+    assert "frequency" in note
+
+
+def test_a_bad_tone_is_shown_and_labelled_rather_than_dropped():
+    """It is what the source says, so it stays - but nobody should key it in
+    believing it."""
+    _m, pm = rep.placemark(_rpt(tone="443.4"), {"source": "s", "built": "d"})
+    assert "443.4" in pm
+    assert "not a CTCSS tone" in pm
+
+
+def test_identical_records_collapse_but_real_differences_survive():
+    """A 4x join fan-out put 2,080 features where there were 648 records. One
+    callsign appeared 16 times, and stacked pins look like one pin."""
+    same = [_rpt(), _rpt(), _rpt()]
+    assert len(rep.dedupe(same, log=lambda *a: None)) == 1
+    # one callsign, one tower, two modes is two rows, not a mistake
+    both = [_rpt(mode="FM"), _rpt(mode="DMR")]
+    assert len(rep.dedupe(both, log=lambda *a: None)) == 2
+
+
+def test_a_missing_input_frequency_is_never_computed_from_an_offset():
+    """'Usual' is not 'this machine's', and a repeater you cannot key is worse
+    than one you know you cannot key."""
+    _m, pm = rep.placemark(_rpt(input_mhz=""), {"source": "s", "built": "d"})
+    assert "Transmit" not in pm.split("No data for")[0]
+    assert "not computed from an offset" in pm or "No data for" in pm
+    assert "141.34" not in pm and "146.34" not in pm
+
+
+def test_a_city_centroid_says_it_is_not_the_tower():
+    """A popup that does not say so invites someone to drive to it."""
+    _m, pm = rep.placemark(_rpt(coord_source="city-centroid"),
+                           {"source": "s", "built": "d"})
+    assert "centre of the town, not the tower" in pm
+
+
+def test_the_pack_folders_by_mode_and_embeds_an_icon_per_mode(tmp_path):
+    feats = [_rpt(mode="FM"), _rpt(mode="DMR", tone="CC1"), _rpt(mode="P25")]
+    path, n = rep.build("MN", str(tmp_path), feats, log=lambda *a: None)
+    assert n == 3
+    with zipfile.ZipFile(path) as z:
+        kml = z.read("doc.kml").decode()
+        icons = sorted(x for x in z.namelist() if x.startswith("icons/"))
+    ET.fromstring(kml)
+    for mode in ("FM (1)", "DMR (1)", "P25 (1)"):
+        assert f"<name>{mode}</name>" in kml
+    assert icons == ["icons/repeater_dmr.png", "icons/repeater_fm.png",
+                     "icons/repeater_p25.png"]
+    assert "http://" not in "".join(re.findall(r"<href>([^<]+)</href>", kml))
+
+
+def test_the_pack_says_hotspots_are_not_in_it():
+    """The whole point of the coordination gate, stated where someone reads it."""
+    kml = rep.pack_kml("MN", [_rpt()],
+                       {"title": "t", "source": "s", "built": "d"})
+    assert "hotspots are not coordinated" in kml
+    assert "never computed from a band" in kml.replace("'", "")
