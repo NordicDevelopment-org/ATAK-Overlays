@@ -37,6 +37,26 @@ ROOTS = ["/storage/emulated/0/atak", "/sdcard/atak"]
 EXTS = (".kmz", ".kml")
 
 
+def check_roots(roots=None):
+    """A default root must be a TREE root, never the overlays folder.
+
+    This enforces rather than documents. Narrowing the sweep back to
+    overlays/ is the exact bug this file exists to fix - and it is a one-word
+    edit that leaves every test passing and the tool still printing a
+    confident report, just a blind one. So it raises.
+
+    An extra root passed with --root is the user's business and is not checked;
+    this is only about where the sweep starts by default.
+    """
+    bad = [r for r in (ROOTS if roots is None else roots)
+           if os.path.basename(os.path.normpath(r)) in ("overlays", "overlay")]
+    if bad:
+        raise ValueError(
+            "default root(s) point at an overlays folder: " + ", ".join(bad) +
+            ". Sweep the ATAK tree root - a copy outside overlays/ is the "
+            "whole reason this tool exists.")
+
+
 def human(n):
     for unit in ("B", "K", "M", "G"):
         if n < 1024 or unit == "G":
@@ -196,6 +216,7 @@ def main(argv=None):
                     help="extra directory to sweep (repeatable)")
     a = ap.parse_args(argv)
 
+    check_roots()
     roots = ROOTS + a.root
     files = scan(roots)
     if not files:

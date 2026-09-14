@@ -3972,3 +3972,66 @@ def test_find_dupes_still_reports_a_stale_edition_that_has_a_byte_copy(
     fam = out.index("SAME FAMILY")
     assert "P__2026_09_01.kmz" in out[fam:]
     assert "P__2026_09_14.kmz" in out[fam:]
+
+
+def test_find_dupes_default_roots_are_tree_roots_not_the_overlays_folder():
+    """The mutation harness caught this one: nothing tested the default.
+
+    Every other test here passes an explicit root, so narrowing ROOTS back to
+    /atak/overlays - the precise bug this tool was written to fix - left the
+    whole suite green. The constraint enforces now instead of being a comment.
+    """
+    afd.check_roots()                              # the shipped default is fine
+    with pytest.raises(ValueError) as exc:
+        afd.check_roots(["/storage/emulated/0/atak/overlays"])
+    assert "overlays" in str(exc.value)
+    # A trailing slash is the same mistake and must not slip past.
+    with pytest.raises(ValueError):
+        afd.check_roots(["/storage/emulated/0/atak/overlays/"])
+
+
+def test_find_dupes_main_refuses_to_run_with_a_narrowed_default(monkeypatch):
+    """The guard has to be on the path main() actually takes."""
+    monkeypatch.setattr(afd, "ROOTS", ["/storage/emulated/0/atak/overlays"])
+    with pytest.raises(ValueError):
+        afd.main([])
+
+
+# --------------------------------------------------------------------------
+# Two rules the mutation harness found untested. Both are the project's first
+# non-negotiable - never invent a value - and both survived a mutation that
+# made the code invent one, which means the rule was only ever a comment.
+# --------------------------------------------------------------------------
+def test_repeater_input_frequency_is_never_computed_from_a_band_offset():
+    """A repeater's input is a fact about that machine, not arithmetic.
+
+    2m FM in the US is usually -600 kHz, and computing it would be right most
+    of the time. Most of the time is how somebody transmits on a frequency
+    nobody coordinated. Missing stays missing, and says so.
+    """
+    p = {"output_mhz": "146.940", "input_mhz": "", "mode": "FM", "band": "2m"}
+    rows = {label: (value, note) for label, value, note in rep.rows_for(p)}
+    value, note = rows["Transmit"]
+    assert value == ""
+    assert "not computed" in note
+    # The usual offset must not appear anywhere in the popup.
+    assert "146.34" not in json.dumps(rep.rows_for(p))
+
+    # And when the source DOES carry it, it is shown verbatim.
+    p2 = dict(p, input_mhz="146.340")
+    rows2 = {label: (value, note) for label, value, note in rep.rows_for(p2)}
+    assert rows2["Transmit"][0] == "146.340 MHz"
+    assert rows2["Transmit"][1] == ""
+
+
+def test_glyph_render_raises_for_a_name_nobody_defined():
+    """A substituted symbol ships looking deliberate, which is the danger."""
+    with pytest.raises(KeyError) as exc:
+        gly.render("no-such-glyph", (255, 0, 0))
+    # The error has to say what IS available or the next person guesses again.
+    assert "no-such-glyph" in str(exc.value)
+    for known in ("bolt", "trefoil"):
+        assert known in str(exc.value)
+    # A real one still renders a PNG.
+    png = gly.render("bolt", (255, 209, 64))
+    assert png[:8] == b"\x89PNG\r\n\x1a\n"
