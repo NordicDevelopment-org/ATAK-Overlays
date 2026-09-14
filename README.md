@@ -199,6 +199,28 @@ version behaves, delete it, then build the real thing.
 
 One YAML, no code: see `CONTRIBUTING.md` and `docs/ADDING_A_SOURCE.md`.
 
+## State packs (county boundaries, runs on your phone)
+
+`statepacks/` is a self-contained, **standard-library-only** builder that makes
+one county-boundary KMZ per US state, with population, housing units, land area,
+county seat and sheriff contact in each county popup - every value stamped with
+the year it came from.
+
+It exists separately from `overlaybuilder` on purpose: it runs in **Termux on an
+Android device**, where `pip install pyproj` needs a C toolchain. No pip packages,
+no build step. It also ships Termux helpers to install packs into ATAK (including
+the force-stop that makes ATAK actually re-read the folder), list what is
+installed, and remove packs again.
+
+```bash
+cd statepacks
+python3 build_county_pack.py --probe
+python3 build_county_pack.py --state MN --out ~/atak-packs/out
+./termux/atak-install.sh ~/atak-packs/out
+```
+
+Full turnkey instructions, dependencies first: [statepacks/README.md](statepacks/README.md)
+
 ## Data sources and licensing
 
 MIT covers the **code**. Generated data carries each source's license, and
