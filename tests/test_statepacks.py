@@ -3334,6 +3334,19 @@ def test_the_inventory_changes_nothing_on_disk(tmp_path):
     assert before == after
 
 
+def test_the_report_says_it_changed_nothing(tmp_path):
+    """Every line in the findings is phrased as something to do. Without this
+    sentence a reader can reasonably think it was already done for them."""
+    _make_kmz(str(tmp_path / "MN_Counties__a.kmz"))
+    _make_kmz(str(tmp_path / "MN_Counties_a.kmz"))
+    out = []
+    rows = ainv.scan(str(tmp_path))
+    ainv.report(str(tmp_path), rows, ainv.find_problems(rows), log=out.append)
+    text = "\n".join(out)
+    assert "Nothing here was changed" in text
+    assert "printed, not run" in text
+
+
 def test_quick_mode_does_not_open_the_files(tmp_path):
     _make_kmz(str(tmp_path / "parcels.kmz"), 800, provenance=False)
     row = ainv.scan(str(tmp_path), deep=False)[0]
