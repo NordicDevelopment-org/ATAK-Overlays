@@ -28,6 +28,7 @@ import sys
 
 SEED = "statepacks/seed_le_contacts.py"
 BUILD = "statepacks/build_county_pack.py"
+INV = "statepacks/atak_inventory.py"
 
 MUTATIONS = {
     SEED: [
@@ -107,6 +108,16 @@ MUTATIONS = {
          "        if parse is not None:", "        if False:"),
         ("unwire --gaps-dump",
          "                            dump=a.gaps_dump)", "                            dump=None)"),
+    ],
+    INV: [
+        ("read one underscore as the version boundary",
+         '        ident, _, edition = stem.partition("__")',
+         '        ident, _, edition = stem.partition("_")'),
+        ("call the inventory's findings a licence to delete",
+         '    log("  Nothing here was changed. Removal lines are printed, not run.")',
+         "    pass"),
+        ("count placemarks in quick mode, which never opened the file",
+         "    if not deep:\n        return out", "    if False:\n        return out"),
     ],
     BUILD: [
         ("pad a missing county code into a fake FIPS",

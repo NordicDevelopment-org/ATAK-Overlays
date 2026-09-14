@@ -541,6 +541,11 @@ edition, so it has to be predictable rather than descriptive.
 
 ## 9. Troubleshooting
 
+Build-time symptoms are below. For something wrong on the TABLET - a
+layer drawn twice, a pack that draws nothing, a placemark with no
+source - see `docs/TROUBLESHOOTING.md`, and run `./atak-list.sh`, which
+opens every installed overlay and names what is wrong with the set.
+
 | Symptom | Fix |
 |---|---|
 | New pack doesn't appear in ATAK | You skipped the force stop. `Settings → Apps → ATAK → Force stop`, reopen. |

@@ -1,0 +1,232 @@
+#!/usr/bin/env python3
+"""What is in the ATAK overlays folder, and what is wrong with it.
+
+    python3 atak_inventory.py                      # the default ATAK folder
+    python3 atak_inventory.py --dir /some/path
+    python3 atak_inventory.py --quick              # names and sizes only
+    python3 atak_inventory.py --json out.json      # machine-readable
+
+`atak-list.sh` answers "what files are there". This answers the question you
+actually have when a pack looks wrong on the tablet: what is inside each one,
+where did it come from, and is anything here fighting with anything else.
+
+It reads. It never deletes, moves or rewrites anything - it prints the
+`atak-remove.sh` line and leaves the decision to you.
+
+WHAT IT FLAGS, and why each one is worth a line:
+
+  * TWO EDITIONS OF ONE PACK. "__" separates a pack's identity from its
+    version, so MN_Counties__Current_2026_09_14 supersedes an older
+    MN_Counties__*. Two live editions means ATAK draws the state twice.
+  * A PRE-"__" ANCESTOR. A file with one underscore carries no version, so
+    atak-install.sh can never retire it - it is invisible to the mechanism
+    that exists to prevent exactly this. That happened for real:
+    MN_Counties_Current_2026_09_14.kmz sat next to the double-underscore
+    edition for a day, drawing every county twice.
+  * NO PROVENANCE. A placemark with no source, licence or retrieval date is
+    a dot on a map you cannot check. Rule 4 of this project exists because
+    that is worse than no dot.
+  * NO PLACEMARKS. A KMZ that parses but draws nothing is a failed build that
+    got installed anyway.
+"""
+import argparse
+import json
+import os
+import re
+import sys
+import time
+import zipfile
+
+DEFAULT_DIR = "/storage/emulated/0/atak/overlays"
+
+# Text that means a document says where it came from. Matched case-insensitively
+# against doc.kml. Deliberately broad: the question is "does this file tell you
+# anything about its origin", not "was it built by this repo".
+PROVENANCE_HINTS = ("source", "licence", "license", "retrieved", "fetched",
+                    "openstreetmap", "census", "tiger", "attribution")
+
+
+def human(n):
+    for unit in ("B", "K", "M", "G"):
+        if n < 1024 or unit == "G":
+            return f"{n:.0f}{unit}" if unit == "B" else f"{n:.1f}{unit}"
+        n /= 1024.0
+    return f"{n:.1f}G"
+
+
+def family_of(name):
+    """(identity, edition). "__" is the boundary; one underscore is not it.
+
+    MN_Counties__Current_2026_09_14.kmz -> ("MN_Counties", "Current_2026_09_14")
+    MN_Counties_Current_2026_09_14.kmz  -> ("MN_Counties_Current_2026_09_14", "")
+    The second has no version, which is the whole problem with it.
+    """
+    stem = re.sub(r"\.(kmz|kml)$", "", name, flags=re.I)
+    if "__" in stem:
+        ident, _, edition = stem.partition("__")
+        return ident, edition
+    return stem, ""
+
+
+def inspect_kmz(path, deep=True):
+    """Read one overlay. Returns a dict; never raises on a bad file."""
+    out = {"name": os.path.basename(path), "bytes": 0, "mtime": "",
+           "placemarks": None, "folders": [], "provenance": None,
+           "error": None}
+    try:
+        st = os.stat(path)
+        out["bytes"] = st.st_size
+        out["mtime"] = time.strftime("%Y-%m-%d %H:%M", time.localtime(st.st_mtime))
+    except OSError as ex:                                   # noqa: BLE001
+        out["error"] = f"cannot stat: {ex}"
+        return out
+    if not deep:
+        return out
+    try:
+        if path.lower().endswith(".kml"):
+            with open(path, "rb") as fh:
+                doc = fh.read()
+        else:
+            with zipfile.ZipFile(path) as z:
+                names = [n for n in z.namelist() if n.lower().endswith(".kml")]
+                if not names:
+                    out["error"] = "no .kml inside this .kmz"
+                    return out
+                # doc.kml is the convention; take it if present, else the first.
+                pick = next((n for n in names if n.lower().endswith("doc.kml")),
+                            names[0])
+                doc = z.read(pick)
+    except (zipfile.BadZipFile, OSError, KeyError) as ex:    # noqa: BLE001
+        out["error"] = f"unreadable: {ex}"
+        return out
+    text = doc.decode("utf-8", "replace")
+    out["placemarks"] = text.count("<Placemark")
+    # Folder names are the eye-toggle tree in Overlay Manager, so they are what
+    # a person actually sees. Only the first few matter for a listing.
+    out["folders"] = re.findall(r"<Folder>\s*<name>([^<]{1,60})</name>", text)[:8]
+    low = text.lower()
+    out["provenance"] = sorted({h for h in PROVENANCE_HINTS if h in low})
+    return out
+
+
+def scan(directory, deep=True):
+    try:
+        entries = sorted(os.listdir(directory))
+    except OSError as ex:                                    # noqa: BLE001
+        raise SystemExit(f"cannot read {directory}: {ex}")
+    files = [os.path.join(directory, n) for n in entries
+             if n.lower().endswith((".kmz", ".kml"))
+             and os.path.isfile(os.path.join(directory, n))]
+    return [inspect_kmz(p, deep=deep) for p in files]
+
+
+def find_problems(rows):
+    """[(severity, name, what, suggested_fix)] - reported, never acted on."""
+    problems = []
+    fams = {}
+    for r in rows:
+        ident, edition = family_of(r["name"])
+        fams.setdefault(ident, []).append((edition, r))
+
+    for ident, members in sorted(fams.items()):
+        versioned = [(e, r) for e, r in members if e]
+        if len(versioned) > 1:
+            newest = max(versioned, key=lambda p: p[1]["mtime"])
+            for e, r in versioned:
+                if r is not newest[1]:
+                    problems.append((
+                        "DUPLICATE", r["name"],
+                        f"an older edition of {ident}; "
+                        f"{newest[1]['name']} is newer",
+                        f"atak-remove.sh '{r['name']}'"))
+        # A pre-"__" file whose whole stem starts with a versioned family's
+        # identity is that family without a version - the case nothing retires.
+        for e, r in members:
+            if e:
+                continue
+            for other, _m in fams.items():
+                if other == ident or not other:
+                    continue
+                if ident.startswith(other + "_") and any(
+                        ed for ed, _rr in fams[other]):
+                    problems.append((
+                        "STALE", r["name"],
+                        f"looks like a pre-'__' edition of {other}. It carries "
+                        f"no version, so nothing will ever retire it and ATAK "
+                        f"draws this pack twice",
+                        f"atak-remove.sh '{r['name']}'"))
+                    break
+
+    for r in rows:
+        if r["error"]:
+            problems.append(("BROKEN", r["name"], r["error"],
+                             "rebuild it, or remove it"))
+        elif r["placemarks"] == 0:
+            problems.append(("EMPTY", r["name"],
+                             "parses, but contains no placemarks - it draws "
+                             "nothing", "rebuild it, or remove it"))
+        elif r["placemarks"] is not None and not r["provenance"]:
+            problems.append(("NO SOURCE", r["name"],
+                             "no source, licence or date anywhere in the "
+                             "document - a dot you cannot check",
+                             "rebuild it from a pipeline that records "
+                             "provenance"))
+    order = {"BROKEN": 0, "DUPLICATE": 1, "STALE": 2, "EMPTY": 3, "NO SOURCE": 4}
+    return sorted(problems, key=lambda p: (order.get(p[0], 9), p[1]))
+
+
+def report(directory, rows, problems, log=print, deep=True):
+    total = sum(r["bytes"] for r in rows)
+    log(f"\nATAK OVERLAY INVENTORY - {directory}")
+    log(f"  {len(rows)} file(s), {human(total)} total\n")
+    if not rows:
+        log("  (empty)")
+        return
+    log(f"  {'file':<46} {'size':>7}  {'placemarks':>10}  {'when':<16} src")
+    for r in sorted(rows, key=lambda x: x["name"].lower()):
+        pm = "-" if r["placemarks"] is None else f"{r['placemarks']:,}"
+        src = "yes" if r["provenance"] else ("-" if deep else "?")
+        if r["error"]:
+            pm, src = "ERR", "-"
+        log(f"  {r['name']:<46} {human(r['bytes']):>7}  {pm:>10}  "
+            f"{r['mtime']:<16} {src}")
+
+    if problems:
+        log(f"\n  {len(problems)} thing(s) worth looking at:\n")
+        for sev, name, what, fix in problems:
+            log(f"    [{sev}] {name}")
+            log(f"        {what}")
+            log(f"        -> {fix}")
+    else:
+        log("\n  Nothing looks wrong.")
+    log("")
+    log("  Nothing here was changed. Removal lines are printed, not run.")
+    log("")
+
+
+def main(argv=None):
+    ap = argparse.ArgumentParser(
+        description="Inventory the ATAK overlays folder. Reads only.")
+    ap.add_argument("--dir", default=os.environ.get("ATAK_DIR", DEFAULT_DIR))
+    ap.add_argument("--quick", action="store_true",
+                    help="names, sizes and dates only; do not open the files")
+    ap.add_argument("--json", metavar="FILE", help="also write the raw findings")
+    a = ap.parse_args(argv)
+    deep = not a.quick
+    rows = scan(a.dir, deep=deep)
+    problems = find_problems(rows) if deep else []
+    report(a.dir, rows, problems, deep=deep)
+    if a.json:
+        with open(a.json, "w", encoding="utf-8") as fh:
+            json.dump({"dir": a.dir, "scanned": time.strftime("%Y-%m-%d"),
+                       "files": rows,
+                       "problems": [{"severity": s, "file": n, "what": w,
+                                     "fix": f} for s, n, w, f in problems]},
+                      fh, indent=1, ensure_ascii=False)
+            fh.write("\n")
+        print(f"  findings written to {a.json}\n")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

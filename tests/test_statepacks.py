@@ -11,6 +11,7 @@ import json
 import os
 import re
 import sys
+import time
 import zipfile
 import xml.dom.minidom as minidom
 
@@ -3240,3 +3241,101 @@ def test_the_query_asks_about_gmrs_too_so_its_absence_is_evidence():
     is how that gets shown rather than assumed."""
     assert "gmrs" in rd.REPEATER_QUERY.lower()
     assert "amateur_radio" in rd.REPEATER_QUERY
+
+
+# ============================================================================
+# atak_inventory - what is in the overlays folder and what is wrong with it.
+# It READS. Every "fix" it prints is a line for a person to run.
+# ============================================================================
+
+ainv = _load("atak_inventory")
+
+
+def _make_kmz(path, placemarks=1, provenance=True, broken=False):
+    if broken:
+        open(path, "wb").write(b"not a zip at all")
+        return
+    body = ["<?xml version='1.0'?><kml><Document><Folder><name>F</name>"]
+    body += [f"<Placemark><name>p{i}</name></Placemark>" for i in range(placemarks)]
+    body.append("</Folder>")
+    if provenance:
+        body.append("<description>Source: US Census TIGER. Retrieved 2026-09-14.</description>")
+    body.append("</Document></kml>")
+    with zipfile.ZipFile(path, "w") as z:
+        z.writestr("doc.kml", "".join(body))
+
+
+def test_the_double_underscore_is_the_version_boundary_and_one_is_not():
+    assert ainv.family_of("MN_Counties__Current_2026_09_14.kmz") == \
+        ("MN_Counties", "Current_2026_09_14")
+    assert ainv.family_of("MN_Counties_Current_2026_09_14.kmz") == \
+        ("MN_Counties_Current_2026_09_14", "")
+
+
+def test_the_pre_underscore_file_that_nothing_can_retire_is_flagged(tmp_path):
+    """The real one: MN_Counties_Current_2026_09_14.kmz sat beside the
+    double-underscore edition drawing every county twice, and the installer
+    could not see it."""
+    _make_kmz(str(tmp_path / "MN_Counties__Current_2026_09_14.kmz"), 87)
+    _make_kmz(str(tmp_path / "MN_Counties_Current_2026_09_14.kmz"), 87)
+    problems = ainv.find_problems(ainv.scan(str(tmp_path)))
+    stale = [p for p in problems if p[0] == "STALE"]
+    assert len(stale) == 1
+    assert stale[0][1] == "MN_Counties_Current_2026_09_14.kmz"
+    assert "atak-remove.sh" in stale[0][3]
+
+
+def test_a_sibling_pack_is_not_called_an_edition_of_another(tmp_path):
+    _make_kmz(str(tmp_path / "MN_Counties__a.kmz"))
+    _make_kmz(str(tmp_path / "MN_Repeaters__a.kmz"))
+    _make_kmz(str(tmp_path / "MN_Water__a.kmz"))
+    assert not ainv.find_problems(ainv.scan(str(tmp_path)))
+
+
+def test_two_live_editions_of_one_pack_are_flagged(tmp_path):
+    _make_kmz(str(tmp_path / "MN_Counties__2026_09_13.kmz"))
+    time.sleep(0.02)
+    _make_kmz(str(tmp_path / "MN_Counties__2026_09_14.kmz"))
+    dupes = [p for p in ainv.find_problems(ainv.scan(str(tmp_path)))
+             if p[0] == "DUPLICATE"]
+    assert len(dupes) == 1
+
+
+def test_a_file_with_no_provenance_is_named(tmp_path):
+    """Rule 4: a dot with no source, licence or date is one you cannot check."""
+    _make_kmz(str(tmp_path / "parcels.kmz"), 800, provenance=False)
+    p = ainv.find_problems(ainv.scan(str(tmp_path)))
+    assert [x for x in p if x[0] == "NO SOURCE" and x[1] == "parcels.kmz"]
+
+
+def test_a_pack_that_parses_but_draws_nothing_is_named(tmp_path):
+    _make_kmz(str(tmp_path / "empty_build.kmz"), 0)
+    p = ainv.find_problems(ainv.scan(str(tmp_path)))
+    assert [x for x in p if x[0] == "EMPTY"]
+
+
+def test_a_corrupt_file_is_reported_not_raised(tmp_path):
+    _make_kmz(str(tmp_path / "corrupt.kmz"), broken=True)
+    rows = ainv.scan(str(tmp_path))
+    assert rows[0]["error"]
+    assert [x for x in ainv.find_problems(rows) if x[0] == "BROKEN"]
+
+
+def test_the_inventory_changes_nothing_on_disk(tmp_path):
+    """It prints removal lines. It must never be the thing that removes."""
+    names = ["MN_Counties__a.kmz", "MN_Counties_a.kmz", "corrupt.kmz"]
+    for n in names:
+        _make_kmz(str(tmp_path / n), broken=(n == "corrupt.kmz"))
+    before = {p.name: p.stat().st_size for p in tmp_path.iterdir()}
+    rows = ainv.scan(str(tmp_path))
+    ainv.report(str(tmp_path), rows, ainv.find_problems(rows),
+                log=lambda *a, **k: None)
+    after = {p.name: p.stat().st_size for p in tmp_path.iterdir()}
+    assert before == after
+
+
+def test_quick_mode_does_not_open_the_files(tmp_path):
+    _make_kmz(str(tmp_path / "parcels.kmz"), 800, provenance=False)
+    row = ainv.scan(str(tmp_path), deep=False)[0]
+    assert row["bytes"] > 0
+    assert row["placemarks"] is None       # not counted, not guessed at

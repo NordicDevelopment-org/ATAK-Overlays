@@ -75,10 +75,17 @@ dirty tree because it has eaten uncommitted work once.
 one per state, built on a phone via Termux. Minnesota is verified end to end;
 nothing else has been fetched live.
 
-**Read `statepacks/README.md` §11 before starting.** It carries what is
-verified, what is untried, the next three things to do in order, the decisions
-that are the maintainer's rather than the code's, and a short list of things
-that look like bugs but are deliberate - don't "fix" those.
+**Read `docs/PLAN.md` first** - the working list, kept current as things
+land, with what is done, what is next and what has been settled.
+
+**Then `statepacks/README.md` §11.** It carries what is verified, what is
+untried, the decisions that are the maintainer's rather than the code's, and a
+short list of things that look like bugs but are deliberate - don't "fix"
+those.
+
+`docs/TROUBLESHOOTING.md` is the one to open when something is wrong on the
+tablet. `termux/atak-list.sh` opens every installed overlay and reports what is
+inside it and what is fighting with what.
 
 Everything is on `claude/critical-infra-kmz-overlays-cnv8nj`. No PR has been
 opened; don't open one unless asked.
