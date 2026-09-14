@@ -2707,14 +2707,16 @@ def test_the_server_timeout_is_the_one_that_was_measured_to_work():
     and each failure fans out into four more requests. This constant is
     evidence from a real run, not a tuning knob."""
     assert sle.OSM_SERVER_TIMEOUT_S == 90
-    # and the flag default is that constant, not a second copy of the number
-    import argparse
+    # and the flag default is that constant, not a second copy of the number.
+    # Collapse whitespace first: argparse wraps its help, and "(default\n90)"
+    # is the same text as "(default 90)".
     import contextlib
     import io
     buf = io.StringIO()
     with contextlib.redirect_stdout(buf), pytest.raises(SystemExit):
         sle.main(["--help"])
-    assert f"default {sle.OSM_SERVER_TIMEOUT_S}" in buf.getvalue()
+    flat = " ".join(buf.getvalue().split())
+    assert f"default {sle.OSM_SERVER_TIMEOUT_S}" in flat, flat[:200]
 
 
 def test_the_socket_outlives_the_server_timeout_by_the_slack(monkeypatch, tmp_path):
