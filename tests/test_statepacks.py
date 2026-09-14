@@ -3854,3 +3854,121 @@ def test_a_missing_input_file_explains_that_there_is_no_fallback(tmp_path):
     assert "Traceback" not in out
     assert "no live source to fall back on" in out
     assert "termux-setup-storage" in out          # and how to fix it
+
+
+# --------------------------------------------------------------------------
+# atak_find_dupes - a pack removed from overlays/ can still be served from a
+# copy somewhere else in the ATAK tree, which is how a "deleted" layer stays
+# on the map. These tests pin the three collision kinds apart, because they
+# need different answers and conflating them gives the wrong advice.
+# --------------------------------------------------------------------------
+afd = _load("atak_find_dupes")
+
+
+def _mk(path, body):
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, "wb") as fh:
+        fh.write(body)
+    return path
+
+
+def test_find_dupes_sweeps_the_whole_tree_not_just_overlays(tmp_path):
+    """The bug this file exists for: only overlays/ was ever looked at."""
+    root = str(tmp_path / "atak")
+    _mk(os.path.join(root, "overlays", "a.kmz"), b"one")
+    _mk(os.path.join(root, "tools", "datapackage", "b.kmz"), b"two")
+    _mk(os.path.join(root, "imports", "deep", "c.kml"), b"three")
+    found = afd.scan([root])
+    assert sorted(f["name"] for f in found) == ["a.kmz", "b.kmz", "c.kml"]
+
+
+def test_find_dupes_reports_identical_bytes_in_two_directories(tmp_path, capsys):
+    root = str(tmp_path / "atak")
+    _mk(os.path.join(root, "overlays", "pack.kmz"), b"same-bytes")
+    _mk(os.path.join(root, "tools", "datapackage", "pack.kmz"), b"same-bytes")
+    files = afd.scan([root])
+    problems = afd.report(files)
+    out = capsys.readouterr().out
+    assert problems == 1
+    assert "SAME BYTES" in out
+    # Both paths must be shown - naming only one leaves the other on the map.
+    assert "overlays" in out and "datapackage" in out
+
+
+def test_find_dupes_separates_editions_from_same_name_collisions(tmp_path, capsys):
+    """`__` marks an edition; without it nothing says which file is newer."""
+    root = str(tmp_path / "atak")
+    _mk(os.path.join(root, "overlays", "MN_Counties__2026_09_01.kmz"), b"old")
+    _mk(os.path.join(root, "overlays", "MN_Counties__2026_09_14.kmz"), b"new")
+    _mk(os.path.join(root, "overlays", "roads.kmz"), b"aaa")
+    _mk(os.path.join(root, "imports", "roads.kmz"), b"bbb")
+    afd.report(afd.scan([root]))
+    out = capsys.readouterr().out
+    assert "SAME FAMILY" in out
+    assert "SAME NAME, DIFFERENT BYTES" in out
+    # An edition pair is not a judgement call and must not be filed as one.
+    fam = out.index("SAME FAMILY")
+    name = out.index("SAME NAME, DIFFERENT BYTES")
+    assert "MN_Counties" in out[fam:name]
+    assert "MN_Counties" not in out[name:]
+
+
+def test_find_dupes_family_splits_only_on_the_edition_marker():
+    assert afd.family_of("MN_Counties__Current_2026_09_14.kmz") == "MN_Counties"
+    # No `__`: the whole stem is the family, which is why these cannot be
+    # retired automatically. Splitting on `_` here would merge unrelated packs.
+    assert afd.family_of("MN_Chisago_County_rev2.kmz") == "MN_Chisago_County_rev2"
+
+
+def test_find_dupes_counts_a_symlinked_root_once(tmp_path):
+    """/sdcard is usually a symlink to /storage/emulated/0."""
+    real = str(tmp_path / "real")
+    _mk(os.path.join(real, "overlays", "a.kmz"), b"one")
+    link = str(tmp_path / "link")
+    os.symlink(real, link)
+    assert len(afd.scan([real, link])) == 1
+
+
+def test_find_dupes_is_read_only(tmp_path, capsys):
+    root = str(tmp_path / "atak")
+    p1 = _mk(os.path.join(root, "overlays", "pack.kmz"), b"x")
+    p2 = _mk(os.path.join(root, "imports", "pack.kmz"), b"x")
+    afd.report(afd.scan([root]))
+    assert os.path.exists(p1) and os.path.exists(p2)
+    assert "Nothing was changed" in capsys.readouterr().out
+
+
+def test_find_dupes_clean_tree_says_so(tmp_path, capsys):
+    root = str(tmp_path / "atak")
+    _mk(os.path.join(root, "overlays", "a.kmz"), b"one")
+    _mk(os.path.join(root, "overlays", "b.kmz"), b"two")
+    assert afd.report(afd.scan([root])) == 0
+    assert "No collisions" in capsys.readouterr().out
+
+
+def test_find_dupes_missing_tree_names_the_directories_it_tried(capsys):
+    rc = afd.main(["--root", "/nope/not/here"])
+    out = capsys.readouterr().out
+    assert rc == 1
+    assert "no such directory" in out
+    assert "--root" in out                        # and how to point it elsewhere
+
+
+def test_find_dupes_still_reports_a_stale_edition_that_has_a_byte_copy(
+        tmp_path, capsys):
+    """The first version dropped it, and the stale pack stayed on the map.
+
+    An old edition with a byte-identical copy elsewhere was filed under SAME
+    BYTES and then filtered out of SAME FAMILY - so the report never said the
+    old edition was installed alongside the new one, which is the whole
+    question being asked.
+    """
+    root = str(tmp_path / "atak")
+    _mk(os.path.join(root, "overlays", "P__2026_09_01.kmz"), b"old")
+    _mk(os.path.join(root, "imports", "P__2026_09_01.kmz"), b"old")
+    _mk(os.path.join(root, "overlays", "P__2026_09_14.kmz"), b"new")
+    afd.report(afd.scan([root]))
+    out = capsys.readouterr().out
+    fam = out.index("SAME FAMILY")
+    assert "P__2026_09_01.kmz" in out[fam:]
+    assert "P__2026_09_14.kmz" in out[fam:]

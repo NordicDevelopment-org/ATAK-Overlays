@@ -37,6 +37,7 @@ import sys
 SEED = "statepacks/seed_le_contacts.py"
 BUILD = "statepacks/build_county_pack.py"
 INV = "statepacks/atak_inventory.py"
+DUP = "statepacks/atak_find_dupes.py"
 RPT = "statepacks/repeater_diagnose.py"
 NWR = "statepacks/build_nwr_pack.py"
 PWR = "statepacks/build_power_pack.py"
@@ -202,6 +203,21 @@ MUTATIONS = {
          "    pass"),
         ("count placemarks in quick mode, which never opened the file",
          "    if not deep:\n        return out", "    if False:\n        return out"),
+    ],
+    DUP: [
+        ("sweep only the overlays folder, which is the bug it exists for",
+         'ROOTS = ["/storage/emulated/0/atak", "/sdcard/atak"]',
+         'ROOTS = ["/storage/emulated/0/atak/overlays"]'),
+        ("drop a stale edition from the report when a byte-copy exists",
+         '        if "__" not in f["name"] or f["sha"] in first_of_sha:',
+         '        if "__" not in f["name"] or f["sha"] in first_of_sha '
+         'or f["sha"] in same_bytes:'),
+        ("call two files of the same name an edition pair",
+         '        if "__" not in f["name"] or f["sha"] in first_of_sha:',
+         '        if f["sha"] in first_of_sha:'),
+        ("follow a symlinked root twice",
+         "                real = os.path.realpath(path)",
+         "                real = path"),
     ],
     BUILD: [
         ("pad a missing county code into a fake FIPS",
