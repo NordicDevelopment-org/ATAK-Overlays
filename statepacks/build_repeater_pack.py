@@ -295,6 +295,23 @@ def main(argv=None):
                          "Brandmeister'")
     a = ap.parse_args(argv)
 
+    if not os.path.exists(a.from_file):
+        # A traceback tells you the file is missing. It does not tell you that
+        # this builder has no endpoint to fall back on, which is the thing
+        # someone actually needs to know at this point.
+        raise SystemExit(
+            f"not found: {a.from_file}\n"
+            f"\n"
+            f"There is no live source to fall back on: a frequency-coordination\n"
+            f"list is a PDF a council publishes, so this pack is built from a\n"
+            f"file you assemble and put somewhere this script can read.\n"
+            f"\n"
+            f"If you downloaded it on the phone, it is probably still in\n"
+            f"Downloads rather than in the folder above. To find it:\n"
+            f"    ls ~/storage/downloads/*repeater* "
+            f"/storage/emulated/0/Download/*repeater* 2>/dev/null\n"
+            f"    unzip -o <that file> -d ~/atak-packs/\n"
+            f"(if ~/storage does not exist yet, run termux-setup-storage once)")
     doc = json.load(open(a.from_file, encoding="utf-8"))
     feats = doc.get("features") if isinstance(doc, dict) else doc
     if not isinstance(feats, list):

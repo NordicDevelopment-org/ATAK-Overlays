@@ -3839,3 +3839,18 @@ def test_the_pack_says_hotspots_are_not_in_it():
                        {"title": "t", "source": "s", "built": "d"})
     assert "hotspots are not coordinated" in kml
     assert "never computed from a band" in kml.replace("'", "")
+
+
+def test_a_missing_input_file_explains_that_there_is_no_fallback(tmp_path):
+    """A traceback says the file is missing. It does not say this builder has
+    no endpoint to fall back on, which is what someone needs at that moment."""
+    import subprocess
+    r = subprocess.run(
+        [sys.executable, os.path.join(SP, "build_repeater_pack.py"),
+         "--state", "MN", "--from-file", str(tmp_path / "nope.geojson")],
+        capture_output=True, text=True)
+    assert r.returncode != 0
+    out = r.stderr + r.stdout
+    assert "Traceback" not in out
+    assert "no live source to fall back on" in out
+    assert "termux-setup-storage" in out          # and how to fix it
