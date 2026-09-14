@@ -14,9 +14,18 @@ WHY NOT AN IMAGE LIBRARY. `pkg install python` and nothing else is the whole
 install story for this on a phone. Pillow is not in it. These are PNGs written
 by hand: a scanline polygon fill, supersampled, then zlib and four chunks.
 
-WHY NOT ATAK'S OWN SYMBOLS. ATAK resolves MIL-STD-2525 symbology for CoT
-markers, which a KML placemark is not. See docs/ATAK.md; if that turns out to
-be wrong the fix is to swap the href, and everything else here still stands.
+WHY NOT ATAK'S OWN SYMBOLS - CORRECTION. This file used to say ATAK resolves
+2525C only for CoT markers and not for a KML placemark. That is wrong. ATAK's
+KML importer passes an IconStyle href containing a colon through unchanged, and
+`asset` is a registered scheme, so `asset://mil-std-2525c/sfgpiue---h----.png`
+reaches the 2525C PNGs inside ATAK's own APK. Read from ATAK-CIV source, not
+run on a device - see docs/ATAK.md "MIL-STD-2525C from the APK".
+
+Embedded glyphs stay the primary anyway, for reasons the correction does not
+touch: a file in the zip renders on every ATAK version, on WinTAK and iTAK and
+in Google Earth, and cannot be moved or renamed out from under a pack by an
+APK update. `asset:` is the optional nicety, and only after someone confirms it
+on a device the way TIGERweb and ACS were confirmed.
 
 WHAT MAKES A GLYPH READABLE ON A TACTICAL MAP. It sits over satellite imagery
 and a dark basemap at maybe 5 mm across. So: one silhouette, no interior

@@ -30,6 +30,33 @@ version; ATAK's KML importer is strict about a few things.
 - `LabelStyle` scale 0.8: ATAK shows placemark names on the map for points;
   names are kept short (`"Name (1,146.4 MW)"`, `"Owner 345 kV"`).
 
+### MIL-STD-2525C from the APK
+
+Read from ATAK-CIV source on 2026-09-14, **not yet run on a device**. An earlier
+note in `statepacks/glyphs.py` said the opposite and has been corrected.
+
+- `KMLDriverDefinition2.cpp` rewrites an IconStyle href only when it looks like
+  a path inside the archive. An href containing a colon is left alone.
+- `GLBitmapLoader.java` registers `asset` as a scheme, so the href reaches
+  ATAK's own APK assets.
+- So `<href>asset://mil-std-2525c/&lt;sidc&gt;.png</href>` addresses the 3,292
+  2525C PNGs (plus 292 UI icons) the APK ships. `assets/symbols.dat` is ATAK's
+  own description table for them.
+- SIDCs confirmed present in that set, for layers this repo builds:
+
+  | thing | SIDC |
+  |---|---|
+  | electric power facility | `sfgpiue---h----` |
+  | dam | `sfgpiued--h----` |
+  | nuclear energy facility | `sfgpimf---h----` |
+  | telecommunications facility | `sfgpiut---h----` |
+  | hospital | `sfgpixh---h----` |
+
+**Embedded PNGs stay the primary.** An icon in the zip renders on every ATAK
+version, and on WinTAK, iTAK and Google Earth, and an APK update cannot move or
+rename it. `asset:` is a per-layer nicety to try after someone confirms it
+renders on a real device - same bar as TIGERweb and ACS.
+
 ## Attributes
 
 - `<description>` is CDATA HTML: a headline table with unit-labelled canonical
