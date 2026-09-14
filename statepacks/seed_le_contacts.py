@@ -67,7 +67,8 @@ UA = {"User-Agent": "atak-statepacks-le/1.0 "
                     "(+https://github.com/NordicDevelopment-org/ATAK-Overlays)"}
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-CSV_PATH = os.path.join(HERE, "data", "le_contacts.csv")
+# Written beside the shipped template, NOT over it - see fetch_county_seats.py
+CSV_PATH = os.path.join(HERE, "data", "le_contacts.local.csv")
 FIELDS = ["geoid", "agency", "phone", "source", "vintage"]
 
 STATE_FIPS = {

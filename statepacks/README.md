@@ -89,6 +89,11 @@ python3 build_county_pack.py --state MN --out ~/atak-packs/out
 Both write their own source and year into every row, so the popup shows where
 each value came from. Neither overwrites a row you edited by hand.
 
+They write to `data/<name>.local.csv`, **not** over the shipped template. The
+template is tracked in git; the `.local.csv` is gitignored. So a `git pull` can
+never conflict with data you fetched, and a pull can never wipe it. Where both
+have a row for the same county, yours wins.
+
 **Other builds:**
 
 ```bash
@@ -205,7 +210,7 @@ not a convenience.
 |---|---|---|
 | Boundary, FIPS, land/water area | **US Census TIGERweb** | public domain; national — same call for all 52. **Verified live 2026-09-14**: layer 1, 87 MN counties, renders correctly in ATAK-CIV |
 | Population, housing units | **US Census ACS 5-year API** | exact figures, explicit vintage. **Key required** - verified live 2026-09-14: 87 MN counties |
-| County seat | **Wikidata** via `fetch_county_seats.py` | community-maintained, not a government register — labelled as such in the popup |
+| County seat | **Wikidata** via `fetch_county_seats.py` | community-maintained, not a government register — labelled as such in the popup. **Verified live 2026-09-14**: 87/87 MN counties |
 | Sheriff / LE + non-emergency | **HIFLD LE Locations** via `seed_le_contacts.py` | frozen 2025 snapshot, no longer maintained — verify before relying on a number |
 
 ### Why sheriff contacts ship empty, and how to fill them

@@ -44,7 +44,10 @@ UA = {"User-Agent": "atak-statepacks-seats/1.0 (+https://github.com/NordicDevelo
       "Accept": "application/sparql-results+json"}
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-CSV_PATH = os.path.join(HERE, "data", "county_seats.csv")
+# Written beside the shipped template, NOT over it: the template is tracked
+# in git, this file is gitignored. A pull can never clobber your data and
+# your data can never conflict with a pull.
+CSV_PATH = os.path.join(HERE, "data", "county_seats.local.csv")
 SOURCE = "Wikidata (community-maintained)"
 
 # P31/P279* Q28575 = "county of the United States" and its subclasses

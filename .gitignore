@@ -12,3 +12,6 @@ venv/
 .DS_Store
 demo/
 doctor.md
+
+# Locally fetched/verified enrichment data - never committed, never conflicts
+statepacks/data/*.local.csv

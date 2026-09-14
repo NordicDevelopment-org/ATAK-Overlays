@@ -467,8 +467,21 @@ def fetch_acs(state_fips, year=ACS_YEAR, log=print, key=None):
 # the row so the popup can show it.
 # --------------------------------------------------------------------------
 def load_csv_table(filename):
-    """{geoid: {column: value}} from data/<filename>, or {} if absent."""
-    path = os.path.join(DATA_DIR, filename)
+    """{geoid: {column: value}} from data/<filename>, then data/<stem>.local.csv.
+
+    The shipped file is tracked in git and ships empty. Anything you fetch or
+    verify lands in the .local.csv beside it, which is gitignored - so a `git
+    pull` can never conflict with your data, and your data can never be wiped
+    by a pull. Local rows win over shipped ones for the same county.
+    """
+    out = {}
+    stem = filename[:-4] if filename.endswith(".csv") else filename
+    for name in (filename, f"{stem}.local.csv"):
+        out.update(_read_csv_table(os.path.join(DATA_DIR, name)))
+    return out
+
+
+def _read_csv_table(path):
     if not os.path.exists(path):
         return {}
     out = {}

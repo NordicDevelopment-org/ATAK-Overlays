@@ -98,6 +98,8 @@ environment still cannot reach these):
   HTML page titled "Missing Key" - not an error status and not JSON - so the
   key is required, free, and instant at
   https://api.census.gov/data/key_signup.html
+- Wikidata county seats: 87 of 87 Minnesota counties resolved, spot-checked
+  correct (Chisago/Center City, Kanabec/Mora, St. Louis/Duluth).
 - Boundary detail: layers 1/3/5/7/9/11/13 all return an identical 1906 vertices
   for the same county, so the repeats within a vintage are not generalization
   levels and there is no sharper layer to switch to. Layer 67 has 1928 (+1.2%)

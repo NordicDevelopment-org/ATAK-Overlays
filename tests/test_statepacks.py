@@ -770,3 +770,48 @@ def test_real_http_get_redacts_before_raising(monkeypatch):
         assert "key=<redacted>" in str(e)
     else:
         pytest.fail("expected the request to fail")
+
+
+# --------------------------------------------------------------------------
+# Local enrichment data lives beside the shipped template, never over it.
+# --------------------------------------------------------------------------
+def test_local_csv_overrides_shipped_and_neither_clobbers_the_other(tmp_path, monkeypatch):
+    data = tmp_path / "data"
+    data.mkdir()
+    # the shipped template: tracked in git, ships with a comment block
+    (data / "county_seats.csv").write_text(
+        "# shipped template\ngeoid,seat,source,vintage\n"
+        "27001,FromShipped,repo,2020\n27003,OnlyShipped,repo,2020\n")
+    # what a fetch writes: gitignored, wins where they overlap
+    (data / "county_seats.local.csv").write_text(
+        "# local\ngeoid,seat,source,vintage\n"
+        "27001,FromLocal,Wikidata,2026-09-14\n27005,OnlyLocal,Wikidata,2026-09-14\n")
+    monkeypatch.setattr(bcp, "DATA_DIR", str(data))
+
+    t = bcp.load_csv_table("county_seats.csv")
+    assert t["27001"]["seat"] == "FromLocal"          # local wins
+    assert t["27001"]["source"] == "Wikidata"
+    assert t["27003"]["seat"] == "OnlyShipped"        # shipped still read
+    assert t["27005"]["seat"] == "OnlyLocal"          # local-only row present
+
+
+def test_missing_local_file_is_not_an_error(tmp_path, monkeypatch):
+    data = tmp_path / "data"
+    data.mkdir()
+    (data / "le_contacts.csv").write_text(
+        "# shipped\ngeoid,agency,phone,source,vintage\n")
+    monkeypatch.setattr(bcp, "DATA_DIR", str(data))
+    assert bcp.load_csv_table("le_contacts.csv") == {}
+
+
+def test_the_fetchers_write_local_files_not_the_tracked_templates():
+    """A fetch must never dirty a tracked file - that is what makes `git pull`
+    conflict on a machine that has run one."""
+    assert sle.CSV_PATH.endswith("le_contacts.local.csv")
+    seats = _load("fetch_county_seats")
+    assert seats.CSV_PATH.endswith("county_seats.local.csv")
+
+
+def test_local_data_is_gitignored():
+    ignore = open(os.path.join(ROOT, ".gitignore"), encoding="utf-8").read()
+    assert "statepacks/data/*.local.csv" in ignore
