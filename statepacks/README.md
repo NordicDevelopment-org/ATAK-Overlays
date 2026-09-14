@@ -372,6 +372,7 @@ whole-state box gets a 504. On top of that:
 | **Every tile is cached on disk** | `~/.cache/atak-statepacks/`. A re-run only fetches what is actually missing. |
 | **A stuck tile is split, not repeated** | A tile that times out on two mirrors is retried as four quarters. Asking a busy mirror the same large question again is what turned one slow tile into a stalled run. |
 | **A tile already served as quarters is not re-requested** | Otherwise every run pays the timeout for the one tile the mirrors would not serve. |
+| **Two boxes when a state crosses the date line** | Alaska's Aleutians sit near +172 and the mainland near -130; min/max longitude over both is a 302-degree box — most of the northern hemisphere in one query. Detected from the coordinates, never from a list of states. |
 | **County boundaries are cached 30 days** | 87 polygons was the largest download the seeder made, and it was being made twice per run. |
 | **A dated, expiring tile cache** | Each entry records when it was fetched, and the CSV row is stamped with *that* date — not the date the file happened to be written. Entries expire after 30 days. |
 | **One wall-clock budget** | 480s **per state** (`--all` gets that for each state, not in total). The response body is read in chunks with the budget checked between them, so a mirror that trickles bytes cannot outlive it either. |

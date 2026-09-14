@@ -2450,3 +2450,67 @@ def test_the_socket_gets_more_time_than_the_server(monkeypatch, tmp_path):
                        lambda *a: None)
     assert seen == [30 + sle.OSM_SOCKET_SLACK], seen
     assert sle.OSM_SOCKET_SLACK > 0
+
+
+# --------------------------------------------------------------------------
+# The antimeridian. min/max longitude is not a bounding box for a state with
+# land on both sides of it.
+# --------------------------------------------------------------------------
+def _ring(w, s_, e, n):
+    return [[[[w, s_], [e, s_], [e, n], [w, n], [w, s_]]]]
+
+
+def test_a_normal_state_still_gets_exactly_one_box():
+    shapes = [("27001", _ring(-97.0, 43.0, -95.0, 45.0)),
+              ("27003", _ring(-94.0, 46.0, -90.0, 49.0))]
+    boxes = sle.bboxes_of_shapes(shapes, pad=0.0)
+    assert boxes == [(-97.0, 43.0, -90.0, 49.0)]
+    assert sle.bbox_of_shapes(shapes, pad=0.0) == boxes[0]
+
+
+def test_straddling_the_antimeridian_gives_two_boxes_not_one_huge_one():
+    """Alaska: the Aleutians sit near +172, the mainland near -130. min/max is
+    302 degrees of longitude - most of the northern hemisphere in one query."""
+    shapes = [("02016", _ring(172.0, 51.0, 179.9, 53.0)),     # Aleutians West
+              ("02020", _ring(-150.0, 60.0, -149.0, 62.0))]   # Anchorage
+    boxes = sle.bboxes_of_shapes(shapes, pad=0.0)
+    assert len(boxes) == 2, boxes
+    spans = sorted(round(e - w) for w, _s, e, _n in boxes)
+    assert spans == [1, 8], spans                # not one 330-degree box
+    assert all(-180.0 <= w <= 180.0 and -180.0 <= e <= 180.0
+               for w, _s, e, _n in boxes), boxes
+    # both boxes still cover the full latitude range of the state
+    assert all(s_ == 51.0 and n == 62.0 for _w, s_, _e, n in boxes), boxes
+
+
+def test_the_single_box_helper_refuses_rather_than_dropping_half_a_state():
+    shapes = [("02016", _ring(172.0, 51.0, 179.9, 53.0)),
+              ("02020", _ring(-150.0, 60.0, -149.0, 62.0))]
+    with pytest.raises(ValueError, match="antimeridian"):
+        sle.bbox_of_shapes(shapes)
+
+
+def test_the_pad_never_pushes_a_box_off_the_globe():
+    shapes = [("02110", _ring(-180.0, -90.0, 180.0, 90.0))]
+    for w, s_, e, n in sle.bboxes_of_shapes(shapes, pad=5.0):
+        assert -180.0 <= w < e <= 180.0
+        assert -90.0 <= s_ < n <= 90.0
+
+
+def test_a_straddling_state_is_tiled_across_both_boxes(monkeypatch, tmp_path):
+    monkeypatch.setattr(sle, "CACHE_DIR", str(tmp_path))
+    shapes = [("02016", _ring(172.0, 51.0, 179.0, 53.0)),
+              ("02020", _ring(-150.0, 60.0, -149.0, 62.0))]
+    asked = []
+
+    def tile(t, m, to, at, log, deadline=None, locks=None, start=0, **kw):
+        asked.append(t)
+        return ([], False, TODAY)
+
+    monkeypatch.setattr(sle, "_overpass_tile", tile)
+    monkeypatch.setattr(sle, "county_shapes",
+                        lambda sfp, log=print, with_names=False, **kw: shapes)
+    sle.fetch_osm("AK", log=lambda *a: None)
+    assert len(asked) == 2 * 9, len(asked)       # two boxes, nine tiles each
+    # and no tile is the impossible one that spans the planet
+    assert all(t[2] - t[0] < 180 for t in asked), asked

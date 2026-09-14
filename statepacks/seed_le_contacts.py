@@ -944,12 +944,20 @@ def _element_key(el):
             "" if isinstance(i, int) else str(i))
 
 
-def bbox_of_shapes(shapes, pad=0.02):
-    """(w, s, e, n) around every county in `shapes`, with a small pad.
+def bboxes_of_shapes(shapes, pad=0.02):
+    """[(w, s, e, n)] around every county in `shapes` - normally one box.
 
     Derived from the boundaries actually downloaded, so no envelope is typed in
     from memory. The pad catches a station sitting right on a border; anything
     genuinely outside the state is dropped later by the spatial match anyway.
+
+    TWO boxes when the geometry straddles the antimeridian. min/max longitude
+    is not a bounding box for a state with points on both sides of it: Alaska's
+    Aleutian islands sit near +172 and the rest of the state near -130, so
+    min/max spans 302 degrees - a single Overpass query for most of the
+    northern hemisphere. The condition is detected from the coordinates
+    themselves, never from a list of which states are supposed to cross, so it
+    is right whichever data actually does.
     """
     xs, ys = [], []
     for _geoid, polys in shapes:
@@ -960,7 +968,35 @@ def bbox_of_shapes(shapes, pad=0.02):
                     ys.append(pt[1])
     if not xs:
         raise ValueError("no county geometry to derive a bounding box from")
-    return (min(xs) - pad, min(ys) - pad, max(xs) + pad, max(ys) + pad)
+    s_ = max(-90.0, min(ys) - pad)
+    n = min(90.0, max(ys) + pad)
+
+    def box(lons):
+        return (max(-180.0, min(lons) - pad), s_,
+                min(180.0, max(lons) + pad), n)
+
+    if max(xs) - min(xs) <= 180:
+        return [box(xs)]
+    west = [x for x in xs if x < 0]
+    east = [x for x in xs if x >= 0]
+    if not west or not east:                 # cannot actually happen, but a
+        return [box(xs)]                     # bare min/max is the honest answer
+    return [box(west), box(east)]
+
+
+def bbox_of_shapes(shapes, pad=0.02):
+    """The single box around `shapes`.
+
+    Raises when the geometry needs two, rather than returning one of them and
+    silently dropping half the state. Callers that can handle both use
+    bboxes_of_shapes.
+    """
+    boxes = bboxes_of_shapes(shapes, pad)
+    if len(boxes) != 1:
+        raise ValueError(
+            "this geometry straddles the antimeridian and needs two bounding "
+            "boxes; use bboxes_of_shapes")
+    return boxes[0]
 
 
 def tile_bbox(bbox, cols=OSM_TILE_COLS, rows=OSM_TILE_ROWS):
@@ -1361,9 +1397,14 @@ def fetch_osm(state_abbr, mirrors=None, log=print, bbox=None, timeout=30,
     if bbox is None:
         if shapes is None:
             shapes = county_shapes(STATE_FIPS[state_abbr.upper()], log=log)
-        bbox = bbox_of_shapes(shapes)
+        boxes = bboxes_of_shapes(shapes)
+    else:
+        boxes = [bbox]
+    if len(boxes) > 1:
+        log(f"    this state straddles the antimeridian: {len(boxes)} bounding "
+            f"boxes, not one")
     mirrors = mirrors or OVERPASS_MIRRORS
-    tiles = tile_bbox(bbox)
+    tiles = [t for b in boxes for t in tile_bbox(b)]
     clock = Deadline(deadline_s)
     locks = {u: threading.Lock() for u in mirrors}
     log(f"    {len(tiles)} tile(s), {min(jobs, len(mirrors))} at a time, "
@@ -1705,7 +1746,7 @@ def dump_raw(state_abbr, use_osm, use_usgs, args, layer_id):
         # 504 on, and it would ignore tiles already sitting in the cache.
         shapes = county_shapes(STATE_FIPS[state_abbr.upper()],
                                refresh=getattr(args, "refresh_shapes", False))
-        tiles = tile_bbox(bbox_of_shapes(shapes))
+        tiles = [t for b in bboxes_of_shapes(shapes) for t in tile_bbox(b)]
         clock = Deadline(getattr(args, "deadline", OSM_DEADLINE_S))
         w, s_, e, n = tiles[0]
         print("QUERY (one tile; the fetch runs this over "
