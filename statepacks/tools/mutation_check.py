@@ -275,6 +275,11 @@ MUTATIONS = {
          "        kept = {id(pm) for pm in placemarks}", "        kept = placemarks"),
     ],
     EMG: [
+        ("set visibility on the folder only, so it imports off and renders on",
+         "        body = \"\".join(placemark(r, style_id, visible=not off) for r in group)",
+         "        body = \"\".join(placemark(r, style_id) for r in group)"),
+        ("import every layer switched on, however dense",
+         '    DEFAULT_OFF = {"schools", "government"}', "    DEFAULT_OFF = set()"),
         ("report a zero for every class, including ones nobody asked for",
          "    asked = classes if classes is not None else CLASSES",
          "    asked = CLASSES"),

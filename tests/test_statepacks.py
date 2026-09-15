@@ -4876,3 +4876,36 @@ def test_emergency_report_defaults_to_the_whole_table():
     joined = " ".join(said)
     assert "returned nothing" in joined
     assert "NOT asked for" not in joined
+
+
+def test_emergency_dense_layers_import_switched_off():
+    """docs/ATAK.md: a dense layer imports off so the tablet stays responsive.
+
+    Measured for Minnesota: schools 2,784 and government 1,207 are 64% of the
+    pack, and neither is why someone opens an emergency overlay.
+    """
+    rows = [
+        emg.parse_element({"amenity": "school", "name": "S"}, -93.0, 45.0,
+                          "2026-09-15", {"type": "node", "id": 1}),
+        emg.parse_element({"amenity": "police", "name": "PD"}, -93.1, 45.1,
+                          "2026-09-15", {"type": "node", "id": 2}),
+    ]
+    kml, _icons = emg.build_kml("MN", rows, "2026-09-15")
+    minidom.parseString(kml)
+    schools = kml[kml.index("Schools ("):]
+    schools = schools[:schools.index("</Folder>")]
+    assert "<visibility>0</visibility>" in schools
+    # And on the placemark too - a folder-only flag imports looking off and
+    # renders on, which is the bug the power pack already hit.
+    assert schools.count("<visibility>0</visibility>") >= 2
+
+    le = kml[kml.index("Law enforcement ("):]
+    le = le[:le.index("</Folder>")]
+    assert "<visibility>0</visibility>" not in le
+
+
+def test_emergency_default_off_is_an_explicit_list_not_a_threshold():
+    """A count threshold would flip a layer off in one state and not another,
+    for no reason visible in the file."""
+    assert emg.DEFAULT_OFF == {"schools", "government"}
+    assert emg.DEFAULT_OFF <= set(emg.class_names())

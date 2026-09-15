@@ -86,6 +86,17 @@ CLASSES = [
      "Shelters"),
 ]
 
+# Folders that import SWITCHED OFF. docs/ATAK.md: a dense layer imports off so
+# the tablet stays responsive, and one tap turns it on.
+#
+# Named explicitly rather than chosen by a count threshold. A threshold would
+# silently flip a layer off in the one state where it happens to be dense, so
+# the same pack would behave differently in Minnesota and Wyoming for no
+# reason anybody could see in the file. Measured for Minnesota: schools 2,784
+# and government 1,207 are 64% of the whole pack, and neither is why someone
+# opens an emergency overlay.
+DEFAULT_OFF = {"schools", "government"}
+
 SOURCE = "OpenStreetMap contributors"
 LICENCE = "ODbL 1.0"
 SOURCE_URL = "https://www.openstreetmap.org/copyright"
@@ -275,7 +286,7 @@ def rows_for(r):
     ]
 
 
-def placemark(r, style_id):
+def placemark(r, style_id, visible=True):
     rows = [(a, b, c) for a, b, c in rows_for(r) if b]
     body = "".join(
         f"<tr><td><b>{bcp.esc(a)}</b></td><td>{bcp.esc(b)}"
@@ -292,7 +303,8 @@ def placemark(r, style_id):
     # no way to tell what it is.
     label = r.get("name") or f"(unnamed {r.get('layer', 'feature')})"
     return (f"<Placemark><name>{bcp.esc(label)}</name>"
-            f"<styleUrl>#{style_id}</styleUrl>"
+            + ("" if visible else "<visibility>0</visibility>")
+            + f"<styleUrl>#{style_id}</styleUrl>"
             f"<description><![CDATA[<table>{body}</table>{foot}]]></description>"
             f"<ExtendedData>{extra}</ExtendedData>"
             f"<Point><coordinates>{r['lon']:.5f},{r['lat']:.5f},0</coordinates>"
@@ -321,10 +333,15 @@ def build_kml(state, rows, built, classes=None):
             f"<LabelStyle><scale>0.8</scale></LabelStyle></Style>")
         # An empty folder is kept and says zero. Dropping it would make "no
         # fire stations in this state" indistinguishable from "we did not ask".
-        body = "".join(placemark(r, style_id) for r in group)
+        # Visibility goes on the PLACEMARKS as well as the folder. ATAK honours
+        # the folder for the tree but draws a placemark whose own visibility is
+        # unset, so a folder-only flag imports looking off and renders on.
+        off = layer in DEFAULT_OFF
+        vis = "<visibility>0</visibility>" if off else ""
+        body = "".join(placemark(r, style_id, visible=not off) for r in group)
         folders.append(
             f"<Folder><name>{bcp.esc(label)} ({len(group)})</name>"
-            f"<open>0</open>{body}</Folder>")
+            f"<open>0</open>{vis}{body}</Folder>")
 
     head = (f"<name>{bcp.esc(state)} emergency services and health</name>"
             f"<description><![CDATA[<p>{bcp.esc(SOURCE)} ({bcp.esc(LICENCE)})"
