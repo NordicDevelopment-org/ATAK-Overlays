@@ -4458,3 +4458,160 @@ def test_repeater_uncontested_placemark_has_no_disputed_row():
     f = _rep("W0ABC", 146.94, "FM", "DULUTH")
     rows = {label: value for label, value, _n in rep.rows_for(f["properties"])}
     assert rows["Position disputed"] == ""
+
+
+# --------------------------------------------------------------------------
+# build_emergency_pack - Phase 2. Every HIFLD source for this sector points at
+# a host that left DNS, so this is built on OSM, the only source in this
+# sector this project has actually fetched live.
+# --------------------------------------------------------------------------
+emg = _load("build_emergency_pack")
+
+
+def test_emergency_query_quotes_key_and_value_separately():
+    """The bug this file was written around twice.
+
+    ["amenity=police"] is valid QL asking for a tag whose KEY is the literal
+    string "amenity=police". It returns nothing, forever, and reads as "there
+    are no police stations in Minnesota". The repeater diagnostic already cost
+    a live run to this exact mistake.
+    """
+    q = emg.build_query()
+    assert '["amenity"="police"]' in q
+    assert '["amenity=police"]' not in q
+    assert "=police]" not in q.replace('"="police"]', "")
+
+
+def test_emergency_query_emits_multi_clause_selectors_as_separate_filters():
+    q = emg.build_query()
+    assert '["amenity"="clinic"]["urgent_care"="yes"]' in q
+
+
+def test_emergency_query_converts_inline_flag_to_the_overpass_modifier():
+    """POSIX ERE has no inline flags; (?i) must never reach the server."""
+    out = emg.emit_clause("name", "~", "(?i)sheriff")
+    assert out == '["name"~"sheriff",i]'
+    assert "(?i)" not in out
+
+
+def test_emergency_query_is_built_from_the_class_table():
+    """Not written beside it. That is how the two drift apart."""
+    one = [("police", [(("amenity", "=", "police"),)], "LE")]
+    q = emg.build_query(one)
+    assert q.count("nwr[") == 1
+    assert '["amenity"="police"]' in q
+
+
+def test_emergency_empty_selector_is_refused():
+    """An empty selector matches every object in the bounding box."""
+    with pytest.raises(ValueError):
+        emg.emit_selector(())
+    with pytest.raises(ValueError):
+        emg.build_query([])
+
+
+def test_emergency_unknown_operator_is_refused():
+    with pytest.raises(ValueError):
+        emg.emit_clause("amenity", "!=", "police")
+
+
+def test_emergency_class_table_is_checked_offline():
+    """A live run costs 6-17 minutes; a wrong table must fail before that."""
+    assert emg.check_classes() == []
+
+
+def test_emergency_every_class_has_a_renderable_icon():
+    for layer, _sel, _label in emg.CLASSES:
+        glyph = sym.glyph_for(layer)
+        assert glyph is not None, f"{layer} has no icon in symbology"
+        assert sym.colour_for(layer) is not None
+        assert gly.render(glyph, (255, 255, 255))[:8] == b"\x89PNG\r\n\x1a\n"
+
+
+def test_emergency_classify_first_match_wins_and_never_double_counts():
+    """A townhall that is also a shelter is one placemark, not two."""
+    tags = {"amenity": "townhall", "social_facility": "shelter"}
+    layer = emg.classify(tags)
+    assert layer in ("government", "shelters")
+    hits = [lay for lay, sels, _l in emg.CLASSES
+            if any(emg.matches(tags, s) for s in sels)]
+    assert len(hits) > 1, "fixture no longer tests the overlap case"
+    assert layer == hits[0], "first match in CLASSES order must win"
+
+
+def test_emergency_unmatched_element_is_dropped_not_guessed():
+    assert emg.classify({"amenity": "cafe"}) is None
+    assert emg.parse_element({"amenity": "cafe"}, -93.0, 45.0, "2026-09-15",
+                             {"type": "node", "id": 1}) is None
+
+
+def test_emergency_multi_clause_needs_every_clause():
+    assert emg.classify({"amenity": "clinic", "urgent_care": "yes"}) == "urgent_care"
+    # A clinic without the urgent_care tag is not urgent care.
+    assert emg.classify({"amenity": "clinic"}) is None
+
+
+def test_emergency_regex_clause_matches_and_rejects():
+    assert emg.classify({"amenity": "shelter",
+                         "shelter_type": "emergency"}) == "shelters"
+    # A picnic shelter is not an emergency shelter.
+    assert emg.classify({"amenity": "shelter",
+                         "shelter_type": "picnic_shelter"}) is None
+
+
+def test_emergency_parse_keeps_the_whole_tag_table():
+    """Rule 3: the full source attribute table rides in every placemark."""
+    tags = {"amenity": "police", "name": "Anytown PD", "operator": "City",
+            "some:odd:key": "kept anyway"}
+    row = emg.parse_element(tags, -93.0, 45.0, "2026-09-15",
+                            {"type": "node", "id": 7})
+    assert row["tags"] == tags
+    assert row["layer"] == "police"
+    assert row["fetched"] == "2026-09-15"
+
+
+def test_emergency_missing_phone_stays_missing_and_says_so():
+    row = emg.parse_element({"amenity": "police", "name": "X"}, -93.0, 45.0,
+                            "2026-09-15", {"type": "node", "id": 1})
+    rows = {a: (b, c) for a, b, c in emg.rows_for(row)}
+    assert rows["Phone"][0] == ""
+    assert "not in OpenStreetMap" in rows["Phone"][1]
+
+
+def test_emergency_empty_class_keeps_its_folder_and_says_zero(tmp_path):
+    """"No fire stations here" must not look like "we never asked"."""
+    rows = [emg.parse_element({"amenity": "police", "name": "PD"}, -93.0, 45.0,
+                              "2026-09-15", {"type": "node", "id": 1})]
+    kml, icons = emg.build_kml("MN", rows, "2026-09-15")
+    minidom.parseString(kml)
+    assert "Fire stations (0)" in kml
+    assert "Law enforcement (1)" in kml
+    assert len(icons) == len(emg.CLASSES)
+
+
+def test_emergency_unnamed_feature_gets_a_usable_label():
+    row = emg.parse_element({"amenity": "fire_station"}, -93.0, 45.0,
+                            "2026-09-15", {"type": "node", "id": 2})
+    kml, _icons = emg.build_kml("MN", [row], "2026-09-15")
+    assert "(unnamed fire_stations)" in kml
+    assert "<name></name>" not in kml
+
+
+def test_emergency_document_carries_provenance():
+    """Rule 4: source, licence and retrieval date in every document."""
+    kml, _ = emg.build_kml("MN", [], "2026-09-15")
+    assert "OpenStreetMap contributors" in kml
+    assert "ODbL 1.0" in kml
+    assert "2026-09-15" in kml
+
+
+def test_emergency_report_names_the_classes_that_returned_nothing():
+    said = []
+    emg.report([emg.parse_element({"amenity": "police", "name": "PD"},
+                                  -93.0, 45.0, "2026-09-15",
+                                  {"type": "node", "id": 1})], log=said.append)
+    joined = " ".join(said)
+    assert "returned nothing" in joined
+    assert "Fire stations" in joined
+    # And it must not let a zero read as a failed fetch.
+    assert "not a failed fetch" in joined

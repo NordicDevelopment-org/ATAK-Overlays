@@ -39,6 +39,7 @@ BUILD = "statepacks/build_county_pack.py"
 INV = "statepacks/atak_inventory.py"
 DUP = "statepacks/atak_find_dupes.py"
 SYM = "statepacks/symbology.py"
+EMG = "statepacks/build_emergency_pack.py"
 RPT = "statepacks/repeater_diagnose.py"
 NWR = "statepacks/build_nwr_pack.py"
 PWR = "statepacks/build_power_pack.py"
@@ -253,6 +254,25 @@ MUTATIONS = {
         ("follow a symlinked root twice",
          "                real = os.path.realpath(path)",
          "                real = path"),
+    ],
+    EMG: [
+        ("quote key and value as one string, the bug that returns nothing",
+         '        return f\'["{key}"="{value}"]\'',
+         '        return f\'["{key}={value}"]\''),
+        ("let (?i) reach the Overpass server as literal text",
+         '        return f\'["{key}"~"{value[4:]}",i]\'',
+         '        return f\'["{key}"~"{value}"]\''),
+        ("accept an empty selector, which matches the whole bounding box",
+         '    if not selector:\n        raise ValueError("empty selector matches everything")',
+         "    if False:\n        pass"),
+        ("treat a multi-clause selector as satisfied by its first clause",
+         "    for key, op, value in selector:", "    for key, op, value in selector[:1]:"),
+        ("file an unmatched element under the first class instead of dropping it",
+         "    return None\n\n\ndef parse_element(", "    return CLASSES[0][0]\n\n\ndef parse_element("),
+        ("drop empty folders, so nothing found looks like nothing asked",
+         "        folders.append(", "        if not group:\n            continue\n        folders.append("),
+        ("skip the offline class check before a 17-minute live run",
+         "    problems = check_classes()\n    if problems:", "    problems = []\n    if problems:"),
     ],
     SYM: [
         ("give nuclear the same symbol as everything else",
