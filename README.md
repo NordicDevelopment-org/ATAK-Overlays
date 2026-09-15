@@ -109,14 +109,18 @@ AOI ─► catalog tiers ─► drivers ─► normalize ─► clip ─► reco
 | Energy - Electric | power_plants, generators, nuclear_reactors, battery_storage, substations, transmission_lines, power_towers, service_territories, rto_regions |
 | Energy - Oil & Gas | pipelines (gas / crude / HGL / products), compressor_stations, gas_processing, gas_storage, lng_terminals, refineries, fuel_terminals, ethanol_plants, biodiesel_plants, fuel_stations |
 | Water | dams, levees, leveed_areas, water_treatment, wastewater_treatment, water_towers, water_wells, reservoirs, water_service_areas |
-| Communications | comm_towers (FCC ASR + OSM), broadcast_towers, data_centers, telecom_exchanges |
-| Emergency & Health | hospitals, urgent_care, fire_stations, police, ems, eoc, shelters, nursing_homes |
+| Communications | comm_towers (FCC ASR + OSM), broadcast_towers, data_centers, telecom_exchanges, psap* |
+| Emergency & Health | hospitals, urgent_care, fire_stations, police, ems, eoc, shelters, nursing_homes, pharmacies* |
 | Government | correctional, government, schools |
 | Chemical & Hazmat | chemical_plants, hazmat_storage (anhydrous ammonia, chlorine, fertiliser), explosives_storage |
 | Agriculture & Food | grain_storage, food_processing, agri_facilities, livestock_operations |
 | Mining | mines (quarries, pits, shafts) |
-| Transportation | airports, heliports, railways, rail_facilities, rail_crossings, bridges, ports |
+| Transportation | airports, heliports, railways, rail_facilities, rail_crossings, bridges, ports, industrial |
 | Base | county/state/city boundaries, roads, parcels, building_footprints, address_points |
+
+\* `psap` and `pharmacies` are defined in the catalog but currently ship
+`enabled: false` - both only had a source on the now-dead HIFLD/NASA host (see
+below), and neither has a live replacement yet.
 
 Some sources ship **switched off**: their endpoint is documented but was never
 verified, so they stay out of packs until you confirm them. Find the ones that
@@ -125,9 +129,17 @@ then set `enabled: true` in the YAML.
 
 `docs/SOURCES.md` lists every endpoint with its 2026 status, rating fields,
 confidence and license. Important context: DHS shut down **HIFLD Open** in
-August 2025, so its substation / transmission / emergency-services layers are
-frozen archives here and OpenStreetMap is the maintained fallback; **EIA** is
-the authoritative, maintained source for generation and fuel.
+August 2025, and as of 2026-09-14 the NASA NCCS mirror this catalog pointed at
+as a frozen final snapshot is gone too - `maps.nccs.nasa.gov` no longer
+resolves at all, not blocked, not rate-limited, just gone from DNS. The 13
+sources built on that host now ship `confidence: dead` and `enabled: false`.
+OpenStreetMap already covers a live fallback for most of what those layers
+carried (substations, transmission lines, hospitals, fire, police, EMS); two
+do not yet - `psap` and `pharmacies` have no other source in the catalog right
+now, and for `psap` specifically none is likely: the FCC's own PSAP registry
+is tabular only, with no polygons to replace it with. **EIA** remains the
+authoritative, actively maintained source for generation and fuel, unaffected
+by any of this.
 
 ## Commands
 
@@ -199,18 +211,30 @@ version behaves, delete it, then build the real thing.
 
 One YAML, no code: see `CONTRIBUTING.md` and `docs/ADDING_A_SOURCE.md`.
 
-## State packs (county boundaries, runs on your phone)
+## State packs (runs on your phone, zero dependencies)
 
-`statepacks/` is a self-contained, **standard-library-only** builder that makes
-one county-boundary KMZ per US state, with population, housing units, land area,
-county seat and sheriff contact in each county popup - every value stamped with
-the year it came from.
+`statepacks/` is a second, **standard-library-only** builder for the same kind
+of overlay. It exists separately from `overlaybuilder` on purpose: it runs in
+**Termux on an Android device**, where `pip install pyproj` needs a C
+toolchain the phone doesn't have. No pip packages, no build step - nothing but
+`python3` and this repo.
 
-It exists separately from `overlaybuilder` on purpose: it runs in **Termux on an
-Android device**, where `pip install pyproj` needs a C toolchain. No pip packages,
-no build step. It also ships Termux helpers to install packs into ATAK (including
-the force-stop that makes ATAK actually re-read the folder), list what is
-installed, and remove packs again.
+It has grown past county boundaries into several pack types, each its own
+script, sharing one hand-drawn icon set and sector/colour table so they render
+consistently and need no network on the device for icons:
+
+| Pack | Source | What's in the popup |
+|---|---|---|
+| County boundaries | TIGERweb, Census ACS, Wikidata | population, housing, land area, county seat, sheriff/LE contact - each value stamped with the year it's from |
+| Power plants | EIA U.S. Energy Atlas | fuel, nameplate capacity AND max summer capacity (kept separate - they're not the same number) |
+| Amateur repeaters | a maintainer-assembled, frequency-coordinated list | listen/transmit frequency, tone, mode, sponsor - uncoordinated hotspots excluded on purpose |
+| NOAA Weather Radio | weather.gov | frequency, power, coverage counties, in-service status |
+| Emergency services | OpenStreetMap | hospitals, fire, police, EMS, corrections, EOC, schools, shelters |
+| Aviation | OpenStreetMap | airports and helipads |
+
+Termux helpers install packs into ATAK (including the force-stop that makes
+ATAK actually re-read the folder), list what's installed and flag conflicts
+between packs, and remove packs again.
 
 ```bash
 cd statepacks
@@ -219,13 +243,20 @@ python3 build_county_pack.py --state MN --out ~/atak-packs/out
 ./termux/atak-install.sh ~/atak-packs/out
 ```
 
+Verified end-to-end on an Android device for Minnesota; Wisconsin confirmed
+live for boundaries, population and county seats. Every other state builds
+offline but hasn't been fetched live yet - `statepacks/README.md` §11 tracks
+exactly what's proven versus untried, state by state.
+
 Full turnkey instructions, dependencies first: [statepacks/README.md](statepacks/README.md)
 
 ## Data sources and licensing
 
-MIT covers the **code**. Generated data carries each source's license, and
-every pack ships an `ATTRIBUTION.txt` naming each layer's publisher, licence
-and endpoint, so the terms travel with the file when you share it. US federal
+MIT covers the **code**. Generated data carries each source's license.
+`overlaybuilder` packs ship an `ATTRIBUTION.txt` naming each layer's
+publisher, licence and endpoint; `statepacks` packs carry the same
+information directly in each KML Document and placemark footer instead -
+either way, the terms travel with the file when you share it. US federal
 data is public domain; OpenStreetMap is ODbL, meaning attribution always and
 share-alike if you redistribute a *derived database* (a map or briefing made
 from it does not trigger that, which is why OSM layers stay in their own
