@@ -68,11 +68,48 @@ def family_of(name):
     return stem, ""
 
 
+def normal_name(raw):
+    """Fold a placemark name to its identity.
+
+    "Aitkin", "Aitkin County" and "AITKIN CO." are one county written three
+    ways. Comparing them raw finds nothing, which is how 87 duplicate
+    boundaries sat on the map looking fine to every check in this file.
+    """
+    n = re.sub(r"<[^>]+>", " ", raw or "").lower()
+    n = re.sub(r"[^a-z0-9 ]+", " ", n)
+    n = re.sub(r"\b(county|co|parish|borough|city|of|the)\b", " ", n)
+    return re.sub(r"\s+", " ", n).strip()
+
+
+def contained_in(rows, min_names=1):
+    """(inner, outer, n) for every pack whose placemarks are all in another.
+
+    Strict containment only, and never both ways: two packs with identical
+    name sets are the DUPLICATE case and are reported there. This is the
+    asymmetric case - a small pack wholly swallowed by a big one, which is
+    what a per-county file is next to a whole-state pack.
+    """
+    named = [r for r in rows if r.get("pm_names")]
+    out = []
+    for inner in named:
+        a = inner["pm_names"]
+        if len(a) < min_names:
+            continue
+        for outer in named:
+            if outer is inner or not a <= outer["pm_names"]:
+                continue
+            if outer["pm_names"] <= a:          # identical, not contained
+                continue
+            out.append((inner["name"], outer["name"], len(a)))
+            break
+    return out
+
+
 def inspect_kmz(path, deep=True):
     """Read one overlay. Returns a dict; never raises on a bad file."""
     out = {"name": os.path.basename(path), "bytes": 0, "mtime": "",
            "placemarks": None, "folders": [], "provenance": None,
-           "error": None}
+           "pm_names": set(), "error": None}
     try:
         st = os.stat(path)
         out["bytes"] = st.st_size
@@ -101,6 +138,14 @@ def inspect_kmz(path, deep=True):
         return out
     text = doc.decode("utf-8", "replace")
     out["placemarks"] = text.count("<Placemark")
+    # Placemark names, normalised, so one pack can be recognised as already
+    # being inside another. 87 one-county files and a single 87-county pack
+    # are not duplicates by filename and never will be - they are duplicates
+    # by content, and content is the only place to see it.
+    out["pm_names"] = {normal_name(n) for n in
+                       re.findall(r"<Placemark>.*?<name>([^<]{1,80})</name>",
+                                  text, re.S)}
+    out["pm_names"].discard("")
     # Folder names are the eye-toggle tree in Overlay Manager, so they are what
     # a person actually sees. Only the first few matter for a listing.
     out["folders"] = re.findall(r"<Folder>\s*<name>([^<]{1,60})</name>", text)[:8]
@@ -123,6 +168,14 @@ def scan(directory, deep=True):
 def find_problems(rows):
     """[(severity, name, what, suggested_fix)] - reported, never acted on."""
     problems = []
+    for inner, outer, n in contained_in(rows):
+        problems.append((
+            "CONTAINED", inner,
+            f"all {n} of its placemark(s) are already in {outer} - "
+            f"whatever it draws is being drawn twice",
+            f"delete it and keep {outer}, which carries the provenance, "
+            f"or say why this copy is different"))
+
     fams = {}
     for r in rows:
         ident, edition = family_of(r["name"])

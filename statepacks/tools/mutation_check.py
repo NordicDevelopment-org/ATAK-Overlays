@@ -193,6 +193,16 @@ MUTATIONS = {
          '    return "repeaters"'),
     ],
     INV: [
+        ("stop noticing a pack whose placemarks are all inside another",
+         "    for inner, outer, n in contained_in(rows):",
+         "    for inner, outer, n in []:"),
+        ("compare placemark names raw, so 'Aitkin' never matches 'Aitkin County'",
+         '    n = re.sub(r"\\b(county|co|parish|borough|city|of|the)\\b", " ", n)',
+         "    n = n"),
+        ("report identical packs as contained, which deletes the layer",
+         "            if outer[\"pm_names\"] <= a:          # identical, not contained\n"
+         "                continue",
+         "            pass"),
         ("read one underscore as the version boundary",
          '        ident, _, edition = stem.partition("__")',
          '        ident, _, edition = stem.partition("_")'),

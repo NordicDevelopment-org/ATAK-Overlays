@@ -4138,3 +4138,68 @@ def test_symbology_unknown_layer_is_none_not_a_guess():
     assert sym.glyph_for("no_such_layer") is None
     assert sym.colour_for("no_such_layer") is None
     assert sym.icon_for("no_such_layer") is None
+
+
+# --------------------------------------------------------------------------
+# CONTAINED - the check that was missing. 87 one-county files sat on the map
+# next to an 87-county pack, drawing every boundary twice, and every check in
+# atak_inventory passed them: different filenames, no shared `__` family, all
+# non-empty, all parseable. Duplication by content is invisible to every test
+# that looks at names.
+# --------------------------------------------------------------------------
+def _county_kmz(path, names, provenance):
+    pm = "".join(
+        f"<Placemark><name>{n} County</name>"
+        f"<Point><coordinates>0,0</coordinates></Point></Placemark>"
+        for n in names)
+    foot = ("<description>Source: TIGERweb, retrieved 2026-09-14, "
+            "licence public domain</description>") if provenance else ""
+    doc = f"<?xml version='1.0'?><kml><Document><name>x</name>{foot}{pm}</Document></kml>"
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with zipfile.ZipFile(path, "w") as z:
+        z.writestr("doc.kml", doc)
+
+
+def test_inventory_flags_a_pack_already_inside_another(tmp_path):
+    d = str(tmp_path / "overlays")
+    counties = ["Aitkin", "Anoka", "Cook"]
+    for c in counties:
+        _county_kmz(os.path.join(d, f"MN_{c}_County_rev2.kmz"), [c], False)
+    _county_kmz(os.path.join(d, "MN_Counties__Current_2026_09_14.kmz"),
+                counties, True)
+
+    problems = ainv.find_problems(ainv.scan(d))
+    contained = [p for p in problems if p[0] == "CONTAINED"]
+    assert len(contained) == 3, problems
+    assert all("MN_Counties__Current" in p[2] for p in contained)
+    # The pack that swallows the others is not itself a problem.
+    assert not any("MN_Counties__Current" == p[1] for p in contained)
+
+
+def test_inventory_containment_folds_county_name_spellings():
+    """"Aitkin", "Aitkin County" and "AITKIN CO." are one county."""
+    assert ainv.normal_name("Aitkin") == ainv.normal_name("Aitkin County")
+    assert ainv.normal_name("AITKIN CO.") == ainv.normal_name("Aitkin")
+    assert ainv.normal_name("St. Louis County") == ainv.normal_name("St Louis")
+    # Different places must not fold together.
+    assert ainv.normal_name("Lake County") != ainv.normal_name("Lake of the Woods County")
+
+
+def test_inventory_containment_is_strict_not_mutual(tmp_path):
+    """Two packs with identical contents are DUPLICATE, not CONTAINED.
+
+    Reporting them as contained would name each as removable because of the
+    other, and following both lines deletes the layer entirely.
+    """
+    d = str(tmp_path / "overlays")
+    _county_kmz(os.path.join(d, "a.kmz"), ["Aitkin", "Anoka"], True)
+    _county_kmz(os.path.join(d, "b.kmz"), ["Aitkin", "Anoka"], True)
+    contained = ainv.contained_in(ainv.scan(d))
+    assert contained == []
+
+
+def test_inventory_containment_ignores_unrelated_packs(tmp_path):
+    d = str(tmp_path / "overlays")
+    _county_kmz(os.path.join(d, "counties.kmz"), ["Aitkin", "Anoka"], True)
+    _county_kmz(os.path.join(d, "plants.kmz"), ["Sherco", "Monticello"], True)
+    assert ainv.contained_in(ainv.scan(d)) == []
