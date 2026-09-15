@@ -960,6 +960,47 @@ out center tags;
 """
 
 
+# The placeholders a caller-supplied query MUST carry. This is the contract
+# between fetch_osm and any other builder that reuses this machinery, and it
+# is checked rather than described: build_emergency_pack shipped a query
+# written in Overpass TURBO syntax - ({{bbox}}) - which survives .format() as
+# the literal text "{bbox}" and earns HTTP 400 from every mirror, every tile,
+# every time. That cost a full live run to discover, at the network, minutes
+# in, when it was knowable offline in microseconds.
+QUERY_PLACEHOLDERS = ("{timeout}", "{s:", "{w:", "{n:", "{e:")
+
+
+def validate_query(query):
+    """Raise unless `query` is a usable .format() template for a tile fetch.
+
+    Fails FAST and OFFLINE. A query that cannot name its own bounding box is
+    not a network problem and must never be discovered as one.
+    """
+    if not isinstance(query, str) or not query.strip():
+        raise ValueError("query must be a non-empty string")
+    missing = [ph for ph in QUERY_PLACEHOLDERS if ph not in query]
+    if missing:
+        raise ValueError(
+            "query is missing required placeholder(s): "
+            + ", ".join(m.rstrip(":") + "}" for m in missing)
+            + ".\nA tile query is a Python .format() template and must carry "
+              "[out:json][timeout:{timeout}] and a bounding box written "
+              "({s:.4f},{w:.4f},{n:.4f},{e:.4f}) - south, west, north, east. "
+              "Overpass Turbo's ({{bbox}}) is NOT valid here: .format() turns "
+              "it into the literal text {bbox} and every mirror answers 400.")
+    try:
+        formatted = query.format(timeout=90, s=44.0, w=-97.0, n=49.0, e=-89.0)
+    except (KeyError, IndexError, ValueError) as ex:
+        raise ValueError(
+            f"query is not a usable .format() template: {ex}. A literal brace "
+            f"in Overpass QL must be doubled.") from ex
+    if "{" in formatted or "}" in formatted:
+        raise ValueError(
+            "query still contains a brace after formatting: "
+            + formatted[max(0, formatted.find("{") - 40):][:120])
+    return formatted
+
+
 def _element_key(el):
     """The source's own identity for an element, as a sortable key.
 
@@ -1547,6 +1588,10 @@ def fetch_osm(state_abbr, mirrors=None, log=print, bbox=None,
     others, with nothing in the pack to say which. Pass allow_partial=True to
     accept an incomplete result knowingly - the counties it costs are named.
     """
+    # Before any network. Nine tiles across three mirrors is minutes of
+    # wall-clock to learn something a string check answers instantly.
+    validate_query(query or OSM_QUERY)
+
     if bbox is None:
         if shapes is None:
             shapes = county_shapes(STATE_FIPS[state_abbr.upper()], log=log)

@@ -133,6 +133,14 @@ def check_classes():
     dupes = [n for n in class_names() if class_names().count(n) > 1]
     if dupes:
         problems.append(f"duplicate class name(s): {sorted(set(dupes))}")
+
+    # Build the real query and hold it to fetch_osm's contract. --check
+    # previously reported "0 problems" while the query was fatally malformed,
+    # which is the worst kind of check: one whose all-clear means nothing.
+    try:
+        seed.validate_query(build_query())
+    except ValueError as ex:
+        problems.append(f"query: {ex}")
     return problems
 
 
@@ -158,7 +166,7 @@ def emit_selector(selector):
     return "".join(emit_clause(*c) for c in selector)
 
 
-def build_query(classes=None, timeout=None):
+def build_query(classes=None):
     """One Overpass query covering every class, built FROM the class table.
 
     From the table, not beside it. The repeater diagnostic shipped a
@@ -169,13 +177,22 @@ def build_query(classes=None, timeout=None):
     rows = classes if classes is not None else CLASSES
     if not rows:
         raise ValueError("no classes selected; nothing to ask for")
-    timeout = timeout or seed.OSM_SERVER_TIMEOUT_S
+    # The bounding box is a Python .format() placeholder, NOT Overpass Turbo's
+    # {{bbox}}. fetch_osm formats this template per tile with south, west,
+    # north and east. Turbo syntax survives .format() as the literal text
+    # {bbox} and earns HTTP 400 from every mirror - it cost a full live run.
+    box = "({s:.4f},{w:.4f},{n:.4f},{e:.4f})"
     parts = []
     for _layer, selectors, _label in rows:
         for sel in selectors:
-            parts.append(f"  nwr{emit_selector(sel)}({{{{bbox}}}});")
+            parts.append(f"  nwr{emit_selector(sel)}{box};")
     body = "\n".join(parts)
-    return f"[out:json][timeout:{timeout}];\n(\n{body}\n);\nout center tags;"
+    query = ("[out:json][timeout:{timeout}];\n(\n" + body
+             + "\n);\nout center tags;")
+    # The contract is checked here too, so --check catches a malformed query
+    # offline rather than nine tiles into a live fetch.
+    seed.validate_query(query)
+    return query
 
 
 def matches(tags, selector):

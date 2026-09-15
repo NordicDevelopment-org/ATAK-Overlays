@@ -4760,3 +4760,79 @@ def test_merge_numeric_sort_key_handles_non_numeric_labels():
     labels = ["345", "69", "(not recorded)", "115"]
     assert sorted(labels, key=mpk._sort_key) == [
         "69", "115", "345", "(not recorded)"]
+
+
+# --------------------------------------------------------------------------
+# The Overpass bbox contract. build_emergency_pack shipped a query written in
+# Overpass TURBO syntax - ({{bbox}}) - which survives .format() as the literal
+# text "{bbox}". Every mirror answered HTTP 400, every tile, and --check said
+# "0 problems" the whole time. Knowable offline in microseconds; discovered at
+# the network, minutes into a live run.
+# --------------------------------------------------------------------------
+def test_query_contract_rejects_overpass_turbo_bbox():
+    turbo = ('[out:json][timeout:{timeout}];\n'
+             'nwr["amenity"="police"]({{bbox}});\nout center tags;')
+    with pytest.raises(ValueError) as exc:
+        sle.validate_query(turbo)
+    msg = str(exc.value)
+    assert "{bbox}" in msg, "the error must name what is wrong"
+    assert "south, west, north, east" in msg, "and what right looks like"
+
+
+def test_query_contract_accepts_the_shipped_default():
+    out = sle.validate_query(sle.OSM_QUERY)
+    assert "44.0000,-97.0000,49.0000,-89.0000" in out
+    assert "{" not in out and "}" not in out
+
+
+def test_query_contract_rejects_a_missing_timeout():
+    with pytest.raises(ValueError) as exc:
+        sle.validate_query('nwr["amenity"="police"]'
+                            '({s:.4f},{w:.4f},{n:.4f},{e:.4f});')
+    assert "timeout" in str(exc.value)
+
+
+def test_query_contract_rejects_an_unknown_placeholder():
+    with pytest.raises(ValueError):
+        sle.validate_query('[out:json][timeout:{timeout}];\n'
+                            'nwr["amenity"="police"]'
+                            '({s:.4f},{w:.4f},{n:.4f},{e:.4f})[{whoops}];')
+
+
+def test_query_contract_rejects_empty():
+    for bad in ("", "   ", None):
+        with pytest.raises(ValueError):
+            sle.validate_query(bad)
+
+
+def test_emergency_query_carries_a_real_bounding_box():
+    q = emg.build_query()
+    assert "{s:.4f},{w:.4f},{n:.4f},{e:.4f}" in q
+    assert "{{bbox}}" not in q and "{bbox}" not in q
+    formatted = q.format(timeout=90, s=44.0, w=-97.0, n=49.0, e=-89.0)
+    assert "(44.0000,-97.0000,49.0000,-89.0000)" in formatted
+    assert "{" not in formatted and "}" not in formatted
+
+
+def test_emergency_check_would_have_caught_the_bad_query(monkeypatch):
+    """--check reported "0 problems" while the query was fatally malformed.
+
+    A check whose all-clear means nothing is worse than no check: it is the
+    reason a broken query reached a live run at all.
+    """
+    assert emg.check_classes() == []
+    monkeypatch.setattr(emg, "build_query",
+                        lambda *a, **k: "[out:json];nwr[amenity=police]({{bbox}});")
+    problems = emg.check_classes()
+    assert problems and any("query" in p for p in problems)
+
+
+def test_fetch_osm_validates_before_touching_the_network(monkeypatch):
+    """Nine tiles across three mirrors is minutes to learn a string fact."""
+    called = []
+    monkeypatch.setattr(sle, "_run_tiles",
+                        lambda *a, **k: called.append(1) or [])
+    with pytest.raises(ValueError):
+        sle.fetch_osm("MN", query="[out:json];nwr[x]({{bbox}});",
+                       log=lambda *a: None)
+    assert not called, "no tile fetch may start on an invalid query"

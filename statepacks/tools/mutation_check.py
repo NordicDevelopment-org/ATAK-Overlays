@@ -49,6 +49,8 @@ REP = "statepacks/build_repeater_pack.py"
 
 MUTATIONS = {
     SEED: [
+        ("let an invalid query reach the network",
+         "    validate_query(query or OSM_QUERY)", "    pass"),
         ("cache an Overpass remark error as an empty tile",
          "            if bad is not None:\n                raise bad",
          "            if False:\n                raise bad"),
@@ -273,6 +275,10 @@ MUTATIONS = {
          "        kept = {id(pm) for pm in placemarks}", "        kept = placemarks"),
     ],
     EMG: [
+        ("write the bounding box in Overpass Turbo syntax, which every mirror 400s",
+         '    box = "({s:.4f},{w:.4f},{n:.4f},{e:.4f})"', '    box = "({{bbox}})"'),
+        ("stop validating the query in the offline check",
+         "        seed.validate_query(build_query())", "        pass"),
         ("quote key and value as one string, the bug that returns nothing",
          '        return f\'["{key}"="{value}"]\'',
          '        return f\'["{key}={value}"]\''),
