@@ -197,9 +197,9 @@ MUTATIONS = {
          '    n = re.sub(r",\\s*[A-Za-z]{2}\\s*$", "", n).lower()',
          "    n = n.lower()"),
         ("read every file with no sign of progress, so it looks hung",
-         '        print(f"\\r  reading {i}/{total} {os.path.basename(path)[:40]:<40}",\n'
-         '              end="", file=sys.stderr, flush=True)',
-         "        pass"),
+         "    show = sys.stderr.isatty()", "    show = False"),
+        ("spray a progress line into redirected output",
+         "    show = sys.stderr.isatty()", "    show = True"),
         ("stop noticing a pack whose placemarks are all inside another",
          "    for inner, outer, n in contained_in(rows):",
          "    for inner, outer, n in []:"),

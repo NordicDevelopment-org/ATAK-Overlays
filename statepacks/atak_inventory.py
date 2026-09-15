@@ -171,12 +171,17 @@ def scan(directory, deep=True):
     # Opening and unzipping 100+ files off a phone's shared storage is slow
     # enough to look like a hang, and a tool that looks hung gets killed
     # halfway. Progress goes to stderr so `| grep` still works.
+    # Only to a terminal. A \r progress line redirected to a file is 100 lines
+    # of overwritten junk in the middle of someone's saved output.
+    show = sys.stderr.isatty()
     rows, total = [], len(files)
     for i, path in enumerate(files, 1):
-        print(f"\r  reading {i}/{total} {os.path.basename(path)[:40]:<40}",
-              end="", file=sys.stderr, flush=True)
+        if show:
+            print(f"\r  reading {i}/{total} {os.path.basename(path)[:40]:<40}",
+                  end="", file=sys.stderr, flush=True)
         rows.append(inspect_kmz(path, deep=True))
-    print("\r" + " " * 60 + "\r", end="", file=sys.stderr, flush=True)
+    if show:
+        print("\r" + " " * 60 + "\r", end="", file=sys.stderr, flush=True)
     return rows
 
 

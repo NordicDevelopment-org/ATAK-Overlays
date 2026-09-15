@@ -4306,3 +4306,12 @@ def test_inventory_names_flag_shows_the_folded_names(tmp_path, capsys):
     assert rc == 0
     assert "aitkin" in out
     assert "distinct folded name" in out
+
+
+def test_inventory_progress_only_goes_to_a_terminal(tmp_path, capsys):
+    """Redirected to a file, a \\r progress line is overwritten junk."""
+    d = tmp_path / "overlays"
+    _county_kmz(str(d / "a.kmz"), ["Aitkin"], True)
+    ainv.scan(str(d))
+    # capsys makes stderr a non-tty, which is exactly the redirected case.
+    assert capsys.readouterr().err == ""
