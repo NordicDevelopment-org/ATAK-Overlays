@@ -160,6 +160,13 @@ MUTATIONS = {
          '        subs = GLYPHS["bolt"]()'),
     ],
     PWR: [
+        ("read an ArcGIS error body as zero features instead of raising",
+         '        if "error" in page:\n            raise RuntimeError('
+         'f"EIA service returned an error: {page[\'error\']}")',
+         "        pass"),
+        ("keep paging past a short page instead of stopping",
+         "        if len(feats) < EIA_PAGE:\n            break",
+         "        if False:\n            break"),
         ("point an icon at a server the field tablet cannot reach",
          '                   f"<Icon><href>icons/{name}.png</href></Icon></IconStyle>"',
          '                   f"<Icon><href>http://maps.google.com/mapfiles/kml/'
@@ -408,10 +415,21 @@ def failures():
 
 
 def check(path, entries):
+    """(survivors, dead, skipped) for one file's mutation entries.
+
+    survivors: a real behaviour with no test catching it.
+    dead: an entry whose target text no longer exists in the file.
+    skipped: this file was not checked at all - currently only the dirty-tree
+    refusal. Kept apart from the other two on purpose: this refusal used to
+    return a bare 1, which main()'s old boolean-sum treated as "one mutation
+    survived" - a refusal to run read exactly like a real, confirmed gap. A
+    file this script never touched must never be reported the same way as
+    one it touched and found clean, or the same way as one it found broken.
+    """
     if subprocess.run(["git", "diff", "--quiet", "--", path]).returncode != 0:
         print(f"REFUSING: {path} has uncommitted changes - this script reverts "
               f"with 'git checkout --' and would delete them.", file=sys.stderr)
-        return 1
+        return 0, 0, 1
     print(f"\n{path}")
     original = open(path, encoding="utf-8").read()
     survivors = 0
@@ -451,7 +469,7 @@ def check(path, entries):
         open(path, "w", encoding="utf-8").write(original)
         for sig, handler in previous:
             signal.signal(sig, handler)
-    return survivors, dead
+    return survivors, dead, 0
 
 
 def main(argv):
@@ -464,13 +482,19 @@ def main(argv):
     results = [check(p, e) for p, e in targets]
     survivors = sum(r[0] for r in results)
     dead = sum(r[1] for r in results)
+    skipped = sum(r[2] for r in results)
 
-    # Reported apart, because they call for opposite work. A SURVIVOR means a
-    # real behaviour that no test covers - go and write the test. A DEAD entry
-    # means the guard has stopped pointing at any code, usually because a
-    # refactor moved the line - go and repoint the guard. Adding them together
-    # says "N survived" and sends someone hunting for test gaps that are not
-    # there.
+    # Reported apart, because each calls for different work, and conflating
+    # any two of them makes a wrong claim:
+    #   SURVIVOR  a real behaviour no test covers -> go write the test.
+    #   DEAD      a guard pointing at moved/rewritten code -> repoint it.
+    #   SKIPPED   never checked at all (dirty tree) -> commit, then re-run.
+    # A skipped file folded into "0 survived" is the exact bug this file was
+    # first written to describe: a refusal to run reads as a clean result.
+    if skipped:
+        print(f"\n{skipped} file(s) SKIPPED - uncommitted changes, so nothing "
+              f"in them was checked. Commit first, then run this again; "
+              f"reporting them as passing would be reporting nothing as clean.")
     if dead:
         print(f"\n{dead} entr(y/ies) guard NOTHING - their target text is "
               f"gone. Repoint them at the code that moved; a dead guard is "
@@ -478,9 +502,9 @@ def main(argv):
     if survivors:
         print(f"{survivors} mutation(s) survived - a real behaviour with no "
               f"test. Write the test.")
-    if not survivors and not dead:
+    if not survivors and not dead and not skipped:
         print("\nevery mutation is caught by at least one test")
-    return 1 if (survivors or dead) else 0
+    return 1 if (survivors or dead or skipped) else 0
 
 
 if __name__ == "__main__":

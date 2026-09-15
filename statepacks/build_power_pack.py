@@ -126,15 +126,26 @@ def fetch_state(state, url=EIA_URL, log=print):
             "resultRecordCount": EIA_PAGE})
         raw = bcp.http_get(f"{url}/query?{q}", log=log)
         page = json.loads(raw.decode("utf-8", "replace"))
+        # ArcGIS answers a bad query with HTTP 200 and an {"error": ...} body
+        # rather than an error status. build_county_pack's TIGERweb fetch
+        # already hits this and already raises on it; this fetch skipped that
+        # check, so a broken query silently read as zero plants and would
+        # have built a pack with no data but full, confident EIA provenance -
+        # nothing about the file would say the fetch had failed.
+        if "error" in page:
+            raise RuntimeError(f"EIA service returned an error: {page['error']}")
         feats = page.get("features") or []
         out.extend(feats)
         log(f"    {len(out)} plant(s)")
-        # Trust the server's own "there is more" flag where it sets one, and
-        # fall back to a short page meaning the end. Paging until an empty
-        # response would make one extra request every single time.
-        if not feats or not page.get("properties", {}).get("exceededTransferLimit"):
-            if len(feats) < EIA_PAGE:
-                break
+        # `exceededTransferLimit` is part of Esri's f=json FeatureSet shape,
+        # not GeoJSON: RFC 7946 gives a FeatureCollection no top-level
+        # "properties" member at all, so f=geojson never carries this flag in
+        # any position. The only signal f=geojson actually gives is whether a
+        # page came back full - a short page is necessarily the last one.
+        # (When a state's plant count is an exact multiple of EIA_PAGE, this
+        # costs one harmless extra request that returns zero features.)
+        if len(feats) < EIA_PAGE:
+            break
         offset += len(feats)
     return out
 

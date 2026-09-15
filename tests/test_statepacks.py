@@ -10,6 +10,7 @@ import importlib.util
 import json
 import math
 import os
+import subprocess
 import re
 import sys
 import time
@@ -5369,3 +5370,148 @@ def test_duplicate_refuses_to_guess_on_a_genuine_tie(tmp_path):
     assert "P__2026_09_14.kmz is newer" not in dup[0][2]
     # And it must not silently point atak-remove.sh at either file.
     assert "atak-remove.sh" not in dup[0][3]
+
+
+# --------------------------------------------------------------------------
+# build_power_pack.fetch_state - two ArcGIS quirks. build_county_pack already
+# handles the first for its own TIGERweb fetch; this fetch never got it.
+# --------------------------------------------------------------------------
+def test_fetch_state_raises_on_an_arcgis_error_body_served_as_http_200(monkeypatch):
+    """ArcGIS answers a bad query with HTTP 200 and {"error": ...}, not an
+    error status. Reading that as "zero features" builds a pack with no data
+    and full, confident EIA provenance - nothing says the fetch failed."""
+    import json as _json
+
+    def fake_get(url, log=print):
+        return _json.dumps({"error": {"code": 400, "message": "bad field"}}
+                           ).encode("utf-8")
+
+    monkeypatch.setattr(pwr.bcp, "http_get", fake_get)
+    with pytest.raises(RuntimeError, match="bad field"):
+        pwr.fetch_state("MN", log=lambda *a: None)
+
+
+def test_fetch_state_pages_past_an_exact_multiple_of_the_page_size(monkeypatch):
+    """exceededTransferLimit does not exist in f=geojson output at all - a
+    FeatureCollection has no top-level "properties" member. The only signal
+    geojson gives is whether a page came back full."""
+    import json as _json
+    pages = [
+        [{"properties": {"id": i}} for i in range(pwr.EIA_PAGE)],  # exactly full
+        [],                                                        # truly done
+    ]
+    calls = []
+
+    def fake_get(url, log=print):
+        calls.append(url)
+        page = pages[len(calls) - 1] if len(calls) <= len(pages) else []
+        return _json.dumps({"features": page}).encode("utf-8")
+
+    monkeypatch.setattr(pwr.bcp, "http_get", fake_get)
+    out = pwr.fetch_state("MN", log=lambda *a: None)
+    assert len(out) == pwr.EIA_PAGE
+    assert len(calls) == 2, "an exact-multiple page must ask once more and stop"
+
+
+def test_fetch_state_stops_immediately_on_a_short_page(monkeypatch):
+    import json as _json
+    calls = []
+
+    def fake_get(url, log=print):
+        calls.append(url)
+        return _json.dumps({"features": [{"properties": {"id": 1}}]}).encode()
+
+    monkeypatch.setattr(pwr.bcp, "http_get", fake_get)
+    out = pwr.fetch_state("MN", log=lambda *a: None)
+    assert len(out) == 1
+    assert len(calls) == 1, "a short page is necessarily the last one"
+
+
+# --------------------------------------------------------------------------
+# mutation_check.check() itself. This just crashed for real: an earlier fix
+# changed its return type from a bare int to (survivors, dead) but missed the
+# dirty-tree refusal's own `return 1`, so running the harness against an
+# uncommitted change to itself raised TypeError instead of reporting anything.
+# --------------------------------------------------------------------------
+def _load_mutation_check():
+    p = os.path.join(ROOT, "statepacks", "tools", "mutation_check.py")
+    spec = importlib.util.spec_from_file_location("mutation_check_under_test", p)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+def _init_repo(tmp_path, files):
+    subprocess.run(["git", "init", "-q"], cwd=tmp_path, check=True)
+    subprocess.run(["git", "config", "user.email", "t@example.com"],
+                   cwd=tmp_path, check=True)
+    subprocess.run(["git", "config", "user.name", "t"], cwd=tmp_path, check=True)
+    for name, body in files.items():
+        p = tmp_path / name
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(body, encoding="utf-8")
+    subprocess.run(["git", "add", "-A"], cwd=tmp_path, check=True)
+    subprocess.run(["git", "commit", "-q", "-m", "init"], cwd=tmp_path, check=True)
+
+
+def test_mutation_check_dirty_tree_returns_a_three_tuple_and_does_not_crash(tmp_path):
+    """The actual crash: `return 1` from the refusal path against code that
+    unpacks every result as (survivors, dead, skipped)."""
+    target = tmp_path / "thing.py"
+    _init_repo(tmp_path, {"thing.py": "def f():\n    return 1\n"})
+    target.write_text("def f():\n    return 2\n", encoding="utf-8")  # dirty
+
+    mc = _load_mutation_check()
+    cwd = os.getcwd()
+    os.chdir(tmp_path)
+    try:
+        result = mc.check("thing.py", [("flip return", "return 1", "return 2")])
+    finally:
+        os.chdir(cwd)
+    assert result == (0, 0, 1), "dirty tree must skip, not crash or claim clean"
+
+
+def test_mutation_check_clean_tree_runs_normally(tmp_path):
+    """The ordinary path still returns (survivors, dead, 0)."""
+    _init_repo(tmp_path, {"thing.py": "VALUE = 1\n",
+                          "test_thing.py": (
+                              "import importlib.util\n"
+                              "spec = importlib.util.spec_from_file_location("
+                              "'thing', 'thing.py')\n"
+                              "m = importlib.util.module_from_spec(spec)\n"
+                              "spec.loader.exec_module(m)\n"
+                              "def test_value():\n"
+                              "    assert m.VALUE == 1\n")})
+    mc = _load_mutation_check()
+    cwd = os.getcwd()
+    os.chdir(tmp_path)
+    try:
+        # No pytest.ini/conftest needed for a single bare test function file
+        # run via pytest directly - failures() shells out to `pytest -q`.
+        result = mc.check("thing.py", [("flip the value", "VALUE = 1", "VALUE = 2")])
+    finally:
+        os.chdir(cwd)
+    assert result[2] == 0, "a clean, committed tree must not be skipped"
+    assert result == (1, 0, 0), f"expected one caught survivor, got {result}"
+
+
+def test_mutation_check_main_reports_skipped_separately_from_clean(monkeypatch, capsys):
+    """main()'s actual aggregation and wording, isolated from real paths."""
+    mc = _load_mutation_check()
+    monkeypatch.setattr(mc, "MUTATIONS", {"a.py": [("x", "old", "new")]})
+    monkeypatch.setattr(mc, "check", lambda path, entries: (0, 0, 1))
+    rc = mc.main(["mutation_check", ""])
+    out = capsys.readouterr().out
+    assert rc == 1, "a skip must not exit 0 as if everything were verified"
+    assert "SKIPPED" in out
+    assert "every mutation is caught" not in out
+
+
+def test_mutation_check_main_all_clean_says_so(monkeypatch, capsys):
+    mc = _load_mutation_check()
+    monkeypatch.setattr(mc, "MUTATIONS", {"a.py": [("x", "old", "new")]})
+    monkeypatch.setattr(mc, "check", lambda path, entries: (0, 0, 0))
+    rc = mc.main(["mutation_check", ""])
+    out = capsys.readouterr().out
+    assert rc == 0
+    assert "every mutation is caught by at least one test" in out
