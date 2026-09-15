@@ -152,9 +152,6 @@ MUTATIONS = {
          'shapes/electronics.png</href></Icon></IconStyle>"'),
         ("reference icons without putting them in the zip",
          "    size = bcp.write_kmz(path, kml, icons)", "    size = bcp.write_kmz(path, kml)"),
-        ("give nuclear the same symbol as everything else",
-         '    "nuclear":       ("trefoil",  (255, 240, 60)),',
-         '    "nuclear":       ("bolt",  (255, 240, 60)),'),
         ("merge nameplate and summer capacity into one number",
          '        ("Nameplate capacity", f"{nameplate:,.1f} MW" if nameplate is not None else ""),\n'
          '        ("Max summer capacity", f"{summer:,.1f} MW" if summer is not None else ""),',
@@ -221,6 +218,9 @@ MUTATIONS = {
          "                real = path"),
     ],
     SYM: [
+        ("give nuclear the same symbol as everything else",
+         '    "nuclear":        ("trefoil",  (255, 240, 60)),',
+         '    "nuclear":        ("bolt",     (255, 240, 60)),'),
         ("give two sectors the same colour",
          '    "Communications":     (170, 230, 140),   # green',
          '    "Communications":     (255, 209, 64),    # green'),

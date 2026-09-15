@@ -4056,6 +4056,31 @@ def test_symbology_covers_every_catalog_layer():
     assert problems == [], "\n".join(problems)
 
 
+def test_symbology_coverage_check_actually_checks(tmp_path):
+    """Asserting check() finds nothing passes even if check() stopped looking.
+
+    The mutation harness caught this: replacing the catalog comparison with an
+    empty set left the test above green, because "no problems" is exactly what
+    a disabled check reports. So point check() at a catalog it has never seen
+    and require it to notice both directions of the mismatch.
+    """
+    cat = tmp_path / "catalog"
+    cat.mkdir()
+    (cat / "made_up.yaml").write_text(
+        "defaults:\n  sector: Water\nsources:\n"
+        "  - layer: a_layer_nobody_mapped\n    entity: thing\n",
+        encoding="utf-8")
+    problems = sym.check(path=str(cat), log=lambda *_a, **_k: None)
+
+    # In the catalog, missing from the table.
+    assert any("a_layer_nobody_mapped" in p and "missing from this table" in p
+               for p in problems), problems
+    # And the reverse: this tiny catalog has none of the real layers, so every
+    # row in the table is now an orphan and must be reported as one.
+    assert any("dams" in p and "not in the catalog" in p
+               for p in problems), problems
+
+
 def test_symbology_every_named_glyph_actually_renders():
     known = set(gly.glyph_names())
     for layer, (glyph, _sector, _geom) in sym.LAYERS.items():
