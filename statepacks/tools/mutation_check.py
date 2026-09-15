@@ -40,6 +40,7 @@ INV = "statepacks/atak_inventory.py"
 DUP = "statepacks/atak_find_dupes.py"
 SYM = "statepacks/symbology.py"
 EMG = "statepacks/build_emergency_pack.py"
+MPK = "statepacks/merge_packs.py"
 RPT = "statepacks/repeater_diagnose.py"
 NWR = "statepacks/build_nwr_pack.py"
 PWR = "statepacks/build_power_pack.py"
@@ -254,6 +255,22 @@ MUTATIONS = {
         ("follow a symlinked root twice",
          "                real = os.path.realpath(path)",
          "                real = path"),
+    ],
+    MPK: [
+        ("write a half-filled label, which reads as a real one",
+         "        if v is None or v == \"\":\n            return None",
+         "        if v is None or v == \"\":\n            values[key] = \"\"; continue"),
+        ("sort folders lexicographically, putting 115 kV before 69 kV",
+         '    m = re.match(r"\\s*(-?\\d+(?:\\.\\d+)?)", label)\n'
+         '    return (0, float(m.group(1)), "") if m else (1, 0.0, label.lower())',
+         "    return (0, 0.0, label.lower())"),
+        ("drop features missing the folder field instead of naming them",
+         '    return value.strip() or missing', "    return value.strip()"),
+        ("claim one provenance for a merge of several sources",
+         "    provenance = []\n    for p in live:",
+         "    provenance = [live[0][\"description\"]]\n    for p in []:"),
+        ("scan a list per placemark instead of hashing ids",
+         "        kept = {id(pm) for pm in placemarks}", "        kept = placemarks"),
     ],
     EMG: [
         ("quote key and value as one string, the bug that returns nothing",

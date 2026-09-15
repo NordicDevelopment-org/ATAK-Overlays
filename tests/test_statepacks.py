@@ -4615,3 +4615,148 @@ def test_emergency_report_names_the_classes_that_returned_nothing():
     assert "Fire stations" in joined
     # And it must not let a zero read as a failed fetch.
     assert "not a failed fetch" in joined
+
+
+# --------------------------------------------------------------------------
+# merge_packs - a fetch that pages at 2,000 writes CI_substations_01..04 and
+# CI_transmission_lines_01..06. Ten top-level entries in Overlay Manager for
+# what is really two layers, and no single toggle for "substations".
+# --------------------------------------------------------------------------
+mpk = _load("merge_packs")
+
+
+def _page(path, rows, doc="subs", provenance="Source: X, retrieved 2026-09-13"):
+    pms = "".join(
+        f'<Placemark><name>{r["name"]}</name><ExtendedData>'
+        + "".join(f'<Data name="{k}"><value>{v}</value></Data>'
+                  for k, v in r.get("fields", {}).items())
+        + f'</ExtendedData><Point><coordinates>{r["coords"]},0</coordinates>'
+        f"</Point></Placemark>" for r in rows)
+    desc = f"<description>{provenance}</description>" if provenance else ""
+    kml = ('<?xml version="1.0"?><kml xmlns="http://www.opengis.net/kml/2.2">'
+           f"<Document><name>{doc}</name>{desc}{pms}</Document></kml>")
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with zipfile.ZipFile(path, "w") as z:
+        z.writestr("doc.kml", kml)
+
+
+def test_merge_groups_by_a_field_and_sorts_numerically(tmp_path):
+    """69 kV sorts before 115 kV. Lexicographic order puts 115 first."""
+    _page(str(tmp_path / "a.kmz"), [
+        {"name": "A", "coords": "-93.1,45.0", "fields": {"KV": "115"}},
+        {"name": "B", "coords": "-93.2,45.0", "fields": {"KV": "69"}},
+        {"name": "C", "coords": "-93.3,45.0", "fields": {"KV": "345"}}])
+    packs = [mpk.read_pack(str(tmp_path / "a.kmz"))]
+    kml, _icons, n = mpk.merge(packs, "S", folder_by="KV", log=lambda *a: None)
+    minidom.parseString(kml)
+    assert n == 3
+    folders = re.findall(r"<name>([^<]*\(\d+\))</name>", kml)
+    assert folders == ["69 (1)", "115 (1)", "345 (1)"]
+
+
+def test_merge_missing_folder_field_gets_its_own_named_folder(tmp_path):
+    """How many features lack the field is a fact, not something to hide."""
+    _page(str(tmp_path / "a.kmz"), [
+        {"name": "A", "coords": "-93.1,45.0", "fields": {"KV": "115"}},
+        {"name": "B", "coords": "-93.2,45.0", "fields": {}}])
+    kml, _i, _n = mpk.merge([mpk.read_pack(str(tmp_path / "a.kmz"))], "S",
+                            folder_by="KV", log=lambda *a: None)
+    assert "(not recorded) (1)" in kml
+    assert "115 (1)" in kml
+
+
+def test_merge_label_template_is_all_or_nothing(tmp_path):
+    """" - kV" looks like a real label for a substation with no voltage."""
+    _page(str(tmp_path / "a.kmz"), [
+        {"name": "KEEP ME", "coords": "-93.1,45.0", "fields": {"NAME": "Alpha"}},
+        {"name": "B", "coords": "-93.2,45.0",
+         "fields": {"NAME": "Beta", "KV": "115"}}])
+    said = []
+    kml, _i, _n = mpk.merge([mpk.read_pack(str(tmp_path / "a.kmz"))], "S",
+                            label="{NAME} - {KV} kV", log=said.append)
+    assert "Beta - 115 kV" in kml
+    assert "KEEP ME" in kml, "a half-filled label must never be written"
+    assert " - kV" not in kml
+    assert "kept their original name" in " ".join(said)
+
+
+def test_merge_collapses_a_placemark_that_appeared_on_two_pages(tmp_path):
+    row = {"name": "Edge", "coords": "-93.5,45.0", "fields": {"KV": "115"}}
+    _page(str(tmp_path / "p1.kmz"), [row])
+    _page(str(tmp_path / "p2.kmz"), [row])
+    packs = [mpk.read_pack(str(tmp_path / f"p{i}.kmz")) for i in (1, 2)]
+    _kml, _i, n = mpk.merge(packs, "S", folder_by="KV", log=lambda *a: None)
+    assert n == 1
+
+
+def test_merge_keeps_two_features_that_merely_share_a_name(tmp_path):
+    _page(str(tmp_path / "p1.kmz"), [
+        {"name": "Oak", "coords": "-93.5,45.0", "fields": {"KV": "115"}}])
+    _page(str(tmp_path / "p2.kmz"), [
+        {"name": "Oak", "coords": "-95.5,47.0", "fields": {"KV": "115"}}])
+    packs = [mpk.read_pack(str(tmp_path / f"p{i}.kmz")) for i in (1, 2)]
+    _kml, _i, n = mpk.merge(packs, "S", folder_by="KV", log=lambda *a: None)
+    assert n == 2, "different coordinates means two substations"
+
+
+def test_merge_carries_provenance_from_every_source(tmp_path):
+    """Rule 4. A merged pack claiming one origin it lacks is the failure."""
+    _page(str(tmp_path / "p1.kmz"), [{"name": "A", "coords": "-93.1,45.0"}],
+          provenance="Source: HIFLD, retrieved 2026-09-13")
+    _page(str(tmp_path / "p2.kmz"), [{"name": "B", "coords": "-93.2,45.0"}],
+          provenance="Source: OSM, retrieved 2026-09-14")
+    packs = [mpk.read_pack(str(tmp_path / f"p{i}.kmz")) for i in (1, 2)]
+    kml, _i, _n = mpk.merge(packs, "S", log=lambda *a: None)
+    assert "HIFLD" in kml and "OSM" in kml
+    assert "p1.kmz" in kml and "p2.kmz" in kml
+
+
+def test_merge_names_the_files_that_had_no_provenance(tmp_path):
+    _page(str(tmp_path / "good.kmz"), [{"name": "A", "coords": "-93.1,45.0"}],
+          provenance="Source: HIFLD, retrieved 2026-09-13")
+    _page(str(tmp_path / "bare.kmz"), [{"name": "B", "coords": "-93.2,45.0"}],
+          provenance="")
+    packs = [mpk.read_pack(str(tmp_path / n)) for n in ("good.kmz", "bare.kmz")]
+    kml, _i, _n = mpk.merge(packs, "S", log=lambda *a: None)
+    assert "No provenance in" in kml and "bare.kmz" in kml
+
+
+def test_merge_skips_a_broken_file_and_says_which(tmp_path):
+    _page(str(tmp_path / "ok.kmz"), [{"name": "A", "coords": "-93.1,45.0"}])
+    (tmp_path / "broken.kmz").write_bytes(b"not a zip")
+    packs = [mpk.read_pack(str(tmp_path / n)) for n in ("ok.kmz", "broken.kmz")]
+    said = []
+    _kml, _i, n = mpk.merge(packs, "S", log=said.append)
+    assert n == 1
+    assert "broken.kmz" in " ".join(said)
+
+
+def test_merge_geometry_is_carried_across_untouched(tmp_path):
+    """A regroup that quietly moved a coordinate is far worse than ten menu
+    entries, which is the only problem this tool exists to solve."""
+    _page(str(tmp_path / "a.kmz"), [
+        {"name": "A", "coords": "-93.123456,45.654321", "fields": {"KV": "115"}}])
+    kml, _i, _n = mpk.merge([mpk.read_pack(str(tmp_path / "a.kmz"))], "S",
+                            folder_by="KV", log=lambda *a: None)
+    assert "-93.123456,45.654321,0" in kml
+
+
+def test_merge_inspect_lists_the_fields_actually_present(tmp_path, capsys):
+    """The template is chosen from what the files carry, never guessed."""
+    _page(str(tmp_path / "a.kmz"), [
+        {"name": "A", "coords": "-93.1,45.0",
+         "fields": {"NAME": "Alpha", "VOLTAGE": "115", "BLANK": ""}}])
+    mpk.inspect([mpk.read_pack(str(tmp_path / "a.kmz"))])
+    out = capsys.readouterr().out
+    assert "{NAME}" in out and "{VOLTAGE}" in out
+    assert "filled on 1 of 1" in out
+
+
+def test_merge_render_label_refuses_a_template_with_no_fields():
+    assert mpk.render_label("just text", {"A": "1"}, "fallback") is None
+
+
+def test_merge_numeric_sort_key_handles_non_numeric_labels():
+    labels = ["345", "69", "(not recorded)", "115"]
+    assert sorted(labels, key=mpk._sort_key) == [
+        "69", "115", "345", "(not recorded)"]
