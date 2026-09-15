@@ -282,8 +282,8 @@ def build(state, out_dir, rows, coverage=False, url=CCL_URL, log=print):
         log(f"    [!] {meta['dropped_no_coords']} transmitter(s) had no usable "
             f"coordinates and were left out rather than placed at a guess")
 
-    stamp = built.replace("-", "_")
-    path = os.path.join(out_dir, f"{state}_WeatherRadio__{bcp.safe(stamp)}.kmz")
+    stamp = bcp.edition(built, kml, icons)
+    path = os.path.join(out_dir, f"{state}_WeatherRadio__{stamp}.kmz")
     size = bcp.write_kmz(path, kml, icons)
     drawn = len(picked) - meta["dropped_no_coords"]
     log(f"[*] {state}: {drawn} transmitter(s) -> {os.path.basename(path)} "

@@ -57,6 +57,7 @@ Exit codes: 0 ok, 1 nothing built, 2 network/endpoint failure.
 import argparse
 import csv
 import json
+import hashlib
 import os
 import re
 import ssl
@@ -736,6 +737,32 @@ def safe(name):
     return re.sub(r"[^A-Za-z0-9]+", "_", str(name)).strip("_")
 
 
+def edition(built, kml, icons=None):
+    """The version half of a pack filename: the date, plus a content digest.
+
+    A date alone is not a version. Two builds on the same day produced the
+    byte-identical filename, and ATAK caches an unpacked KMZ against its name -
+    so a rebuilt pack kept serving the icons from the first build of that day,
+    force-stop or not. The whole iteration loop is "build again today", which
+    is exactly the case a date cannot distinguish.
+
+    The digest is of the content, not the clock, so:
+      - a rebuild that changed nothing keeps the same filename and nothing is
+        needlessly retired or re-imported;
+      - a rebuild that changed anything gets a new filename, which is a new
+        file to ATAK and an older edition that atak-install.sh can retire.
+
+    The date stays first and readable, because a pack has to be datable from
+    its filename alone.
+    """
+    h = hashlib.sha256()
+    h.update(kml.encode("utf-8") if isinstance(kml, str) else kml)
+    for name, data in sorted((icons or {}).items()):
+        h.update(name.encode("utf-8"))
+        h.update(data)
+    return f"{safe(str(built).replace('-', '_'))}_{h.hexdigest()[:6]}"
+
+
 # --------------------------------------------------------------------------
 # Build one state
 # --------------------------------------------------------------------------
@@ -823,9 +850,10 @@ def build_state(state_abbr, out_dir, acs_year=ACS_YEAR, per_county=False,
                 "title": f"{name}, {state_abbr}", "boundary_source": boundary_source,
                 "boundary_url": used_url, "acs_label": acs_label,
                 "tiger_vintage": vintage, "built": built})
-            write_kmz(os.path.join(out_dir,
-                                   f"{state_abbr}_{safe(name)}__{safe(stamp_for_files)}.kmz"),
-                      one)
+            write_kmz(os.path.join(
+                out_dir,
+                f"{state_abbr}_{safe(name)}__{edition(stamp_for_files, one)}.kmz"),
+                one)
 
     if not placemarks:
         raise RuntimeError(f"{state_abbr}: no counties with usable geometry")
@@ -854,7 +882,8 @@ def build_state(state_abbr, out_dir, acs_year=ACS_YEAR, per_county=False,
     # the same pack, and a filename with no "__" has no version, so it is simply
     # overwritten in place. Guessing the split from token counts instead would
     # have read SAMPLE_MN_Water as a version of SAMPLE_MN_Energy.
-    path = os.path.join(out_dir, f"{state_abbr}_Counties__{safe(stamp)}.kmz")
+    path = os.path.join(out_dir,
+                        f"{state_abbr}_Counties__{edition(stamp, kml)}.kmz")
     size = write_kmz(path, kml)
 
     filled = sum(1 for m in built_rows if m["population"])

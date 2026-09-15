@@ -270,8 +270,8 @@ def build(state, out_dir, feats, source="", log=print):
         icons[f"icons/repeater_{bcp.safe(mode).lower()}.png"] = \
             glyphs.render("repeater", rgb)
 
-    stamp = built.replace("-", "_")
-    path = os.path.join(out_dir, f"{state}_Repeaters__{bcp.safe(stamp)}.kmz")
+    stamp = bcp.edition(built, kml, icons)
+    path = os.path.join(out_dir, f"{state}_Repeaters__{stamp}.kmz")
     size = bcp.write_kmz(path, kml, icons)
     drawn = len(feats) - meta["dropped_no_coords"]
     log(f"[*] {state}: {drawn} repeater(s) -> {os.path.basename(path)} "

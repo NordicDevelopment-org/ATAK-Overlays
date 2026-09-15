@@ -292,8 +292,8 @@ def build(state, out_dir, feats, min_mw=0.0, url=EIA_URL, log=print):
         log(f"    [!] {meta['dropped_no_coords']} plant(s) had no usable "
             f"coordinates and were left out rather than placed at a guess")
 
-    stamp = built.replace("-", "_")
-    path = os.path.join(out_dir, f"{state}_PowerPlants__{bcp.safe(stamp)}.kmz")
+    stamp = bcp.edition(built, kml, icons)
+    path = os.path.join(out_dir, f"{state}_PowerPlants__{stamp}.kmz")
     size = bcp.write_kmz(path, kml, icons)
     drawn = len(feats) - meta["dropped_no_coords"]
     log(f"[*] {state}: {drawn} plant(s) -> {os.path.basename(path)} "

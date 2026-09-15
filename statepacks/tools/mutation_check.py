@@ -245,6 +245,14 @@ MUTATIONS = {
          '    "dams":                ("dam_icon",   "Water",              "point"),'),
     ],
     BUILD: [
+        ("stamp the filename with the date alone, as it was",
+         '    return f"{safe(str(built).replace(\'-\', \'_\'))}_{h.hexdigest()[:6]}"',
+         '    return safe(str(built).replace("-", "_"))'),
+        ("digest only the kml, leaving a changed icon invisible",
+         "    for name, data in sorted((icons or {}).items()):\n"
+         "        h.update(name.encode(\"utf-8\"))\n"
+         "        h.update(data)",
+         "    pass"),
         ("pad a missing county code into a fake FIPS",
          "    return None\n\n\ndef county_label(props):",
          '    return (sfp or "00") + (cfp or "000")\n\n\ndef county_label(props):'),

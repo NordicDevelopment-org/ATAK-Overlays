@@ -1,4 +1,4 @@
-MN_PACK = "MN_Counties__2024.kmz"
+MN_PACK_PREFIX = "MN_Counties__2024_"
 
 """Tests for statepacks/build_county_pack.py - the stdlib-only ATAK county builder.
 
@@ -31,6 +31,19 @@ def _load(name):
 
 
 bcp = _load("build_county_pack")
+
+
+def mn_pack(tmp_path):
+    """The one MN county pack in tmp_path, whatever digest it carries.
+
+    The filename ends in a content digest now, so tests cannot name it. They
+    should not want to: what a test cares about is that exactly one pack was
+    written and what is inside it. Asserting "exactly one" is worth keeping -
+    two packs for one state is the duplicate-layer bug.
+    """
+    hits = sorted(tmp_path.glob(MN_PACK_PREFIX + "*.kmz"))
+    assert len(hits) == 1, f"expected one {MN_PACK_PREFIX}*.kmz, got {hits}"
+    return hits[0]
 
 
 # --------------------------------------------------------------------------
@@ -178,7 +191,7 @@ def _doc(path):
 def test_build_state_writes_one_pack_with_every_county(stubbed, tmp_path):
     r = bcp.build_state("MN", str(tmp_path), log=lambda *a: None, today="2026-09-14")
     assert r["counties"] == 3 and r["with_population"] == 2
-    path = tmp_path / MN_PACK
+    path = mn_pack(tmp_path)
     assert path.exists() and r["path"] == str(path)
 
     kml = _doc(path)
@@ -202,7 +215,7 @@ def test_land_area_comes_from_aland_not_a_projected_shape_area(stubbed, tmp_path
     of the local Mercator scale factor - about 2x at Minnesota's latitude.
     """
     bcp.build_state("MN", str(tmp_path), log=lambda *a: None, today="2026-09-14")
-    kml = _doc(tmp_path / MN_PACK)
+    kml = _doc(mn_pack(tmp_path))
     assert "413.9 sq mi [TIGER ALAND 2024]" in _text(kml)
     assert "28.5 sq mi [TIGER AWATER 2024]" in _text(kml)
 
@@ -214,7 +227,7 @@ def test_missing_acs_still_builds_and_says_so(monkeypatch, tmp_path):
     monkeypatch.setattr(bcp, "fetch_acs", lambda sfp, year=2023, log=print, **kw: {})
     r = bcp.build_state("MN", str(tmp_path), log=lambda *a: None, today="2026-09-14")
     assert r["counties"] == 1 and r["with_population"] == 0 and r["acs_year"] is None
-    kml = _doc(tmp_path / MN_PACK)
+    kml = _doc(mn_pack(tmp_path))
     assert "<b>Population:</b>" not in kml              # omitted, never fabricated
     assert "No data for:" in kml and "Population" in kml
     assert "not retrieved" in kml                       # and the Document says why
@@ -231,7 +244,7 @@ def test_csv_enrichment_carries_its_own_source_and_vintage(stubbed, tmp_path, mo
     monkeypatch.setattr(bcp, "DATA_DIR", str(data))
 
     bcp.build_state("MN", str(tmp_path), log=lambda *a: None, today="2026-09-14")
-    kml = _doc(tmp_path / MN_PACK)
+    kml = _doc(mn_pack(tmp_path))
     assert "Center City [Wikidata 2026-09-14]" in _text(kml)
     assert "651-555-0100 [county website 2026]" in _text(kml)
     # the county with no CSV row still refuses to guess
@@ -242,7 +255,7 @@ def test_per_county_also_writes_individual_files(stubbed, tmp_path):
     bcp.build_state("MN", str(tmp_path), per_county=True, log=lambda *a: None,
                     today="2026-09-14")
     names = {p.name for p in tmp_path.glob("*.kmz")}
-    assert MN_PACK in names
+    assert any(n.startswith(MN_PACK_PREFIX) for n in names)
     families = {n.split("__")[0] for n in names}
     assert {"MN_Counties", "MN_County0_County", "MN_County1_County"} <= families
     # every per-county file is versioned too, so a rebuild supersedes it
@@ -494,14 +507,15 @@ def test_a_vintage_with_no_year_still_dates_the_filename(monkeypatch, tmp_path):
                         (_fake_counties(1), "http://e/1", "Current"))
     monkeypatch.setattr(bcp, "fetch_acs", lambda sfp, year=2023, log=print, **kw: {})
     r = bcp.build_state("MN", str(tmp_path), log=lambda *a: None, today="2026-09-14")
-    assert os.path.basename(r["path"]) == "MN_Counties__Current_2026_09_14.kmz"
+    assert os.path.basename(r["path"]).startswith(
+        "MN_Counties__Current_2026_09_14_")
 
     # one that already names a year needs no date appended
     monkeypatch.setattr(bcp, "fetch_counties",
                         lambda sfp, ep=None, alts=None, log=print:
                         (_fake_counties(1), "http://e/55", "Census 2020"))
     r2 = bcp.build_state("MN", str(tmp_path), log=lambda *a: None, today="2026-09-14")
-    assert os.path.basename(r2["path"]) == "MN_Counties__Census_2020.kmz"
+    assert os.path.basename(r2["path"]).startswith("MN_Counties__Census_2020_")
 
 
 def test_unknown_vintage_is_never_shown_as_a_year(monkeypatch, tmp_path):
@@ -512,7 +526,7 @@ def test_unknown_vintage_is_never_shown_as_a_year(monkeypatch, tmp_path):
                         (_fake_counties(1), "http://e/1", bcp.TIGER_VINTAGE_UNKNOWN))
     monkeypatch.setattr(bcp, "fetch_acs", lambda sfp, year=2023, log=print, **kw: {})
     r = bcp.build_state("MN", str(tmp_path), log=lambda *a: None, today="2026-09-14")
-    assert os.path.basename(r["path"]) == "MN_Counties__built2026_09_14.kmz"
+    assert os.path.basename(r["path"]).startswith("MN_Counties__built2026_09_14_")
     kml = _doc(r["path"])
     assert "vintage not reported" in kml
     assert "TIGER 2024" not in kml                  # never a year nobody returned
@@ -525,7 +539,7 @@ def test_a_feature_with_no_identity_shows_no_fips(stubbed, tmp_path, monkeypatch
                             "geometry": {"type": "Polygon", "coordinates": [RING]},
                         }], "http://e/1", "2024"))
     bcp.build_state("MN", str(tmp_path), log=lambda *a: None, today="2026-09-14")
-    kml = _doc(tmp_path / MN_PACK)
+    kml = _doc(mn_pack(tmp_path))
     assert "<b>FIPS (GEOID):</b>" not in kml         # omitted rather than invented
     assert "No data for:" in kml and "FIPS (GEOID)" in kml
     assert "27000" not in kml                       # the old fabrication
@@ -781,7 +795,7 @@ def test_seeded_rows_flow_into_the_popup_with_their_vintage(tmp_path, monkeypatc
                         (_fake_counties(1), "http://e/1", "2024"))
     monkeypatch.setattr(bcp, "fetch_acs", lambda sfp, year=2023, log=print, **kw: {})
     bcp.build_state("MN", str(tmp_path), log=lambda *a: None, today="2026-09-14")
-    kml = _doc(tmp_path / MN_PACK)
+    kml = _doc(mn_pack(tmp_path))
     txt = _text(kml)
     assert "Sheriff&#39;s Office [HIFLD LE Locations (frozen snapshot) 2025]" in txt \
         or "Sheriff's Office [HIFLD LE Locations (frozen snapshot) 2025]" in txt
@@ -882,7 +896,9 @@ def test_key_flows_from_build_state_into_the_popup(monkeypatch, tmp_path):
     bcp.build_state("MN", str(tmp_path), log=lambda *a: None, today="2026-09-14",
                     census_api_key="passed-through")
     assert seen.get("key") == "passed-through"
-    kml = _doc(tmp_path / "MN_Counties__Current_2026_09_14.kmz")
+    hits = sorted(tmp_path.glob("MN_Counties__Current_2026_09_14_*.kmz"))
+    assert len(hits) == 1, hits
+    kml = _doc(hits[0])
     assert "15,900 [ACS 5-year 2023]" in _text(kml)
     assert "11,000 [ACS 5-year 2023]" in _text(kml)
 
@@ -4203,3 +4219,64 @@ def test_inventory_containment_ignores_unrelated_packs(tmp_path):
     _county_kmz(os.path.join(d, "counties.kmz"), ["Aitkin", "Anoka"], True)
     _county_kmz(os.path.join(d, "plants.kmz"), ["Sherco", "Monticello"], True)
     assert ainv.contained_in(ainv.scan(d)) == []
+
+
+# --------------------------------------------------------------------------
+# edition() - a date is not a version. Two builds on one day produced the
+# byte-identical filename, ATAK caches an unpacked KMZ against its name, and
+# a rebuilt pack went on serving the first build's icons. "Build it again
+# today" is the whole iteration loop, so it is exactly the case that broke.
+# --------------------------------------------------------------------------
+def test_edition_changes_when_the_content_changes():
+    a = bcp.edition("2026-09-14", "<kml>one</kml>")
+    b = bcp.edition("2026-09-14", "<kml>two</kml>")
+    assert a != b, "same filename for different content is the caching bug"
+    assert a.startswith("2026_09_14_") and b.startswith("2026_09_14_")
+
+
+def test_edition_is_stable_when_nothing_changed():
+    """A rebuild that changed nothing must not churn the filename.
+
+    Otherwise every run retires a pack and re-imports an identical one, and
+    ATAK is asked to re-read 20 MB for no reason.
+    """
+    kml = "<kml>same</kml>"
+    assert bcp.edition("2026-09-14", kml) == bcp.edition("2026-09-14", kml)
+
+
+def test_edition_changes_when_only_an_icon_changes():
+    """The icons are the payload that actually broke. A digest over the KML
+    alone would have left this exact bug in place."""
+    kml = "<kml>same</kml>"
+    a = bcp.edition("2026-09-14", kml, {"icons/bolt.png": b"old-pixels"})
+    b = bcp.edition("2026-09-14", kml, {"icons/bolt.png": b"new-pixels"})
+    assert a != b
+
+
+def test_edition_keeps_the_date_readable_and_first():
+    """A pack has to be datable from its filename alone."""
+    e = bcp.edition("2026-09-14", "<kml/>")
+    assert e.startswith("2026_09_14_")
+    # And the identity/version split still works on it.
+    ident, version = bcp_family("MN_Counties__" + e + ".kmz")
+    assert ident == "MN_Counties" and version.startswith("2026_09_14_")
+
+
+def bcp_family(name):
+    return ainv.family_of(name)
+
+
+def test_edition_survives_a_vintage_label_that_is_not_a_date():
+    e = bcp.edition("Current_2026_09_14", "<kml/>")
+    assert e.startswith("Current_2026_09_14_")
+
+
+def test_rebuilding_with_changed_icons_writes_a_new_file(stubbed, tmp_path):
+    """End to end: the same day, different content, a different filename."""
+    bcp.build_state("MN", str(tmp_path), log=lambda *a: None, today="2026-09-14")
+    first = {p.name for p in tmp_path.glob("MN_Counties__*.kmz")}
+    assert len(first) == 1
+    # Same day, same stub data - must NOT produce a second file.
+    bcp.build_state("MN", str(tmp_path), log=lambda *a: None, today="2026-09-14")
+    again = {p.name for p in tmp_path.glob("MN_Counties__*.kmz")}
+    assert again == first, "an unchanged rebuild churned the filename"
