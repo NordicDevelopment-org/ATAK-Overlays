@@ -4465,7 +4465,9 @@ def test_repeater_uncontested_placemark_has_no_disputed_row():
 # a host that left DNS, so this is built on OSM, the only source in this
 # sector this project has actually fetched live.
 # --------------------------------------------------------------------------
+osp = _load("osm_pack")
 emg = _load("build_emergency_pack")
+avi = _load("build_aviation_pack")
 
 
 def test_emergency_query_quotes_key_and_value_separately():
@@ -4476,20 +4478,20 @@ def test_emergency_query_quotes_key_and_value_separately():
     are no police stations in Minnesota". The repeater diagnostic already cost
     a live run to this exact mistake.
     """
-    q = emg.build_query()
+    q = osp.build_query(emg.SPEC)
     assert '["amenity"="police"]' in q
     assert '["amenity=police"]' not in q
     assert "=police]" not in q.replace('"="police"]', "")
 
 
 def test_emergency_query_emits_multi_clause_selectors_as_separate_filters():
-    q = emg.build_query()
+    q = osp.build_query(emg.SPEC)
     assert '["amenity"="clinic"]["urgent_care"="yes"]' in q
 
 
 def test_emergency_query_converts_inline_flag_to_the_overpass_modifier():
     """POSIX ERE has no inline flags; (?i) must never reach the server."""
-    out = emg.emit_clause("name", "~", "(?i)sheriff")
+    out = osp.emit_clause("name", "~", "(?i)sheriff")
     assert out == '["name"~"sheriff",i]'
     assert "(?i)" not in out
 
@@ -4497,7 +4499,7 @@ def test_emergency_query_converts_inline_flag_to_the_overpass_modifier():
 def test_emergency_query_is_built_from_the_class_table():
     """Not written beside it. That is how the two drift apart."""
     one = [("police", [(("amenity", "=", "police"),)], "LE")]
-    q = emg.build_query(one)
+    q = osp.build_query(emg.SPEC, one)
     assert q.count("nwr[") == 1
     assert '["amenity"="police"]' in q
 
@@ -4505,19 +4507,19 @@ def test_emergency_query_is_built_from_the_class_table():
 def test_emergency_empty_selector_is_refused():
     """An empty selector matches every object in the bounding box."""
     with pytest.raises(ValueError):
-        emg.emit_selector(())
+        osp.emit_selector(())
     with pytest.raises(ValueError):
-        emg.build_query([])
+        osp.build_query(emg.SPEC, [])
 
 
 def test_emergency_unknown_operator_is_refused():
     with pytest.raises(ValueError):
-        emg.emit_clause("amenity", "!=", "police")
+        osp.emit_clause("amenity", "!=", "police")
 
 
 def test_emergency_class_table_is_checked_offline():
     """A live run costs 6-17 minutes; a wrong table must fail before that."""
-    assert emg.check_classes() == []
+    assert osp.check_spec(emg.SPEC) == []
 
 
 def test_emergency_every_class_has_a_renderable_icon():
@@ -4531,31 +4533,31 @@ def test_emergency_every_class_has_a_renderable_icon():
 def test_emergency_classify_first_match_wins_and_never_double_counts():
     """A townhall that is also a shelter is one placemark, not two."""
     tags = {"amenity": "townhall", "social_facility": "shelter"}
-    layer = emg.classify(tags)
+    layer = osp.classify(emg.SPEC, tags)
     assert layer in ("government", "shelters")
     hits = [lay for lay, sels, _l in emg.CLASSES
-            if any(emg.matches(tags, s) for s in sels)]
+            if any(osp.matches(tags, s) for s in sels)]
     assert len(hits) > 1, "fixture no longer tests the overlap case"
     assert layer == hits[0], "first match in CLASSES order must win"
 
 
 def test_emergency_unmatched_element_is_dropped_not_guessed():
-    assert emg.classify({"amenity": "cafe"}) is None
-    assert emg.parse_element({"amenity": "cafe"}, -93.0, 45.0, "2026-09-15",
+    assert osp.classify(emg.SPEC, {"amenity": "cafe"}) is None
+    assert osp.parse_element(emg.SPEC, {"amenity": "cafe"}, -93.0, 45.0, "2026-09-15",
                              {"type": "node", "id": 1}) is None
 
 
 def test_emergency_multi_clause_needs_every_clause():
-    assert emg.classify({"amenity": "clinic", "urgent_care": "yes"}) == "urgent_care"
+    assert osp.classify(emg.SPEC, {"amenity": "clinic", "urgent_care": "yes"}) == "urgent_care"
     # A clinic without the urgent_care tag is not urgent care.
-    assert emg.classify({"amenity": "clinic"}) is None
+    assert osp.classify(emg.SPEC, {"amenity": "clinic"}) is None
 
 
 def test_emergency_regex_clause_matches_and_rejects():
-    assert emg.classify({"amenity": "shelter",
+    assert osp.classify(emg.SPEC, {"amenity": "shelter",
                          "shelter_type": "emergency"}) == "shelters"
     # A picnic shelter is not an emergency shelter.
-    assert emg.classify({"amenity": "shelter",
+    assert osp.classify(emg.SPEC, {"amenity": "shelter",
                          "shelter_type": "picnic_shelter"}) is None
 
 
@@ -4563,7 +4565,7 @@ def test_emergency_parse_keeps_the_whole_tag_table():
     """Rule 3: the full source attribute table rides in every placemark."""
     tags = {"amenity": "police", "name": "Anytown PD", "operator": "City",
             "some:odd:key": "kept anyway"}
-    row = emg.parse_element(tags, -93.0, 45.0, "2026-09-15",
+    row = osp.parse_element(emg.SPEC, tags, -93.0, 45.0, "2026-09-15",
                             {"type": "node", "id": 7})
     assert row["tags"] == tags
     assert row["layer"] == "police"
@@ -4571,18 +4573,18 @@ def test_emergency_parse_keeps_the_whole_tag_table():
 
 
 def test_emergency_missing_phone_stays_missing_and_says_so():
-    row = emg.parse_element({"amenity": "police", "name": "X"}, -93.0, 45.0,
+    row = osp.parse_element(emg.SPEC, {"amenity": "police", "name": "X"}, -93.0, 45.0,
                             "2026-09-15", {"type": "node", "id": 1})
-    rows = {a: (b, c) for a, b, c in emg.rows_for(row)}
+    rows = {a: (b, c) for a, b, c in osp.rows_for(emg.SPEC, row)}
     assert rows["Phone"][0] == ""
     assert "not in OpenStreetMap" in rows["Phone"][1]
 
 
 def test_emergency_empty_class_keeps_its_folder_and_says_zero(tmp_path):
     """"No fire stations here" must not look like "we never asked"."""
-    rows = [emg.parse_element({"amenity": "police", "name": "PD"}, -93.0, 45.0,
+    rows = [osp.parse_element(emg.SPEC, {"amenity": "police", "name": "PD"}, -93.0, 45.0,
                               "2026-09-15", {"type": "node", "id": 1})]
-    kml, icons = emg.build_kml("MN", rows, "2026-09-15")
+    kml, icons = osp.build_kml(emg.SPEC, "MN", rows, "2026-09-15")
     minidom.parseString(kml)
     assert "Fire stations (0)" in kml
     assert "Law enforcement (1)" in kml
@@ -4590,16 +4592,16 @@ def test_emergency_empty_class_keeps_its_folder_and_says_zero(tmp_path):
 
 
 def test_emergency_unnamed_feature_gets_a_usable_label():
-    row = emg.parse_element({"amenity": "fire_station"}, -93.0, 45.0,
+    row = osp.parse_element(emg.SPEC, {"amenity": "fire_station"}, -93.0, 45.0,
                             "2026-09-15", {"type": "node", "id": 2})
-    kml, _icons = emg.build_kml("MN", [row], "2026-09-15")
+    kml, _icons = osp.build_kml(emg.SPEC, "MN", [row], "2026-09-15")
     assert "(unnamed fire_stations)" in kml
     assert "<name></name>" not in kml
 
 
 def test_emergency_document_carries_provenance():
     """Rule 4: source, licence and retrieval date in every document."""
-    kml, _ = emg.build_kml("MN", [], "2026-09-15")
+    kml, _ = osp.build_kml(emg.SPEC, "MN", [], "2026-09-15")
     assert "OpenStreetMap contributors" in kml
     assert "ODbL 1.0" in kml
     assert "2026-09-15" in kml
@@ -4607,7 +4609,7 @@ def test_emergency_document_carries_provenance():
 
 def test_emergency_report_names_the_classes_that_returned_nothing():
     said = []
-    emg.report([emg.parse_element({"amenity": "police", "name": "PD"},
+    osp.report(emg.SPEC, [osp.parse_element(emg.SPEC, {"amenity": "police", "name": "PD"},
                                   -93.0, 45.0, "2026-09-15",
                                   {"type": "node", "id": 1})], log=said.append)
     joined = " ".join(said)
@@ -4806,7 +4808,7 @@ def test_query_contract_rejects_empty():
 
 
 def test_emergency_query_carries_a_real_bounding_box():
-    q = emg.build_query()
+    q = osp.build_query(emg.SPEC)
     assert "{s:.4f},{w:.4f},{n:.4f},{e:.4f}" in q
     assert "{{bbox}}" not in q and "{bbox}" not in q
     formatted = q.format(timeout=90, s=44.0, w=-97.0, n=49.0, e=-89.0)
@@ -4820,10 +4822,10 @@ def test_emergency_check_would_have_caught_the_bad_query(monkeypatch):
     A check whose all-clear means nothing is worse than no check: it is the
     reason a broken query reached a live run at all.
     """
-    assert emg.check_classes() == []
-    monkeypatch.setattr(emg, "build_query",
+    assert osp.check_spec(emg.SPEC) == []
+    monkeypatch.setattr(osp, "build_query",
                         lambda *a, **k: "[out:json];nwr[amenity=police]({{bbox}});")
-    problems = emg.check_classes()
+    problems = osp.check_spec(emg.SPEC)
     assert problems and any("query" in p for p in problems)
 
 
@@ -4845,10 +4847,10 @@ def test_emergency_report_never_claims_a_zero_for_a_class_nobody_asked():
     is not a finding, it is a lie with a number on it.
     """
     police = [c for c in emg.CLASSES if c[0] == "police"]
-    rows = [emg.parse_element({"amenity": "police", "name": "PD"}, -93.0, 45.0,
+    rows = [osp.parse_element(emg.SPEC, {"amenity": "police", "name": "PD"}, -93.0, 45.0,
                               "2026-09-15", {"type": "node", "id": 1})]
     said = []
-    emg.report(rows, log=said.append, classes=police)
+    osp.report(emg.SPEC, rows, log=said.append, classes=police)
     joined = " ".join(said)
     assert "Law enforcement" in joined
     assert "Hospitals" in joined, "the skipped classes must still be named"
@@ -4861,10 +4863,10 @@ def test_emergency_report_never_claims_a_zero_for_a_class_nobody_asked():
 def test_emergency_report_still_flags_a_real_zero_in_an_asked_class():
     """A class that WAS asked and came back empty is a genuine finding."""
     two = [c for c in emg.CLASSES if c[0] in ("police", "fire_stations")]
-    rows = [emg.parse_element({"amenity": "police", "name": "PD"}, -93.0, 45.0,
+    rows = [osp.parse_element(emg.SPEC, {"amenity": "police", "name": "PD"}, -93.0, 45.0,
                               "2026-09-15", {"type": "node", "id": 1})]
     said = []
-    emg.report(rows, log=said.append, classes=two)
+    osp.report(emg.SPEC, rows, log=said.append, classes=two)
     joined = " ".join(said)
     assert "returned nothing: Fire stations" in joined
     assert "not a failed fetch" in joined
@@ -4872,7 +4874,7 @@ def test_emergency_report_still_flags_a_real_zero_in_an_asked_class():
 
 def test_emergency_report_defaults_to_the_whole_table():
     said = []
-    emg.report([], log=said.append)
+    osp.report(emg.SPEC, [], log=said.append)
     joined = " ".join(said)
     assert "returned nothing" in joined
     assert "NOT asked for" not in joined
@@ -4885,12 +4887,12 @@ def test_emergency_dense_layers_import_switched_off():
     pack, and neither is why someone opens an emergency overlay.
     """
     rows = [
-        emg.parse_element({"amenity": "school", "name": "S"}, -93.0, 45.0,
+        osp.parse_element(emg.SPEC, {"amenity": "school", "name": "S"}, -93.0, 45.0,
                           "2026-09-15", {"type": "node", "id": 1}),
-        emg.parse_element({"amenity": "police", "name": "PD"}, -93.1, 45.1,
+        osp.parse_element(emg.SPEC, {"amenity": "police", "name": "PD"}, -93.1, 45.1,
                           "2026-09-15", {"type": "node", "id": 2}),
     ]
-    kml, _icons = emg.build_kml("MN", rows, "2026-09-15")
+    kml, _icons = osp.build_kml(emg.SPEC, "MN", rows, "2026-09-15")
     minidom.parseString(kml)
     schools = kml[kml.index("Schools ("):]
     schools = schools[:schools.index("</Folder>")]
@@ -4908,4 +4910,158 @@ def test_emergency_default_off_is_an_explicit_list_not_a_threshold():
     """A count threshold would flip a layer off in one state and not another,
     for no reason visible in the file."""
     assert emg.DEFAULT_OFF == {"schools", "government"}
-    assert emg.DEFAULT_OFF <= set(emg.class_names())
+    assert emg.DEFAULT_OFF <= set(osp.class_names(emg.SPEC))
+
+
+# --------------------------------------------------------------------------
+# build_aviation_pack - a second class table on the same code path. The point
+# of extracting osm_pack was that this file is a table and a CLI, not a copy.
+# --------------------------------------------------------------------------
+def test_aviation_table_passes_the_offline_check():
+    assert osp.check_spec(avi.SPEC) == []
+
+
+def test_aviation_query_is_valid_and_carries_a_real_bounding_box():
+    """The Overpass Turbo form this was adapted from uses ({{bbox}}), which
+    str.format() turns into the literal {bbox} and every mirror 400s."""
+    q = osp.build_query(avi.SPEC)
+    assert '["aeroway"="aerodrome"]' in q
+    assert '["aeroway"="helipad"]' in q
+    assert '["aeroway"="heliport"]' in q
+    assert "{{bbox}}" not in q and "{bbox}" not in q
+    formatted = q.format(timeout=90, s=44.0, w=-97.0, n=49.0, e=-89.0)
+    assert "(44.0000,-97.0000,49.0000,-89.0000)" in formatted
+    assert "{" not in formatted and "}" not in formatted
+
+
+def test_aviation_query_asks_for_centres_not_whole_geometry():
+    """`out body; >; out skel qt` returns every member node of every way -
+    hundreds of thousands of untagged nodes for a pack of point icons."""
+    q = osp.build_query(avi.SPEC)
+    assert "out center tags;" in q
+    assert "out skel" not in q and "out body" not in q
+
+
+def test_aviation_query_uses_one_nwr_not_three_element_lines():
+    q = osp.build_query(avi.SPEC)
+    assert q.count("nwr[") == 3          # one per selector, not per element type
+    assert "node[" not in q and "way[" not in q and "relation[" not in q
+
+
+def test_aviation_classifies_all_three_aeroway_values():
+    assert osp.classify(avi.SPEC, {"aeroway": "aerodrome"}) == "airports"
+    assert osp.classify(avi.SPEC, {"aeroway": "helipad"}) == "heliports"
+    assert osp.classify(avi.SPEC, {"aeroway": "heliport"}) == "heliports"
+    # A runway is not an airport and must not be filed as one.
+    assert osp.classify(avi.SPEC, {"aeroway": "runway"}) is None
+
+
+def test_aviation_popup_carries_the_aviation_identifiers():
+    tags = {"aeroway": "aerodrome", "name": "Anytown Muni", "icao": "KANY",
+            "iata": "ANY", "ref": "ANY", "ele": "312",
+            "aerodrome:type": "public"}
+    row = osp.parse_element(avi.SPEC, tags, -93.0, 45.0, "2026-09-15",
+                            {"type": "way", "id": 42})
+    rows = {a: (b, c) for a, b, c in osp.rows_for(avi.SPEC, row)}
+    assert rows["ICAO"][0] == "KANY"
+    assert rows["IATA"][0] == "ANY"
+    assert rows["Elevation"][0] == "312"
+    assert rows["Type"][0] == "public"
+
+
+def test_aviation_missing_elevation_says_so_and_is_not_computed():
+    row = osp.parse_element(avi.SPEC, {"aeroway": "helipad"}, -93.0, 45.0,
+                            "2026-09-15", {"type": "node", "id": 1})
+    rows = {a: (b, c) for a, b, c in osp.rows_for(avi.SPEC, row)}
+    assert rows["Elevation"][0] == ""
+    assert "not recorded" in rows["Elevation"][1]
+
+
+def test_aviation_and_emergency_share_one_code_path():
+    """Two tables, one implementation. A second copy is how the power pack's
+    fuel styles drifted until they had to be deleted."""
+    src = open(os.path.join(SP, "build_aviation_pack.py"), encoding="utf-8").read()
+    assert "import osm_pack" in src
+    for gone in ("def build_query", "def classify", "def build_kml",
+                 "def placemark", "def report"):
+        assert gone not in src, f"{gone} was copied instead of imported"
+
+
+def test_aviation_pack_builds_valid_kml_with_embedded_icons():
+    rows = [
+        osp.parse_element(avi.SPEC, {"aeroway": "aerodrome", "name": "Muni"},
+                          -93.0, 45.0, "2026-09-15", {"type": "way", "id": 1}),
+        osp.parse_element(avi.SPEC, {"aeroway": "helipad"},
+                          -93.1, 45.1, "2026-09-15", {"type": "node", "id": 2}),
+    ]
+    kml, icons = osp.build_kml(avi.SPEC, "MN", rows, "2026-09-15")
+    minidom.parseString(kml)
+    assert "Airports (1)" in kml and "Helipads and heliports (1)" in kml
+    assert set(icons) == {"icons/airports.png", "icons/heliports.png"}
+    for data in icons.values():
+        assert data[:8] == b"\x89PNG\r\n\x1a\n"
+    assert "(unnamed heliports)" in kml
+    assert "OpenStreetMap contributors" in kml and "ODbL 1.0" in kml
+
+
+def test_aviation_filename_uses_its_own_kind():
+    assert avi.SPEC["kind"] == "Aviation"
+    assert emg.SPEC["kind"] == "Emergency"
+
+
+# --------------------------------------------------------------------------
+# Glyph size normalisation. Measured before it existed: sizes ran 1.52 to
+# 2.09, a 37% spread, and anything over 2/1.14 = 1.754 had its outline clipped
+# at the edge of the image - which was most of the set.
+# --------------------------------------------------------------------------
+def _extent(subs):
+    xs = [x for sp in subs for x, _ in sp]
+    ys = [y for sp in subs for _, y in sp]
+    return max(max(xs) - min(xs), max(ys) - min(ys))
+
+
+def test_every_glyph_normalizes_to_one_size():
+    sizes = {n: _extent(gly.normalize(gly.GLYPHS[n]()))
+             for n in gly.glyph_names()}
+    assert max(sizes.values()) - min(sizes.values()) < 1e-9, sizes
+    assert abs(max(sizes.values()) - gly.GLYPH_EXTENT) < 1e-9
+
+
+def test_no_glyph_outline_is_clipped_by_the_image_edge():
+    """The outline is the shape grown 1.14x and drawn underneath it."""
+    for n in gly.glyph_names():
+        subs = gly.normalize(gly.GLYPHS[n]())
+        reach = max(abs(v) for sp in subs for p in sp for v in p) * 1.14
+        assert reach <= 1.0, f"{n} outline reaches {reach:.3f}, past the edge"
+
+
+def test_normalize_centres_on_the_bounding_box():
+    off = [[(0.0, 0.0), (0.5, 0.0), (0.5, 0.25)]]
+    subs = gly.normalize(off)
+    xs = [x for sp in subs for x, _ in sp]
+    ys = [y for sp in subs for _, y in sp]
+    assert abs((max(xs) + min(xs)) / 2) < 1e-9
+    assert abs((max(ys) + min(ys)) / 2) < 1e-9
+
+
+def test_normalize_preserves_aspect_ratio():
+    """A tall thin bolt must not be stretched into a square one."""
+    tall = [[(0.0, 0.0), (0.2, 0.0), (0.2, 1.0), (0.0, 1.0)]]
+    subs = gly.normalize(tall)
+    xs = [x for sp in subs for x, _ in sp]
+    ys = [y for sp in subs for _, y in sp]
+    w, h = max(xs) - min(xs), max(ys) - min(ys)
+    assert abs((w / h) - 0.2) < 1e-9
+
+
+def test_normalize_survives_a_degenerate_glyph():
+    assert gly.normalize([]) == []
+    point = [[(0.5, 0.5), (0.5, 0.5)]]
+    assert gly.normalize(point) == point
+
+
+def test_render_applies_normalization():
+    """Authoring coordinates stay natural; the scaling happens at render."""
+    before = _extent(gly.GLYPHS["broadcast"]())
+    assert before > gly.GLYPH_EXTENT, "fixture no longer tests an oversized glyph"
+    assert gly.render("broadcast", (255, 0, 0))[:8] == b"\x89PNG\r\n\x1a\n"

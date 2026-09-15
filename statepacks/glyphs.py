@@ -48,6 +48,44 @@ OUTLINE = (12, 14, 16)
 # --------------------------------------------------------------------------
 # geometry helpers - everything is a list of closed rings in [-1, 1]
 # --------------------------------------------------------------------------
+# Every glyph is scaled to this maximum dimension and centred, so the set
+# reads as one set. Two things forced it:
+#
+# CLIPPING. The outline is the shape grown 1.14x and drawn underneath, so a
+# glyph wider than 2/1.14 = 1.754 has its outline cut off at the edge of the
+# image. Measured before this existed: broadcast 2.09 and repeater 2.08 were
+# losing outline on every side, and anchor 1.94 on two.
+#
+# CONSISTENCY. Sizes ran 1.52 (battery) to 2.09 (broadcast), a 37% spread, so
+# neighbouring pins in the same pack looked like different weights of the same
+# idea. Normalising the bounding box is the ordinary way an icon set is made
+# to sit evenly; it is applied at render time so each glyph is still authored
+# in whatever coordinates its shape is natural in.
+#
+# This is GEOMETRIC, not optical: a solid square and a thin cross of the same
+# bounding box do not carry the same visual weight. Where that shows, the fix
+# is to redraw that one glyph, not to add a fudge factor here that moves every
+# other one at the same time.
+GLYPH_EXTENT = 1.66          # leaves 0.06 of margin after the 1.14x outline
+
+
+def normalize(subpaths, extent=GLYPH_EXTENT):
+    """Scale and centre a glyph so its longest side is `extent`."""
+    pts = [p for sp in subpaths for p in sp]
+    if not pts:
+        return subpaths
+    xs = [x for x, _ in pts]
+    ys = [y for _, y in pts]
+    w, h = max(xs) - min(xs), max(ys) - min(ys)
+    longest = max(w, h)
+    if longest <= 0:
+        return subpaths
+    k = extent / longest
+    cx = (max(xs) + min(xs)) / 2.0
+    cy = (max(ys) + min(ys)) / 2.0
+    return [[((x - cx) * k, (y - cy) * k) for x, y in sp] for sp in subpaths]
+
+
 def circle(cx, cy, r, n=64):
     return [(cx + r * math.cos(2 * math.pi * i / n),
              cy + r * math.sin(2 * math.pi * i / n)) for i in range(n)]
@@ -556,7 +594,7 @@ def render(name, rgb, size=SIZE, outline=OUTLINE):
         # Never fall back to a circle. A symbol the author did not ask for is
         # an invented value, and it would ship looking deliberate.
         raise KeyError(f"unknown glyph {name!r}. Known: {', '.join(glyph_names())}")
-    subs = GLYPHS[name]()
+    subs = normalize(GLYPHS[name]())
     n = size * SS
     fill = _coverage(subs, n)
     # The outline is the same shape grown slightly, drawn underneath.

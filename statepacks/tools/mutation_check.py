@@ -144,6 +144,12 @@ MUTATIONS = {
          '    src_note = ""'),
     ],
     GLY: [
+        ("skip size normalization, so glyphs clip and sit unevenly",
+         "    subs = normalize(GLYPHS[name]())", "    subs = GLYPHS[name]()"),
+        ("normalize to an extent that clips the outline",
+         "GLYPH_EXTENT = 1.66", "GLYPH_EXTENT = 1.95"),
+        ("stretch a glyph to fill the box, losing its aspect ratio",
+         "    longest = max(w, h)", "    longest = min(w, h)"),
         ("fall back to a circle for a glyph nobody defined",
          '        raise KeyError(f"unknown glyph {name!r}. Known: '
          "{', '.join(glyph_names())}\")",
