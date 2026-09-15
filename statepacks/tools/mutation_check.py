@@ -193,6 +193,9 @@ MUTATIONS = {
          '    return "repeaters"'),
     ],
     INV: [
+        ("open every file in the folder to answer a filtered name query",
+         "             and (not only or only.lower() in n.lower())]",
+         "             ]"),
         ("stop folding a trailing state suffix, so two spellings never match",
          '    n = re.sub(r",\\s*[A-Za-z]{2}\\s*$", "", n).lower()',
          "    n = n.lower()"),

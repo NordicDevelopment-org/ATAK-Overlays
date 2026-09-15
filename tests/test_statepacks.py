@@ -4315,3 +4315,22 @@ def test_inventory_progress_only_goes_to_a_terminal(tmp_path, capsys):
     ainv.scan(str(d))
     # capsys makes stderr a non-tty, which is exactly the redirected case.
     assert capsys.readouterr().err == ""
+
+
+def test_inventory_name_filter_applies_before_opening_anything(tmp_path):
+    """A question about 87 small files must not unzip a 9 MB one to answer it."""
+    d = tmp_path / "overlays"
+    _county_kmz(str(d / "MN_Aitkin_County_rev2.kmz"), ["Aitkin"], False)
+    _county_kmz(str(d / "huge_camera_export.kmz"), [f"Cam {i}" for i in range(50)], True)
+    rows = ainv.scan(str(d), only="County")
+    assert [r["name"] for r in rows] == ["MN_Aitkin_County_rev2.kmz"]
+    # Unfiltered still sees both.
+    assert len(ainv.scan(str(d))) == 2
+
+
+def test_inventory_name_filter_is_case_insensitive(tmp_path):
+    d = tmp_path / "overlays"
+    _county_kmz(str(d / "MN_Aitkin_County_rev2.kmz"), ["Aitkin"], False)
+    assert len(ainv.scan(str(d), only="county")) == 1
+    assert len(ainv.scan(str(d), only="COUNTY")) == 1
+    assert len(ainv.scan(str(d), only="nomatch")) == 0

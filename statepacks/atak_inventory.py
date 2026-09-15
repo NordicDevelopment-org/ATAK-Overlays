@@ -158,14 +158,22 @@ def inspect_kmz(path, deep=True):
     return out
 
 
-def scan(directory, deep=True):
+def scan(directory, deep=True, only=None):
+    """Every overlay in one directory.
+
+    `only` is a substring filter applied to the FILENAME before anything is
+    opened. It matters: answering a question about 87 small county files
+    should not unzip a 9.2 MB camera export to do it. Over a phone's storage
+    layer that is the difference between a second and a minute.
+    """
     try:
         entries = sorted(os.listdir(directory))
     except OSError as ex:                                    # noqa: BLE001
         raise SystemExit(f"cannot read {directory}: {ex}")
     files = [os.path.join(directory, n) for n in entries
              if n.lower().endswith((".kmz", ".kml"))
-             and os.path.isfile(os.path.join(directory, n))]
+             and os.path.isfile(os.path.join(directory, n))
+             and (not only or only.lower() in n.lower())]
     if not deep:
         return [inspect_kmz(p, deep=False) for p in files]
     # Opening and unzipping 100+ files off a phone's shared storage is slow
@@ -290,15 +298,22 @@ def main(argv=None):
                          "files whose name contains SUBSTR")
     a = ap.parse_args(argv)
     deep = not a.quick
-    rows = scan(a.dir, deep=deep)
+    if a.names is not None:
+        # Two passes on purpose. The files being ASKED about are read first
+        # and printed, then the rest, so a name query answers immediately
+        # instead of after every file in the folder.
+        rows = scan(a.dir, deep=True, only=a.names)
+    else:
+        rows = scan(a.dir, deep=deep)
 
     if a.names is not None:
         # Containment compares folded names. If two packs that clearly cover
         # the same ground are not being reported, this is the thing to look
         # at: the fold is what decides, not the filename.
+        if a.names:
+            print(f"  only files whose name contains {a.names!r}; "
+                  f"{len(rows)} matched")
         for r in rows:
-            if a.names and a.names.lower() not in r["name"].lower():
-                continue
             names = sorted(r.get("pm_names") or [])
             print(f"\n{r['name']}  ({len(names)} distinct folded name(s))")
             if r.get("error"):
