@@ -303,6 +303,7 @@ sources:
     layer_match: "general population|^shelter"
     aoi_kinds: [county, state, region, bbox]
     hidden: true
+    enabled: false
     name: "{name} ({capacity_persons})"
     fields:
       name: {from: [SHELTER_NAME, shelter_name, NAME]}
@@ -310,8 +311,11 @@ sources:
       type: {from: [FACILITY_USAGE_CODE, facility_usage_code]}
     source_name: "FEMA National Shelter System - facilities (live)"
     source_url: https://gis.fema.gov/arcgis/rest/services/NSS/NSS_flex_facilities/FeatureServer
-    notes: "Many sublayers by facility type; matched by name (general population shelters). EVACUATION_CAPACITY / POST_IMPACT_CAPACITY in persons. OpenShelters/0 lists only currently open shelters"
-    confidence: medium
+    notes: "HOST DEAD 2026-09-15 (confirmed by CI): \"500 Service NSS/NSS_flex_facilities/MapServer not started\" - ArcGIS Server's way of saying the service definition still exists but was administratively stopped, not renamed/deleted. Search (not independently fetched - gis.fema.gov is egress-blocked from this sandbox) names two same-folder candidates FEMA may have reorganized around: NSS/FEMA_NSS (\"FEMA ESF#6 Shelter System\", layers incl. Evacuation Capacity/Shelter in SLOSH Surge Area) and NSS/OpenShelters (already referenced in this entry's own notes below). Neither confirmed live. Disabled until one is. Many sublayers by facility type; matched by name (general population shelters). EVACUATION_CAPACITY / POST_IMPACT_CAPACITY in persons. OpenShelters/0 lists only currently open shelters"
+    confidence: dead
+    alternates:
+      - {driver: arcgis, url: "https://gis.fema.gov/arcgis/rest/services/NSS/FEMA_NSS/FeatureServer", note: "UNCONFIRMED candidate - search-named successor to NSS_flex_facilities, not independently fetched"}
+      - {driver: arcgis, url: "https://gis.fema.gov/arcgis/rest/services/NSS/OpenShelters/FeatureServer", layer_id: 0, note: "UNCONFIRMED candidate - narrower (currently-open shelters only), already referenced in this entry's own notes, not independently fetched"}
 
   # ---------------- schools (mass-care sites) ----------------
   - layer: schools

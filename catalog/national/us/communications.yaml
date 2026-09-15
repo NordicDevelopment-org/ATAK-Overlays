@@ -13,6 +13,7 @@ sources:
     entity: comm_tower
     driver: fcc_asr
     url: https://data.fcc.gov/download/pub/uls/complete/r_tower.zip
+    enabled: false
     status_codes: [C]                       # constructed only; add G for granted-not-built
     aoi_kinds: [county, state, region, bbox]
     group_by: [structure_type]
@@ -35,8 +36,8 @@ sources:
     source_name: "FCC Antenna Structure Registration (ASR) - registered structures (weekly)"
     source_url: https://www.fcc.gov/wireless/systems/antenna-structure-registration-asr-system
     license: "Public domain (US FCC)"
-    notes: "Weekly full database (~120 MB, cached). Column layout per FCC ASR public-access definitions; override with `layout:` if the FCC re-orders RA/CO/EN. Only structures >200 ft AGL or near airports must register - OSM fills in small sites"
-    confidence: high
+    notes: "HOST DEAD 2026-09-15 (confirmed by CI): data.fcc.gov/download/pub/uls/complete/r_tower.zip now returns 403 Forbidden. No alternates exist on this entry to fall back to. A WebSearch pass found no moved URL, login wall, or superseding endpoint - every 2026-dated reference (FCC's own public-access-files page, a third-party GIS pipeline blog post from April 2026) still describes this exact path as current, so this may be a transient bot-defense block rather than a killed endpoint, but that could not be confirmed live. Disabled until an on-device check (real browser/User-Agent, off the CI runner) confirms it one way or the other. Weekly full database (~120 MB, cached) when live. Column layout per FCC ASR public-access definitions; override with `layout:` if the FCC re-orders RA/CO/EN. Only structures >200 ft AGL or near airports must register - OSM fills in small sites"
+    confidence: dead
 
   - layer: comm_towers
     id: comm_towers@fedmaps-cellular
