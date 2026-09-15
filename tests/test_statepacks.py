@@ -4838,6 +4838,98 @@ def _page(path, rows, doc="subs", provenance="Source: X, retrieved 2026-09-13"):
         z.writestr("doc.kml", kml)
 
 
+def _page_ns(path, rows, ns, doc="subs"):
+    """Same shape as _page(), but with an ARBITRARY (or no) KML namespace -
+    an older Google Earth export (2.0, 2.1) or a namespace-less generator is
+    not "not really KML" just for skipping 2.2."""
+    xmlns = f' xmlns="{ns}"' if ns else ""
+    pms = "".join(
+        f'<Placemark><name>{r["name"]}</name><ExtendedData>'
+        + "".join(f'<Data name="{k}"><value>{v}</value></Data>'
+                  for k, v in r.get("fields", {}).items())
+        + f'</ExtendedData><Point><coordinates>{r["coords"]},0</coordinates>'
+        f"</Point></Placemark>" for r in rows)
+    kml = (f'<?xml version="1.0"?><kml{xmlns}>'
+           f"<Document><name>{doc}</name>{pms}</Document></kml>")
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with zipfile.ZipFile(path, "w") as z:
+        z.writestr("doc.kml", kml)
+
+
+def test_read_pack_does_not_silently_empty_a_non_2_2_namespace_file(tmp_path):
+    """Hardcoding kml/2.2 for every lookup made an older Google Earth export
+    (2.0, 2.1) read as a file with no name and no placemarks - not an error,
+    just quietly wrong, and a merge of ten packs would drop this one's data
+    with nothing in the log to say so."""
+    _page_ns(str(tmp_path / "old.kmz"),
+             [{"name": "A", "coords": "-93.1,45.0"},
+              {"name": "B", "coords": "-93.2,45.0"}],
+             ns="http://earth.google.com/kml/2.1", doc="Old Export")
+    pack = mpk.read_pack(str(tmp_path / "old.kmz"))
+    assert pack["error"] is None
+    assert pack["doc_name"] == "Old Export"
+    assert len(pack["placemarks"]) == 2
+    assert mpk.name_of(pack["placemarks"][0]) == "A"
+
+
+def test_read_pack_handles_a_kml_file_with_no_namespace_at_all(tmp_path):
+    _page_ns(str(tmp_path / "bare.kmz"),
+             [{"name": "C", "coords": "-93.1,45.0"}], ns="", doc="Bare")
+    pack = mpk.read_pack(str(tmp_path / "bare.kmz"))
+    assert pack["error"] is None
+    assert pack["doc_name"] == "Bare"
+    assert len(pack["placemarks"]) == 1
+
+
+def test_relabel_rewrites_an_existing_foreign_namespace_name_not_duplicate_it(
+        tmp_path):
+    """Before the fix: pm.find(_tag("name")) never found the EXISTING <name>
+    in a different namespace, so ET.SubElement added a SECOND <name> next to
+    the first - two <name> tags on one placemark, and which one a reader
+    shows is down to luck, not the merge's choice."""
+    _page_ns(str(tmp_path / "old.kmz"),
+             [{"name": "Sub A", "coords": "-93.1,45.0", "fields": {"KV": "115"}}],
+             ns="http://earth.google.com/kml/2.1")
+    packs = [mpk.read_pack(str(tmp_path / "old.kmz"))]
+    kml, _icons, n = mpk.merge(packs, "S", label="Renamed {KV}",
+                               log=lambda *a: None)
+    assert n == 1
+    # Before the fix, the original <name> (foreign namespace) survived
+    # UNTOUCHED as a sibling of a newly-added, empty-then-filled kml/2.2
+    # one - so both "Sub A" and "Renamed 115" would appear. Only the new
+    # text should exist now.
+    assert kml.count("Renamed 115") == 1
+    assert "Sub A" not in kml
+    minidom.parseString(kml)
+
+
+def test_relabel_creates_a_new_name_matching_a_nameless_placemarks_own_namespace(
+        tmp_path):
+    """A placemark with NO <name> at all yet, in a foreign namespace: the
+    element this creates must match ITS namespace, not be silently assumed
+    kml/2.2 - a placemark with one child in 2.1 and another in 2.2 is
+    needlessly inconsistent, however well most readers tolerate it."""
+    ns = "http://earth.google.com/kml/2.1"
+    kml_in = (
+        f'<?xml version="1.0"?><kml xmlns="{ns}"><Document><name>subs</name>'
+        '<Placemark><ExtendedData><Data name="KV"><value>115</value></Data>'
+        '</ExtendedData><Point><coordinates>-93.1,45.0,0</coordinates>'
+        '</Point></Placemark></Document></kml>')
+    path = tmp_path / "old.kmz"
+    os.makedirs(os.path.dirname(str(path)), exist_ok=True)
+    with zipfile.ZipFile(path, "w") as z:
+        z.writestr("doc.kml", kml_in)
+    packs = [mpk.read_pack(str(path))]
+    kml, _icons, n = mpk.merge(packs, "S", label="Sub {KV}", log=lambda *a: None)
+    assert n == 1
+    assert "Sub 115" in kml
+    root = ET.fromstring(kml)
+    pm = next(root.iter(f"{{{ns}}}Placemark"))
+    name = pm.find(f"{{{ns}}}name")
+    assert name is not None, "the new <name> must share the placemark's own namespace"
+    assert name.text == "Sub 115"
+
+
 def test_merge_groups_by_a_field_and_sorts_numerically(tmp_path):
     """69 kV sorts before 115 kV. Lexicographic order puts 115 first."""
     _page(str(tmp_path / "a.kmz"), [

@@ -439,6 +439,15 @@ MUTATIONS = {
          "    provenance = [live[0][\"description\"]]\n    for p in []:"),
         ("scan a list per placemark instead of hashing ids",
          "        kept = {id(pm) for pm in placemarks}", "        kept = placemarks"),
+        ("require an exact namespace match again, so a non-kml/2.2 input "
+         "file reads as if it had no name, no placemarks and no styles",
+         '    return tag.rsplit("}", 1)[-1]', "    return tag"),
+        ("assume kml/2.2 for a brand-new <name> instead of matching the "
+         "nameless placemark's own namespace",
+         "    if sibling.tag.startswith(\"{\"):\n"
+         "        return f\"{sibling.tag.split('}', 1)[0]}}}{name}\"\n"
+         "    return name",
+         '    return f"{{http://www.opengis.net/kml/2.2}}{name}"'),
     ],
     EMG: [
         ("import every layer switched on, however dense",
