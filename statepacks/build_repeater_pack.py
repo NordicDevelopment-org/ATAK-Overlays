@@ -136,6 +136,13 @@ def identity(f):
             str(p.get("mode") or "").strip())
 
 
+def norm_mode(raw):
+    """The one normalization for a repeater's mode - used everywhere a mode
+    becomes a filename or a folder key, so the icon build() renders and the
+    icon a placemark's styleUrl points at can never drift apart."""
+    return str(raw or "unknown").strip() or "unknown"
+
+
 def cities_of(group):
     return sorted({str((f.get("properties") or {}).get("city") or "?").strip()
                    for f in group})
@@ -161,18 +168,25 @@ def stacked(feats):
     A pin in the wrong place is worse than two pins in the right one, and
     nothing is dropped to tidy it up: which entry is misplaced is not
     something this builder can know.
+
+    Grouped by coordinate WITHIN an identity, not across the whole identity:
+    an identity with entries at two different points can still have two of
+    those entries land on the very same point, and that pair is a real stack
+    even though a third entry sits somewhere else.
     """
     by = {}
     for f in feats:
         by.setdefault(identity(f), []).append(f)
     out = []
     for ident, group in sorted(by.items()):
-        if len(group) < 2:
-            continue
-        coords = {json.dumps((f.get("geometry") or {}).get("coordinates"))
-                  for f in group}
-        if len(coords) == 1:
-            out.append((ident, group, cities_of(group)))
+        by_coord = {}
+        for f in group:
+            coord_key = json.dumps((f.get("geometry") or {}).get("coordinates"))
+            by_coord.setdefault(coord_key, []).append(f)
+        for _coord, subgroup in sorted(by_coord.items()):
+            if len(subgroup) < 2:
+                continue
+            out.append((ident, subgroup, cities_of(subgroup)))
     return out
 
 
@@ -324,7 +338,7 @@ def placemark(feat, meta):
     except (TypeError, ValueError):
         return None, None
 
-    mode = str(p.get("mode") or "unknown").strip() or "unknown"
+    mode = norm_mode(p.get("mode"))
     rows = rows_for(p)
     body = ""
     for label, value, note in rows:
@@ -334,7 +348,11 @@ def placemark(feat, meta):
         if note:
             body += f' <font color="{bcp.GREY}">[{bcp.esc(note)}]</font>'
         body += "<br/>"
-    missing = [label for label, value, note in rows if not value]
+    # "Position disputed" reporting "" means a confirmed NO, not unknown data
+    # - it does not belong in a "No data for" list built for genuinely absent
+    # fields.
+    missing = [label for label, value, note in rows
+               if not value and label != "Position disputed"]
     if missing:
         body += (f'<br/><font color="{bcp.GREY}"><i>No data for: '
                  f'{bcp.esc(", ".join(missing))}</i></font><br/>')
@@ -426,13 +444,14 @@ def build(state, out_dir, feats, source="", log=print):
 
     built = dt.date.today().isoformat()
     meta = {"title": f"{state} Amateur Repeaters ({built})",
-            "source": source or "coordinated repeater list", "built": built}
+            "source": source or "(no --source given - provenance not recorded)",
+            "built": built}
     kml = pack_kml(state, feats, meta)
     if meta["dropped_no_coords"]:
         log(f"    [!] {meta['dropped_no_coords']} record(s) had no usable "
             f"coordinates and were left out rather than placed at a guess")
 
-    modes = sorted({str((f.get('properties') or {}).get('mode') or 'unknown')
+    modes = sorted({norm_mode((f.get('properties') or {}).get('mode'))
                     for f in feats})
     icons = {}
     for mode in modes:
@@ -458,11 +477,13 @@ def main(argv=None):
                     help="GeoJSON of coordinated repeaters. There is no live "
                          "endpoint: a coordination list is a PDF a council "
                          "publishes, so this input is assembled by hand.")
-    ap.add_argument("--source", default="",
-                    help="what to credit in every popup, e.g. "
+    ap.add_argument("--source", required=True,
+                    help="required: what to credit in every popup, e.g. "
                          "'Minnesota Repeater Council coordinated list, "
                          "2026-09-13, with coordinates from hearham and "
-                         "Brandmeister'")
+                         "Brandmeister'. Provenance is not optional (CLAUDE.md "
+                         "rule 4) and there is no source this builder can "
+                         "guess on your behalf.")
     a = ap.parse_args(argv)
 
     if not os.path.exists(a.from_file):

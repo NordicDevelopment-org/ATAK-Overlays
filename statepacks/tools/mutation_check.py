@@ -150,6 +150,10 @@ MUTATIONS = {
          "        if parse is not None:", "        if False:"),
         ("unwire --gaps-dump",
          "                            dump=a.gaps_dump)", "                            dump=None)"),
+        ("unpack _overpass_tile's 3-tuple into two names, so --show --raw "
+         "against osm silently reports every tile as empty",
+         "                els, from_cache, _fetched = _overpass_tile(",
+         "                els, from_cache = _overpass_tile("),
     ],
     REP: [
         ("let a 4x join fan-out through as real repeaters",
@@ -168,6 +172,24 @@ MUTATIONS = {
          "    kept = [f for f in kept if True]; n_marked = 0"),
         ("keep the disputed position out of the popup",
          '        ("Position disputed",', '        ("_unused",'),
+        ("hide a real two-town stack behind a third entry at another point",
+         "    for ident, group in sorted(by.items()):\n        by_coord = {}",
+         "    for ident, group in sorted(by.items()):\n"
+         "        if len({json.dumps((f.get('geometry') or {}).get('coordinates'))"
+         "\n                for f in group}) != 1:\n"
+         "            continue\n        by_coord = {}"),
+        ("let build() key its icon set on an unnormalized mode",
+         "    modes = sorted({norm_mode((f.get('properties') or {}).get('mode'))\n"
+         "                    for f in feats})",
+         "    modes = sorted({str((f.get('properties') or {}).get('mode') or 'unknown')\n"
+         "                    for f in feats})"),
+        ("call a confirmed non-dispute missing data in the popup",
+         "    missing = [label for label, value, note in rows\n"
+         '               if not value and label != "Position disputed"]',
+         "    missing = [label for label, value, note in rows if not value]"),
+        ("let repeater provenance silently fall back to a plausible-looking string",
+         '    ap.add_argument("--source", required=True,',
+         '    ap.add_argument("--source", default="",'),
     ],
     GLY: [
         ("skip size normalization, so glyphs clip and sit unevenly",
@@ -180,6 +202,22 @@ MUTATIONS = {
          '        raise KeyError(f"unknown glyph {name!r}. Known: '
          "{', '.join(glyph_names())}\")",
          '        subs = GLYPHS["bolt"]()'),
+        ("go back to growing a glyph's outline from the origin, which misses "
+         "its own fill on anything not star-shaped about the centre",
+         "    fill = _coverage(subs, n)\n"
+         "    radius = max(1, round(OUTLINE_MARGIN * n / 2))\n"
+         "    grown = _dilate(fill, n, radius)",
+         "    fill = _coverage(subs, n)\n"
+         "    grown = _coverage([[(x * 1.14, y * 1.14) for x, y in sp] "
+         "for sp in subs], n)"),
+        ("render every glyph in sheet() a second time just to throw it away",
+         "    names = glyph_names()\n"
+         "    # Decoding our own PNGs back would be silly; render straight "
+         "to a canvas",
+         "    names = glyph_names()\n"
+         "    _wasted = [render(nm, (255, 209, 64), size) for nm in names]\n"
+         "    # Decoding our own PNGs back would be silly; render straight "
+         "to a canvas"),
     ],
     PWR: [
         ("key the icon filename on the glyph shape instead of the fuel",
@@ -213,6 +251,10 @@ MUTATIONS = {
         ("replace EIA's reporting period with the build date",
          'f"EIA reporting period: {bcp.esc(str(p.get(\'Period\') or \'not stated\'))}<br/>"',
          'f"EIA reporting period: {bcp.esc(meta[\'built\'])}<br/>"'),
+        ("turn a plant's unreported nameplate into a 0 that --min-mw then "
+         "silently drops",
+         "        feats = [f for f, mw in zip(feats, mws) if mw is None or mw >= min_mw]",
+         "        feats = [f for f, mw in zip(feats, mws) if (mw or 0) >= min_mw]"),
     ],
     NWR: [
         ("claim today's date for an old --from-file snapshot",
@@ -237,6 +279,13 @@ MUTATIONS = {
         ("hide an out-of-service transmitter among the working ones",
          '        status = str(s.get("status") or "UNKNOWN").strip().upper() or "UNKNOWN"',
          '        status = "NORMAL"'),
+        ("pick the transmitter icon's colour locally instead of from "
+         "symbology's shared table, so it drifts from broadcast_towers'",
+         '    icons = {"icons/broadcast.png": glyphs.render(\n'
+         '        symbology.glyph_for("nwr_transmitters"),\n'
+         '        symbology.colour_for("nwr_transmitters"))}',
+         '    icons = {"icons/broadcast.png": glyphs.render('
+         '"broadcast", (255, 209, 64))}'),
     ],
     RPT: [
         ("anchor the query on a parent key the data does not carry",
@@ -453,18 +502,41 @@ MUTATIONS = {
 }
 
 TESTS = ["tests/test_statepacks.py", "tests/test_kmz.py"]
+# Roughly 5x a normal ~22s uncontested run. A mutation that hangs the whole
+# suite (an unbounded mock with no failure path, paired with a mutation that
+# removes its only stopping condition) is the worst outcome this harness can
+# hit - not a clean pass - and a subprocess call with no bound at all is how
+# that turned into an observed multi-minute, multi-gigabyte runaway process
+# that read as "0 test(s) fail".
+FAILURES_TIMEOUT_S = 120
 
 
 def failures():
-    out = subprocess.run([sys.executable, "-m", "pytest", *TESTS, "-q"],
-                         capture_output=True, text=True).stdout
+    """Count of pytest failures, or None if the run never produced one.
+
+    None covers BOTH a timeout and a completed-but-unparseable run (killed,
+    crashed, output cut off mid-line) - neither printed a normal summary, so
+    there is no honest count to report. This must never collapse to 0: doing
+    so is exactly how a hang under mutation gets reported as the cleanest
+    possible result instead of the harness's own bug to go fix.
+    """
+    try:
+        out = subprocess.run([sys.executable, "-m", "pytest", *TESTS, "-q"],
+                             capture_output=True, text=True,
+                             timeout=FAILURES_TIMEOUT_S).stdout
+    except subprocess.TimeoutExpired:
+        return None
     last = out.splitlines()[-1] if out else ""
     m = re.search(r"(\d+) failed", last)
-    return int(m.group(1)) if m else 0
+    if m:
+        return int(m.group(1))
+    if re.search(r"\d+ passed", last) or "no tests ran" in last.lower():
+        return 0
+    return None
 
 
 def check(path, entries):
-    """(survivors, dead, skipped) for one file's mutation entries.
+    """(survivors, dead, skipped, incomplete) for one file's mutation entries.
 
     survivors: a real behaviour with no test catching it.
     dead: an entry whose target text no longer exists in the file.
@@ -474,15 +546,21 @@ def check(path, entries):
     survived" - a refusal to run read exactly like a real, confirmed gap. A
     file this script never touched must never be reported the same way as
     one it touched and found clean, or the same way as one it found broken.
+    incomplete: the mutated suite never finished. Never folded into
+    survivors - survivors specifically means "ran clean, 0 failures", and an
+    unfinished run proves nothing either way. Conflating the two would bury a
+    hang behind the exact same "nothing tests this" message a genuine gap
+    gets, when a hang is the harness's own bug, not a missing test.
     """
     if subprocess.run(["git", "diff", "--quiet", "--", path]).returncode != 0:
         print(f"REFUSING: {path} has uncommitted changes - this script reverts "
               f"with 'git checkout --' and would delete them.", file=sys.stderr)
-        return 0, 0, 1
+        return 0, 0, 1, 0
     print(f"\n{path}")
     original = open(path, encoding="utf-8").read()
     survivors = 0
     dead = 0
+    incomplete = 0
 
     # A finally does not run on SIGTERM. Without this, a killed run leaves the
     # file broken on purpose and says nothing about it.
@@ -511,6 +589,11 @@ def check(path, entries):
             open(path, "w", encoding="utf-8").write(original.replace(old, new, 1))
             n = failures()
             open(path, "w", encoding="utf-8").write(original)
+            if n is None:
+                print(f"  {desc:52s} !! the mutated suite never finished "
+                      f"(timeout or crash) - not clean, look at why")
+                incomplete += 1
+                continue
             flag = "   <-- SURVIVES, so nothing tests this" if n == 0 else ""
             survivors += n == 0
             print(f"  {desc:52s} {n} test(s) fail{flag}")
@@ -518,7 +601,7 @@ def check(path, entries):
         open(path, "w", encoding="utf-8").write(original)
         for sig, handler in previous:
             signal.signal(sig, handler)
-    return survivors, dead, 0
+    return survivors, dead, 0, incomplete
 
 
 def main(argv):
@@ -532,12 +615,15 @@ def main(argv):
     survivors = sum(r[0] for r in results)
     dead = sum(r[1] for r in results)
     skipped = sum(r[2] for r in results)
+    incomplete = sum(r[3] for r in results)
 
     # Reported apart, because each calls for different work, and conflating
     # any two of them makes a wrong claim:
-    #   SURVIVOR  a real behaviour no test covers -> go write the test.
-    #   DEAD      a guard pointing at moved/rewritten code -> repoint it.
-    #   SKIPPED   never checked at all (dirty tree) -> commit, then re-run.
+    #   SURVIVOR    a real behaviour no test covers -> go write the test.
+    #   DEAD        a guard pointing at moved/rewritten code -> repoint it.
+    #   SKIPPED     never checked at all (dirty tree) -> commit, then re-run.
+    #   INCOMPLETE  the mutated suite never finished -> the harness's own
+    #               bug (usually an unbounded mock), not a missing test.
     # A skipped file folded into "0 survived" is the exact bug this file was
     # first written to describe: a refusal to run reads as a clean result.
     if skipped:
@@ -548,12 +634,18 @@ def main(argv):
         print(f"\n{dead} entr(y/ies) guard NOTHING - their target text is "
               f"gone. Repoint them at the code that moved; a dead guard is "
               f"not a test gap, it is harness rot.")
+    if incomplete:
+        print(f"\n{incomplete} mutation(s) left the suite unable to finish "
+              f"(timeout after {FAILURES_TIMEOUT_S}s, or a crash) - unproven, "
+              f"not clean. Usually a mock with no bound on it: find the test "
+              f"that hung and give it the same kind of stopping condition a "
+              f"sibling test already uses.")
     if survivors:
         print(f"{survivors} mutation(s) survived - a real behaviour with no "
               f"test. Write the test.")
-    if not survivors and not dead and not skipped:
+    if not survivors and not dead and not skipped and not incomplete:
         print("\nevery mutation is caught by at least one test")
-    return 1 if (survivors or dead or skipped) else 0
+    return 1 if (survivors or dead or skipped or incomplete) else 0
 
 
 if __name__ == "__main__":

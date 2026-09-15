@@ -2408,6 +2408,44 @@ def test_the_report_prints_a_runnable_widening_command(capsys):
     assert "python3 seed_le_contacts.py --state MN --gaps" in out, out
 
 
+def test_show_raw_against_osm_does_not_crash_on_the_tile_unpack(monkeypatch, capsys):
+    """_overpass_tile returns a 3-tuple: (elements, came_from_cache,
+    fetched_iso). dump_raw()'s OSM path unpacked it into two variables,
+    which raises ValueError on every single tile - silently swallowed by
+    the per-tile except/continue, so `--show N --raw --source osm` printed
+    'no tile returned an element' for every state regardless of what OSM
+    actually had, with the real cause never shown."""
+    monkeypatch.setattr(sle, "county_shapes", _fake_shapes("27025"))
+    monkeypatch.setattr(sle, "_overpass_tile",
+                        lambda *a, **kw: ([{"type": "node", "id": 1,
+                                            "tags": {"name": "Test PD"}}],
+                                           False, "2026-09-15"))
+    rc = sle.main(["--state", "MN", "--source", "osm", "--show", "1", "--raw"])
+    out = capsys.readouterr().out
+    assert "too many values to unpack" not in out, out
+    assert "no tile returned an element" not in out, out
+    assert rc == 0
+
+
+def test_module_docstring_names_the_real_sheriff_default():
+    """The docstring's stated --match default and SHERIFF_RX drifted apart
+    once already (the doc still said the pre-Clark-County-fix pattern)."""
+    assert f'default "{sle.SHERIFF_RX}"' in sle.__doc__
+    assert "sherr?iff" not in sle.__doc__          # the superseded pattern
+
+
+def test_make_state_pack_sh_match_default_agrees_with_seed_le_contacts():
+    """make-state-pack.sh keeps its own copy of the sheriff filter as a shell
+    default. The WI Clark County fix (sherr?iff -> sherr?if) landed in
+    seed_le_contacts.py's SHERIFF_RX but not here once already, which
+    silently narrowed the shell script's default back to missing that
+    county - the two must be read off the same source, not hand-copied."""
+    script = open(os.path.join(SP, "termux", "make-state-pack.sh"),
+                  encoding="utf-8").read()
+    assert f"MATCH:-{sle.SHERIFF_RX}|" in script
+    assert "sherr?iff" not in script               # the superseded pattern
+
+
 # --------------------------------------------------------------------------
 # Mutations that used to leave every test green. Each of these fails if the
 # named line is reverted - that is the whole point of them.
@@ -3585,6 +3623,21 @@ def test_the_filename_keeps_the_identity_version_boundary(tmp_path):
     assert n == 1
 
 
+def test_nwr_icon_colour_comes_from_symbology_not_a_local_choice(tmp_path):
+    """The icon was hardcoded amber - Energy/Electric's colour, not
+    Communications' - independently of symbology.py's STATEPACK_LAYERS,
+    which already declares nwr_transmitters green with the same 'broadcast'
+    glyph broadcast_towers uses. Two identical shapes rendering in different
+    colours depending on which builder drew them is exactly what one shared
+    table exists to prevent."""
+    path, _n = nwr.build("MN", str(tmp_path), [_STATION], log=lambda *a: None)
+    with zipfile.ZipFile(path) as z:
+        rendered = z.read("icons/broadcast.png")
+    expected = sym.icon_for("nwr_transmitters", size=gly.SIZE)
+    assert rendered == expected
+    assert sym.colour_for("nwr_transmitters") == sym.SECTOR["Communications"]
+
+
 # ============================================================================
 # build_power_pack - EIA power plants. Two capacities, never conflated.
 # ============================================================================
@@ -3680,6 +3733,21 @@ def test_min_mw_filters_and_says_so_rather_than_silently_shrinking(tmp_path):
     assert n == 1
     assert any("--min-mw" in s for s in said)
     assert "__" in os.path.basename(path)
+
+
+def test_min_mw_keeps_a_plant_with_no_reported_nameplate(tmp_path):
+    """'or 0' would invent a capacity for a plant EIA simply did not report
+    one for, then use that invented 0 to drop it. Missing stays missing -
+    it must be kept, since the filter cannot know it is actually small."""
+    feats = [_plant(Install_MW=5), _plant(Install_MW=None), _plant(Install_MW=500)]
+    said = []
+    path, n = pwr.build("MN", str(tmp_path), feats, min_mw=25, log=said.append)
+    assert n == 2                          # the 500 MW plant and the unknown one
+    joined = " ".join(said)
+    assert "1 with no reported nameplate, kept regardless" in joined
+    with zipfile.ZipFile(path) as z:
+        kml = z.read("doc.kml").decode()
+    assert kml.count("<Placemark>") == 2
 
 
 # ============================================================================
@@ -3907,7 +3975,8 @@ def test_a_missing_input_file_explains_that_there_is_no_fallback(tmp_path):
     import subprocess
     r = subprocess.run(
         [sys.executable, os.path.join(SP, "build_repeater_pack.py"),
-         "--state", "MN", "--from-file", str(tmp_path / "nope.geojson")],
+         "--state", "MN", "--from-file", str(tmp_path / "nope.geojson"),
+         "--source", "test"],
         capture_output=True, text=True)
     assert r.returncode != 0
     out = r.stderr + r.stdout
@@ -4504,6 +4573,59 @@ def test_repeater_uncontested_placemark_has_no_disputed_row():
     assert rows["Position disputed"] == ""
 
 
+def test_repeater_uncontested_placemark_omits_position_disputed_from_missing():
+    """A confirmed non-dispute reports '' for 'Position disputed', but that is
+    not the same thing as missing data - it must not print 'No data for:
+    ..., Position disputed' on every ordinary repeater's popup."""
+    f = _rpt()
+    _mode, pm = rep.placemark(f, {"source": "s", "built": "d"})
+    assert "No data for" not in pm
+
+
+def test_repeater_partial_stack_is_still_caught_when_a_third_entry_differs():
+    """An identity with a third entry at a DIFFERENT point must not hide a
+    real two-town stack between the other two."""
+    a = _rep("WA0CQG", 442.15, "DMR", "BALATON", coords=(-95.0, 44.2))
+    b = _rep("WA0CQG", 442.15, "DMR", "BLOOMINGTON", coords=(-95.0, 44.2))
+    c = _rep("WA0CQG", 442.15, "DMR", "DULUTH", coords=(-92.1, 46.8))
+    said = []
+    out = rep.dedupe([a, b, c], log=said.append)
+    assert len(out) == 3, "nothing may be dropped to tidy this up"
+    joined = " ".join(said)
+    assert "TWO different towns" in joined
+    assert "BALATON / BLOOMINGTON" in joined
+    contested = [f for f in out if f["properties"].get("_position_contested")]
+    assert len(contested) == 2
+    assert not any(f["properties"]["city"] == "DULUTH" for f in contested)
+
+
+def test_repeater_whitespace_only_mode_gets_a_matching_icon(tmp_path):
+    """build()'s icon set and pack_kml()'s styleUrl must key off the SAME
+    normalized mode, or the KML points at an icon that was never rendered."""
+    feats = [_rpt(mode="   ")]
+    path, n = rep.build("MN", str(tmp_path), feats, source="test",
+                         log=lambda *a: None)
+    assert n == 1
+    with zipfile.ZipFile(path) as z:
+        kml = z.read("doc.kml").decode()
+        written = set(z.namelist())
+    hrefs = set(re.findall(r"<href>(icons/[^<]+)</href>", kml))
+    assert hrefs, "no icon referenced"
+    for href in hrefs:
+        assert href in written, (
+            f"KML references {href} but it was never written to the zip")
+
+
+def test_repeater_source_is_required(tmp_path):
+    """Provenance is not optional (CLAUDE.md rule 4). A silent, plausible-
+    looking fallback is worse than an error: it reads like a real citation
+    when nobody actually said where the list came from."""
+    gj = tmp_path / "reps.geojson"
+    gj.write_text(json.dumps({"type": "FeatureCollection", "features": []}))
+    with pytest.raises(SystemExit):
+        rep.main(["--state", "MN", "--from-file", str(gj)])
+
+
 # --------------------------------------------------------------------------
 # build_emergency_pack - Phase 2. Every HIFLD source for this sector points at
 # a host that left DNS, so this is built on OSM, the only source in this
@@ -5072,11 +5194,62 @@ def test_every_glyph_normalizes_to_one_size():
 
 
 def test_no_glyph_outline_is_clipped_by_the_image_edge():
-    """The outline is the shape grown 1.14x and drawn underneath it."""
-    for n in gly.glyph_names():
-        subs = gly.normalize(gly.GLYPHS[n]())
-        reach = max(abs(v) for sp in subs for p in sp for v in p) * 1.14
-        assert reach <= 1.0, f"{n} outline reaches {reach:.3f}, past the edge"
+    """The outline band must fit inside the image for every glyph."""
+    n = 48
+    for name in gly.glyph_names():
+        _fill, grown = gly._layers(name, n)
+        edge = (grown[0] + grown[-1] +
+                [row[0] for row in grown] + [row[-1] for row in grown])
+        assert max(edge) <= 0.0, f"{name}'s outline reaches the image edge"
+
+
+def test_glyph_extent_leaves_room_for_the_outline_margin():
+    """If GLYPH_EXTENT grows without the margin shrinking to match, the
+    outline gets clipped at the image edge instead of framing the glyph."""
+    assert gly.GLYPH_EXTENT / 2 + gly.OUTLINE_MARGIN <= 1.0
+
+
+def test_dilate_is_a_superset_of_its_input():
+    """A dilation can only add coverage, never remove it - at any radius,
+    for any starting grid."""
+    n = 12
+    grid = [[0.0] * n for _ in range(n)]
+    for j, i in ((2, 2), (2, 3), (5, 7), (9, 1)):
+        grid[j][i] = 1.0
+    for radius in (0, 1, 2, 5):
+        grown = gly._dilate(grid, n, radius)
+        for j in range(n):
+            for i in range(n):
+                assert grown[j][i] >= grid[j][i], (radius, j, i)
+
+
+def test_glyph_outline_covers_the_fill_for_every_real_glyph():
+    """The bug: growing a glyph's outline by scaling its coordinates from the
+    origin only reliably contains the original shape when the shape is
+    star-shaped about the origin - most of these are not (lattice legs,
+    off-centre holes). 31 of 39 glyphs had the 'grown' shape fail to cover
+    part of the real fill, up to 3,534 contiguous supersampled pixels on
+    helipad: a real hole punched in the icon, not antialiasing."""
+    n = 48
+    for name in gly.glyph_names():
+        fill, grown = gly._layers(name, n)
+        for j in range(n):
+            for i in range(n):
+                assert grown[j][i] >= fill[j][i], (
+                    f"{name} at ({j},{i}): fill={fill[j][i]} "
+                    f"grown={grown[j][i]}")
+
+
+def test_sheet_does_not_render_every_glyph_twice(tmp_path, monkeypatch):
+    """sheet()'s own loop rasterizes every glyph inline via _layers(); a
+    render() call first, kept only for its length, doubled the work for
+    nothing."""
+    calls = []
+    monkeypatch.setattr(gly, "render",
+                         lambda *a, **kw: calls.append(a) or b"")
+    names, n = gly.sheet(str(tmp_path / "sheet.png"), size=16)
+    assert n == len(names)
+    assert calls == [], f"render() was called {len(calls)} time(s) inside sheet()"
 
 
 def test_normalize_centres_on_the_bounding_box():
@@ -5436,7 +5609,15 @@ def test_fetch_state_raises_on_an_arcgis_error_body_served_as_http_200(monkeypat
 def test_fetch_state_pages_past_an_exact_multiple_of_the_page_size(monkeypatch):
     """exceededTransferLimit does not exist in f=geojson output at all - a
     FeatureCollection has no top-level "properties" member. The only signal
-    geojson gives is whether a page came back full."""
+    geojson gives is whether a page came back full.
+
+    The mock is deliberately BOUNDED past the two real pages (raises rather
+    than returning empty pages forever): a broken "never stop" implementation
+    must hang or crash here, not spin silently. This exact unbounded shape,
+    without the bound, produced a genuine multi-minute, multi-gigabyte
+    runaway subprocess under the "keep paging past a short page" mutation -
+    which mutation_check.py's own subprocess call had no timeout on, so it
+    was never reported as a failure at all."""
     import json as _json
     pages = [
         [{"properties": {"id": i}} for i in range(pwr.EIA_PAGE)],  # exactly full
@@ -5446,6 +5627,9 @@ def test_fetch_state_pages_past_an_exact_multiple_of_the_page_size(monkeypatch):
 
     def fake_get(url, log=print):
         calls.append(url)
+        if len(calls) > 3:
+            raise AssertionError(
+                "fetch_state kept paging past the exact-multiple stop page")
         page = pages[len(calls) - 1] if len(calls) <= len(pages) else []
         return _json.dumps({"features": page}).encode("utf-8")
 
@@ -5507,9 +5691,9 @@ def _init_repo(tmp_path, files):
     subprocess.run(["git", "commit", "-q", "-m", "init"], cwd=tmp_path, check=True)
 
 
-def test_mutation_check_dirty_tree_returns_a_three_tuple_and_does_not_crash(tmp_path):
+def test_mutation_check_dirty_tree_returns_a_four_tuple_and_does_not_crash(tmp_path):
     """The actual crash: `return 1` from the refusal path against code that
-    unpacks every result as (survivors, dead, skipped)."""
+    unpacks every result as (survivors, dead, skipped, incomplete)."""
     target = tmp_path / "thing.py"
     _init_repo(tmp_path, {"thing.py": "def f():\n    return 1\n"})
     target.write_text("def f():\n    return 2\n", encoding="utf-8")  # dirty
@@ -5521,11 +5705,11 @@ def test_mutation_check_dirty_tree_returns_a_three_tuple_and_does_not_crash(tmp_
         result = mc.check("thing.py", [("flip return", "return 1", "return 2")])
     finally:
         os.chdir(cwd)
-    assert result == (0, 0, 1), "dirty tree must skip, not crash or claim clean"
+    assert result == (0, 0, 1, 0), "dirty tree must skip, not crash or claim clean"
 
 
 def test_mutation_check_clean_tree_runs_normally(tmp_path):
-    """The ordinary path still returns (survivors, dead, 0)."""
+    """The ordinary path still returns (survivors, dead, 0, incomplete)."""
     _init_repo(tmp_path, {"thing.py": "VALUE = 1\n",
                           "test_thing.py": (
                               "import importlib.util\n"
@@ -5545,14 +5729,14 @@ def test_mutation_check_clean_tree_runs_normally(tmp_path):
     finally:
         os.chdir(cwd)
     assert result[2] == 0, "a clean, committed tree must not be skipped"
-    assert result == (1, 0, 0), f"expected one caught survivor, got {result}"
+    assert result == (1, 0, 0, 0), f"expected one caught survivor, got {result}"
 
 
 def test_mutation_check_main_reports_skipped_separately_from_clean(monkeypatch, capsys):
     """main()'s actual aggregation and wording, isolated from real paths."""
     mc = _load_mutation_check()
     monkeypatch.setattr(mc, "MUTATIONS", {"a.py": [("x", "old", "new")]})
-    monkeypatch.setattr(mc, "check", lambda path, entries: (0, 0, 1))
+    monkeypatch.setattr(mc, "check", lambda path, entries: (0, 0, 1, 0))
     rc = mc.main(["mutation_check", ""])
     out = capsys.readouterr().out
     assert rc == 1, "a skip must not exit 0 as if everything were verified"
@@ -5563,11 +5747,69 @@ def test_mutation_check_main_reports_skipped_separately_from_clean(monkeypatch, 
 def test_mutation_check_main_all_clean_says_so(monkeypatch, capsys):
     mc = _load_mutation_check()
     monkeypatch.setattr(mc, "MUTATIONS", {"a.py": [("x", "old", "new")]})
-    monkeypatch.setattr(mc, "check", lambda path, entries: (0, 0, 0))
+    monkeypatch.setattr(mc, "check", lambda path, entries: (0, 0, 0, 0))
     rc = mc.main(["mutation_check", ""])
     out = capsys.readouterr().out
     assert rc == 0
     assert "every mutation is caught by at least one test" in out
+
+
+def test_failures_reports_a_timeout_as_none_not_zero(monkeypatch):
+    """The actual bug: an unbounded mock under a mutation ran for minutes
+    with no timeout on the subprocess call at all, and the eventual (or
+    never) result had no parseable 'N failed' line - which used to read as
+    0, the cleanest possible outcome, for the worst possible one."""
+    mc = _load_mutation_check()
+
+    def fake_run(*a, **kw):
+        raise mc.subprocess.TimeoutExpired(cmd=a[0], timeout=kw.get("timeout"))
+
+    monkeypatch.setattr(mc.subprocess, "run", fake_run)
+    assert mc.failures() is None
+
+
+def test_failures_reports_an_unparseable_result_as_none_not_zero(monkeypatch):
+    """A crashed or killed subprocess can return with capture_output text
+    that never mentions 'passed' or 'failed' at all - not a timeout, but
+    just as unproven, and must not silently read as a clean 0."""
+    mc = _load_mutation_check()
+
+    class _Result:
+        stdout = "Fatal Python error: Segmentation fault\n"
+
+    monkeypatch.setattr(mc.subprocess, "run", lambda *a, **kw: _Result())
+    assert mc.failures() is None
+
+
+def test_check_counts_a_none_from_failures_as_incomplete_not_survived(tmp_path, monkeypatch):
+    """The consumer side of the same fix: check() must not read failures()
+    returning None as "0 test(s) fail" and flag it SURVIVES."""
+    _init_repo(tmp_path, {"thing.py": "VALUE = 1\n"})
+    mc = _load_mutation_check()
+    monkeypatch.setattr(mc, "failures", lambda: None)
+    cwd = os.getcwd()
+    os.chdir(tmp_path)
+    try:
+        result = mc.check("thing.py", [("flip the value", "VALUE = 1", "VALUE = 2")])
+    finally:
+        os.chdir(cwd)
+    assert result == (0, 0, 0, 1), (
+        "a None from failures() must count as incomplete, not survivors")
+
+
+def test_mutation_check_main_reports_incomplete_separately_from_survived(
+        monkeypatch, capsys):
+    """Same aggregation contract as SKIPPED - an unfinished run is unproven,
+    not clean, and must not be silently absorbed into "every mutation is
+    caught"."""
+    mc = _load_mutation_check()
+    monkeypatch.setattr(mc, "MUTATIONS", {"a.py": [("x", "old", "new")]})
+    monkeypatch.setattr(mc, "check", lambda path, entries: (0, 0, 0, 1))
+    rc = mc.main(["mutation_check", ""])
+    out = capsys.readouterr().out
+    assert rc == 1, "an incomplete run must not exit 0 as if verified"
+    assert "unable to finish" in out
+    assert "every mutation is caught" not in out
 
 
 # --------------------------------------------------------------------------
@@ -5808,6 +6050,50 @@ def test_install_sh_unrelated_families_are_never_touched_by_the_dedup(tmp_path):
     r = _run_install(script, a, b)
     assert (dest / a.name).exists() and (dest / b.name).exists(), r.stdout + r.stderr
     assert "will not be installed at all" not in r.stdout
+
+
+# --------------------------------------------------------------------------
+# atak-list.sh - same real-script-via-subprocess pattern as atak-install.sh.
+# The fallback path (no atak_inventory.py, or no python3) always blamed
+# python3 in its warning, even when python3 was right there and the actual
+# problem was a missing or misplaced atak_inventory.py - which sends whoever
+# reads it chasing the wrong fix.
+# --------------------------------------------------------------------------
+LIST_SH = os.path.join(SP, "termux", "atak-list.sh")
+
+
+def _list_env(tmp_path):
+    """Same pattern as _install_env: the real atak-list.sh, unmodified,
+    against a throwaway ATAK_DIR - and deliberately WITHOUT atak_inventory.py
+    next to it, to exercise the plain-listing fallback."""
+    dest = tmp_path / "dest"
+    dest.mkdir()
+    home = tmp_path / "home"
+    termux = home / "termux"
+    termux.mkdir(parents=True)
+    (termux / "atak-env.sh").write_text(
+        f'ATAK_DIR="{dest}"\n'
+        'say() { printf "%s\\n" "$*"; }\n'
+        'warn() { printf "%s\\n" "$*" >&2; }\n'
+        'die() { warn "$*"; exit 1; }\n', encoding="utf-8")
+    script = termux / "atak-list.sh"
+    script.write_text(open(LIST_SH, encoding="utf-8").read(), encoding="utf-8")
+    script.chmod(0o755)
+    return dest, script
+
+
+def test_list_sh_parses_as_valid_bash():
+    r = subprocess.run(["bash", "-n", LIST_SH], capture_output=True, text=True)
+    assert r.returncode == 0, r.stderr
+
+
+def test_list_sh_blames_the_missing_inventory_script_not_python3(tmp_path):
+    """python3 is present in this test environment; only atak_inventory.py is
+    absent. The warning must name that, not blame python3 unconditionally."""
+    _dest, script = _list_env(tmp_path)
+    r = _run_install(script, "--json", str(tmp_path / "out.json"))
+    assert "python3 not found" not in r.stderr, r.stderr
+    assert "atak_inventory.py" in r.stderr and "not found" in r.stderr, r.stderr
 
 
 # --------------------------------------------------------------------------

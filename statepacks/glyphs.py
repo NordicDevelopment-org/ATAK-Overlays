@@ -43,6 +43,8 @@ SIZE = 64          # ATAK treats the pixel size literally; 32 is ~1.8 mm on a
                    # 440 ppi phone, which is too small to read at a glance.
 SS = 3             # supersampling factor
 OUTLINE = (12, 14, 16)
+OUTLINE_MARGIN = 0.12       # constant coordinate-space width of the outline
+                            # band, the same all the way around every glyph
 
 
 # --------------------------------------------------------------------------
@@ -51,10 +53,11 @@ OUTLINE = (12, 14, 16)
 # Every glyph is scaled to this maximum dimension and centred, so the set
 # reads as one set. Two things forced it:
 #
-# CLIPPING. The outline is the shape grown 1.14x and drawn underneath, so a
-# glyph wider than 2/1.14 = 1.754 has its outline cut off at the edge of the
-# image. Measured before this existed: broadcast 2.09 and repeater 2.08 were
-# losing outline on every side, and anchor 1.94 on two.
+# CLIPPING. The outline is a constant-width band (OUTLINE_MARGIN) drawn
+# outside the fill, so a glyph reaching past 1.0 - OUTLINE_MARGIN has its
+# outline cut off at the edge of the image. Measured before this existed:
+# broadcast 2.09 and repeater 2.08 were losing outline on every side, and
+# anchor 1.94 on two.
 #
 # CONSISTENCY. Sizes ran 1.52 (battery) to 2.09 (broadcast), a 37% spread, so
 # neighbouring pins in the same pack looked like different weights of the same
@@ -66,7 +69,7 @@ OUTLINE = (12, 14, 16)
 # bounding box do not carry the same visual weight. Where that shows, the fix
 # is to redraw that one glyph, not to add a fudge factor here that moves every
 # other one at the same time.
-GLYPH_EXTENT = 1.66          # leaves 0.06 of margin after the 1.14x outline
+GLYPH_EXTENT = 1.66          # leaves 0.05 of margin after OUTLINE_MARGIN
 
 
 def normalize(subpaths, extent=GLYPH_EXTENT):
@@ -575,6 +578,51 @@ def _coverage(subpaths, n):
     return grid
 
 
+def _dilate(grid, n, radius):
+    """Grow a coverage grid outward by `radius` cells, via a separable max
+    filter - a real Minkowski-sum dilation, so the result is GUARANTEED to
+    cover every cell the input covers (each pass takes a max over a window
+    that includes the cell itself).
+
+    This replaced scaling a glyph's coordinates by a fixed factor from the
+    origin to make its "grown" outline shape. That looks like the same idea
+    but is not: growing from the origin only reliably contains the original
+    shape when the shape is star-shaped about the origin, and most of these
+    glyphs are not (a lattice tower's legs, an off-centre hole). Measured
+    before this existed: 31 of the 39 glyphs had the "grown" shape fail to
+    cover part of the actual fill, up to 3,534 contiguous supersampled pixels
+    on helipad - a real hole punched in the icon, not antialiasing.
+    """
+    if radius <= 0:
+        return [row[:] for row in grid]
+    h = [[0.0] * n for _ in range(n)]
+    for j in range(n):
+        row = grid[j]
+        for i in range(n):
+            h[j][i] = max(row[max(0, i - radius):min(n, i + radius + 1)])
+    out = [[0.0] * n for _ in range(n)]
+    for i in range(n):
+        col = [h[j][i] for j in range(n)]
+        for j in range(n):
+            out[j][i] = max(col[max(0, j - radius):min(n, j + radius + 1)])
+    return out
+
+
+def _layers(name, n):
+    """(fill, grown) coverage grids for one glyph at supersampled size n.
+
+    The one place this is computed, so render() and sheet() can never drift
+    apart on how a glyph's outline is grown - which is exactly how the
+    hole-punching bug above went unnoticed in the first place: two copies of
+    the same logic, one of them never looked at closely.
+    """
+    subs = normalize(GLYPHS[name]())
+    fill = _coverage(subs, n)
+    radius = max(1, round(OUTLINE_MARGIN * n / 2))
+    grown = _dilate(fill, n, radius)
+    return fill, grown
+
+
 def _png(size, rgba_rows):
     raw = b"".join(b"\x00" + bytes(r) for r in rgba_rows)
 
@@ -594,11 +642,8 @@ def render(name, rgb, size=SIZE, outline=OUTLINE):
         # Never fall back to a circle. A symbol the author did not ask for is
         # an invented value, and it would ship looking deliberate.
         raise KeyError(f"unknown glyph {name!r}. Known: {', '.join(glyph_names())}")
-    subs = normalize(GLYPHS[name]())
     n = size * SS
-    fill = _coverage(subs, n)
-    # The outline is the same shape grown slightly, drawn underneath.
-    grown = _coverage([[(x * 1.14, y * 1.14) for x, y in sp] for sp in subs], n)
+    fill, grown = _layers(name, n)
 
     rows = []
     for j in range(size):
@@ -628,16 +673,16 @@ def render(name, rgb, size=SIZE, outline=OUTLINE):
 def sheet(path, size=96):
     """Every glyph in a row, on a dark ground, to look at them."""
     names = glyph_names()
-    tiles = [render(n, (255, 209, 64), size) for n in names]
-    # Decoding our own PNGs back would be silly; re-render straight to a canvas.
+    # Decoding our own PNGs back would be silly; render straight to a canvas
+    # instead - but via the SAME _layers() render() uses, so this preview
+    # shows the glyph set exactly as it ships, normalization and outline
+    # both, not a second, divergent copy of the rasterizing.
     bg = (26, 28, 32)
     w = size * len(names)
     rows = [bytearray() for _ in range(size)]
     for name in names:
-        subs = GLYPHS[name]()
         n = size * SS
-        fill = _coverage(subs, n)
-        grown = _coverage([[(x * 1.14, y * 1.14) for x, y in sp] for sp in subs], n)
+        fill, grown = _layers(name, n)
         for j in range(size):
             for i in range(size):
                 f = o = 0.0
@@ -664,7 +709,7 @@ def sheet(path, size=96):
            + chunk(b"IHDR", struct.pack(">IIBBBBB", w, size, 8, 2, 0, 0, 0))
            + chunk(b"IDAT", zlib.compress(raw, 9)) + chunk(b"IEND", b""))
     open(path, "wb").write(png)
-    return names, len(tiles)
+    return names, len(names)
 
 
 def main(argv=None):

@@ -51,6 +51,7 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import build_county_pack as bcp                             # noqa: E402
 import glyphs                                                # noqa: E402
+import symbology                                             # noqa: E402
 
 CCL_URL = "https://www.weather.gov/source/nwr/JS/ccl-data.js"
 NWS_DISCLAIMER = "https://www.weather.gov/disclaimer"
@@ -293,10 +294,14 @@ def build(state, out_dir, rows, coverage=False, url=CCL_URL, log=print,
             "url": url, "built": built, "data_as_of": data_as_of,
             "data_verified_live": data_verified_live}
     kml = pack_kml(state, picked, meta)
-    # Amber for a working transmitter; the folder already separates
-    # the dead ones, so one icon is enough.
-    icons = {"icons/broadcast.png": glyphs.render("broadcast",
-                                                 (255, 209, 64))}
+    # One colour for every transmitter, working or not; the folder already
+    # separates the dead ones, so a status colour would be redundant. The
+    # colour itself comes from symbology.py's STATEPACK_LAYERS, not a local
+    # choice - broadcast_towers uses the same glyph in the same Communications
+    # sector, and a hardcoded colour here drifted from it silently once.
+    icons = {"icons/broadcast.png": glyphs.render(
+        symbology.glyph_for("nwr_transmitters"),
+        symbology.colour_for("nwr_transmitters"))}
     if meta["dropped_no_coords"]:
         log(f"    [!] {meta['dropped_no_coords']} transmitter(s) had no usable "
             f"coordinates and were left out rather than placed at a guess")

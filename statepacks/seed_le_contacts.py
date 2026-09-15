@@ -27,7 +27,7 @@ source and the current year in it - the builder shows whatever is there.
 WHAT IT WRITES
 --------------
 One row per county, for agencies whose name looks like a county sheriff
-(--match, default "sherr?iff"). Use --all-agencies to take every law-enforcement
+(--match, default "sherr?if"). Use --all-agencies to take every law-enforcement
 record instead and pick through them by hand.
 
 USAGE
@@ -2315,7 +2315,7 @@ def dump_raw(state_abbr, use_osm, use_usgs, args, layer_id):
               f"{OSM_QUERY.format(timeout=args.osm_timeout, s=s_, w=w, n=n, e=e)}")
         for i, tile in enumerate(tiles, 1):
             try:
-                els, from_cache = _overpass_tile(
+                els, from_cache, _fetched = _overpass_tile(
                     tile, OVERPASS_MIRRORS, args.osm_timeout, 1, print,
                     deadline=clock)
             except TimeoutError:

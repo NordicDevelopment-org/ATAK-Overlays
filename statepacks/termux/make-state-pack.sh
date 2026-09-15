@@ -39,11 +39,15 @@ SP="$(cd -- "$HERE/.." && pwd -P)"          # statepacks/
 
 # The default filter for step 2. "sheriff" alone misses the county agency in a
 # lot of Minnesota: several counties file theirs as "<County> Law Enforcement
-# Center", "<County> Jail" or "<County> Public Safety Center", and one is
-# spelled "Sherriff". Each term here was read off a real --gaps report, never
+# Center", "<County> Jail" or "<County> Public Safety Center". OSM also
+# misspells the word in both directions - "Sherriff" (MN Steele County,
+# doubled r AND f) and "Sherrif" (WI Clark County, doubled r, ONE f) - which is
+# why the trailing f is optional too, matching seed_le_contacts.py's own
+# SHERIFF_RX default exactly; narrowing the f back to required silently drops
+# Clark County again. Each term here was read off a real --gaps report, never
 # guessed at, and the agency is always written out exactly as the source spells
 # it. Override with MATCH=... to be stricter or looser.
-MATCH="${MATCH:-sherr?iff|law enforcement cent|county jail|county public safety|justice cent}"
+MATCH="${MATCH:-sherr?if|law enforcement cent|county jail|county public safety|justice cent}"
 
 # The OSM step's wall-clock budget. The default inside seed_le_contacts.py is
 # tuned for a state whose tiles are already cached; the FIRST fetch of a state

@@ -296,9 +296,15 @@ def build(state, out_dir, feats, min_mw=0.0, url=EIA_URL, log=print):
     state = state.strip().upper()
     if min_mw:
         before = len(feats)
-        feats = [f for f in feats
-                 if (as_mw((f.get("properties") or {}).get("Install_MW")) or 0) >= min_mw]
-        log(f"    --min-mw {min_mw:g}: {len(feats)} of {before} plant(s) kept")
+        mws = [as_mw((f.get("properties") or {}).get("Install_MW")) for f in feats]
+        unknown = sum(1 for mw in mws if mw is None)
+        # An unreported nameplate is not a known-small one - "or 0" would
+        # invent a capacity that then silently drops the plant. Missing
+        # stays missing, so it is kept rather than filtered on a guess.
+        feats = [f for f, mw in zip(feats, mws) if mw is None or mw >= min_mw]
+        log(f"    --min-mw {min_mw:g}: {len(feats)} of {before} plant(s) kept"
+            + (f" ({unknown} with no reported nameplate, kept regardless)"
+               if unknown else ""))
 
     built = dt.date.today().isoformat()
     meta = {"title": f"{state} Power Plants ({built})", "url": url, "built": built}

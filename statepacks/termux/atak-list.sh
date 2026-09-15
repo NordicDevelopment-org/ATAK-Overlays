@@ -23,7 +23,12 @@ SP="$(cd -- "$HERE/.." && pwd -P)"
 if command -v python3 >/dev/null && [ -f "$SP/atak_inventory.py" ]; then
   exec python3 "$SP/atak_inventory.py" --dir "$ATAK_DIR" "$@"
 fi
-[ $# -eq 0 ] || warn "python3 not found - ignoring $* and listing plainly"
+if ! command -v python3 >/dev/null; then
+  reason="python3 not found"
+else
+  reason="$SP/atak_inventory.py not found"
+fi
+[ $# -eq 0 ] || warn "$reason - ignoring $* and listing plainly"
 
 say "Overlays in $ATAK_DIR"
 
