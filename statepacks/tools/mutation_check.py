@@ -275,6 +275,12 @@ MUTATIONS = {
          "        kept = {id(pm) for pm in placemarks}", "        kept = placemarks"),
     ],
     EMG: [
+        ("report a zero for every class, including ones nobody asked for",
+         "    asked = classes if classes is not None else CLASSES",
+         "    asked = CLASSES"),
+        ("stop naming the classes that were skipped",
+         "    skipped = [lbl for lay, _s, lbl in CLASSES if lay not in asked_names]",
+         "    skipped = []"),
         ("write the bounding box in Overpass Turbo syntax, which every mirror 400s",
          '    box = "({s:.4f},{w:.4f},{n:.4f},{e:.4f})"', '    box = "({{bbox}})"'),
         ("stop validating the query in the offline check",

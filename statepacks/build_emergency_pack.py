@@ -345,22 +345,37 @@ def counts(rows):
     return by
 
 
-def report(rows, log=print):
-    """What came back, per class, including the zeroes."""
+def report(rows, log=print, classes=None):
+    """What came back, per class, including the zeroes.
+
+    `classes` is what was ASKED for. Without it this reported every class in
+    the table, so a `--only police` run announced that OpenStreetMap has no
+    hospitals, no schools and no fire stations in Minnesota - about a query
+    that never mentioned them. A zero for something nobody asked is not a
+    finding, it is a lie with a number on it.
+    """
+    asked = classes if classes is not None else CLASSES
+    asked_names = [c[0] for c in asked]
     got = counts(rows)
     named = sum(1 for r in rows if r.get("name"))
     phoned = sum(1 for r in rows if r.get("phone"))
     log(f"    {len(rows)} feature(s); {named} named, {phoned} with a phone")
-    for layer, _sel, label in CLASSES:
+    for layer, _sel, label in asked:
         n = got.get(layer, 0)
         mark = "   " if n else " ! "
         log(f"   {mark}{label:32} {n:6}")
-    empty = [lbl for lay, _s, lbl in CLASSES if not got.get(lay)]
+
+    empty = [lbl for lay, _s, lbl in asked if not got.get(lay)]
     if empty:
         log(f"    [!] {len(empty)} class(es) returned nothing: "
             f"{', '.join(empty)}")
         log(f"        That is OpenStreetMap having no such feature tagged in "
             f"this state, not a failed fetch - a failed fetch raises.")
+
+    skipped = [lbl for lay, _s, lbl in CLASSES if lay not in asked_names]
+    if skipped:
+        log(f"    {len(skipped)} class(es) were NOT asked for and say nothing "
+            f"either way: {', '.join(skipped)}")
 
 
 def build_state(state, out_dir, log=print, mirrors=None, deadline_s=None,
@@ -400,7 +415,7 @@ def build_state(state, out_dir, log=print, mirrors=None, deadline_s=None,
         keep = {c[0] for c in chosen}
         rows = [r for r in rows if r["layer"] in keep]
 
-    report(rows, log=log)
+    report(rows, log=log, classes=chosen)
     built = today or dt.date.today().isoformat()
     kml, icons = build_kml(state, rows, built, classes=chosen)
     stamp = bcp.edition(built, kml, icons)

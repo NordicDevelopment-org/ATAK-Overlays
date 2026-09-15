@@ -4836,3 +4836,43 @@ def test_fetch_osm_validates_before_touching_the_network(monkeypatch):
         sle.fetch_osm("MN", query="[out:json];nwr[x]({{bbox}});",
                        log=lambda *a: None)
     assert not called, "no tile fetch may start on an invalid query"
+
+
+def test_emergency_report_never_claims_a_zero_for_a_class_nobody_asked():
+    """A `--only police` run announced OSM has no hospitals in Minnesota.
+
+    It does. They were never queried. A zero for something nobody asked for
+    is not a finding, it is a lie with a number on it.
+    """
+    police = [c for c in emg.CLASSES if c[0] == "police"]
+    rows = [emg.parse_element({"amenity": "police", "name": "PD"}, -93.0, 45.0,
+                              "2026-09-15", {"type": "node", "id": 1})]
+    said = []
+    emg.report(rows, log=said.append, classes=police)
+    joined = " ".join(said)
+    assert "Law enforcement" in joined
+    assert "Hospitals" in joined, "the skipped classes must still be named"
+    # ...but never as a zero, and never as an OSM coverage statement.
+    assert "returned nothing" not in joined
+    assert "NOT asked for" in joined
+    assert "no such feature tagged" not in joined
+
+
+def test_emergency_report_still_flags_a_real_zero_in_an_asked_class():
+    """A class that WAS asked and came back empty is a genuine finding."""
+    two = [c for c in emg.CLASSES if c[0] in ("police", "fire_stations")]
+    rows = [emg.parse_element({"amenity": "police", "name": "PD"}, -93.0, 45.0,
+                              "2026-09-15", {"type": "node", "id": 1})]
+    said = []
+    emg.report(rows, log=said.append, classes=two)
+    joined = " ".join(said)
+    assert "returned nothing: Fire stations" in joined
+    assert "not a failed fetch" in joined
+
+
+def test_emergency_report_defaults_to_the_whole_table():
+    said = []
+    emg.report([], log=said.append)
+    joined = " ".join(said)
+    assert "returned nothing" in joined
+    assert "NOT asked for" not in joined
