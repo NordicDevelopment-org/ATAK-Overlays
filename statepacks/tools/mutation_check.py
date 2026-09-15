@@ -130,19 +130,22 @@ MUTATIONS = {
          "                            dump=a.gaps_dump)", "                            dump=None)"),
     ],
     REP: [
-        ("ship a frequency in the tone column as if it were a tone",
-         '    if re.match(r"^\\d{2,3}\\.\\d$", t):\n'
-         '        return "unrecognised", "not a CTCSS tone - looks like a frequency"',
-         '    if False:\n        return "unrecognised", ""'),
-        ("let a 4x join fan-out through as 2080 real repeaters",
-         "        if key in seen:\n            continue", "        if False:\n            continue"),
-        ("compute a missing input frequency from the usual band offset",
-         '         "" if in_mhz else "not in the source; not computed from an offset"),',
-         '         ""),'),
-        ("call a town centroid a tower location",
-         '    src_note = ("approximate - this is the centre of the town, not the tower"\n'
-         '                if "centroid" in src.lower() else "")',
-         '    src_note = ""'),
+        ("let a 4x join fan-out through as real repeaters",
+         "        k = _key(f)\n        if k in exact:", "        k = id(f)\n        if k in exact:"),
+        ("stop collapsing whitespace-only duplicates",
+         "        k = _key(f, squash=True)", "        k = _key(f)"),
+        ("rewrite the kept record with the squashed value",
+         "    if isinstance(value, str):\n"
+         '        return re.sub(r"\\s+", " ", value).strip()',
+         "    if isinstance(value, str):\n        return value"),
+        ("call one coordinate in two towns a normal two-entry site",
+         "        (two_towns if len(cities) > 1 else same_town).append(",
+         "        (same_town if True else two_towns).append("),
+        ("drop the contested entries instead of reporting them",
+         "    kept, n_marked = mark_contested(kept)",
+         "    kept = [f for f in kept if True]; n_marked = 0"),
+        ("keep the disputed position out of the popup",
+         '        ("Position disputed",', '        ("_unused",'),
     ],
     GLY: [
         ("skip size normalization, so glyphs clip and sit unevenly",
@@ -192,20 +195,6 @@ MUTATIONS = {
          '        status = "NORMAL"'),
     ],
     RPT: [
-        ("stop collapsing whitespace-only duplicates",
-         "        k = _key(f, squash=True)", "        k = _key(f)"),
-        ("rewrite the kept record with the squashed value",
-         "    if isinstance(value, str):\n"
-         '        return re.sub(r"\\s+", " ", value).strip()',
-         "    if isinstance(value, str):\n        return value"),
-        ("call one coordinate in two towns a normal two-entry site",
-         "        (two_towns if len(cities) > 1 else same_town).append(",
-         "        (same_town if True else two_towns).append("),
-        ("drop the contested entries instead of reporting them",
-         "    kept, n_marked = mark_contested(kept)",
-         "    kept = [f for f in kept if True]; n_marked = 0"),
-        ("keep the disputed position out of the popup",
-         '        ("Position disputed",', '        ("_unused",'),
         ("anchor the query on a parent key the data does not carry",
          '    "communication:amateur_radio:repeater:frequency_out",\n'
          '    "communication:amateur_radio:repeater:frequency_in",',
@@ -266,6 +255,37 @@ MUTATIONS = {
          "                real = path"),
     ],
     OSP: [
+        ("quote key and value as one string, the bug that returns nothing",
+         '        return f\'["{key}"="{value}"]\'',
+         '        return f\'["{key}={value}"]\''),
+        ("let (?i) reach the Overpass server as literal text",
+         '        return f\'["{key}"~"{value[4:]}",i]\'',
+         '        return f\'["{key}"~"{value}"]\''),
+        ("accept an empty selector, which matches the whole bounding box",
+         '    if not selector:\n        raise ValueError("empty selector matches everything")',
+         "    if False:\n        pass"),
+        ("treat a multi-clause selector as satisfied by its first clause",
+         "    for key, op, value in selector:", "    for key, op, value in selector[:1]:"),
+        ("file an unmatched element under the first class instead of dropping it",
+         "    return None\n\n\ndef check_spec(spec):",
+         "    return spec[\"classes\"][0][0]\n\n\ndef check_spec(spec):"),
+        ("drop empty folders, so nothing found looks like nothing asked",
+         "        folders.append(", "        if not group:\n            continue\n        folders.append("),
+        ("skip the offline class check before a 6-17 minute live run",
+         "    problems = check_spec(spec)\n    if problems:", "    problems = []\n    if problems:"),
+        ("stop validating the query in the offline check",
+         "        seed.validate_query(build_query(spec))", "        pass"),
+        ("write the bounding box in Overpass Turbo syntax, which every mirror 400s",
+         '    box = "({s:.4f},{w:.4f},{n:.4f},{e:.4f})"', '    box = "({{bbox}})"'),
+        ("report a zero for every class, including ones nobody asked for",
+         '    asked = classes if classes is not None else spec["classes"]',
+         '    asked = spec["classes"]'),
+        ("stop naming the classes that were skipped",
+         '    skipped = [lbl for lay, _s, lbl in spec["classes"]', "    skipped = [] or ["),
+        ("set visibility on the folder only, so it imports off and renders on",
+         "        body = \"\".join(placemark(spec, r, style_id, visible=not hidden)\n"
+         "                       for r in group)",
+         "        body = \"\".join(placemark(spec, r, style_id) for r in group)"),
         ("skip the clip, so the pack carries the neighbouring states",
          "    rows = clip_to_state(rows, state, log=log)", "    pass"),
         ("file a point outside every county under the last one tested",
@@ -297,38 +317,8 @@ MUTATIONS = {
          "        kept = {id(pm) for pm in placemarks}", "        kept = placemarks"),
     ],
     EMG: [
-        ("set visibility on the folder only, so it imports off and renders on",
-         "        body = \"\".join(placemark(r, style_id, visible=not off) for r in group)",
-         "        body = \"\".join(placemark(r, style_id) for r in group)"),
         ("import every layer switched on, however dense",
-         '    DEFAULT_OFF = {"schools", "government"}', "    DEFAULT_OFF = set()"),
-        ("report a zero for every class, including ones nobody asked for",
-         "    asked = classes if classes is not None else CLASSES",
-         "    asked = CLASSES"),
-        ("stop naming the classes that were skipped",
-         "    skipped = [lbl for lay, _s, lbl in CLASSES if lay not in asked_names]",
-         "    skipped = []"),
-        ("write the bounding box in Overpass Turbo syntax, which every mirror 400s",
-         '    box = "({s:.4f},{w:.4f},{n:.4f},{e:.4f})"', '    box = "({{bbox}})"'),
-        ("stop validating the query in the offline check",
-         "        seed.validate_query(build_query())", "        pass"),
-        ("quote key and value as one string, the bug that returns nothing",
-         '        return f\'["{key}"="{value}"]\'',
-         '        return f\'["{key}={value}"]\''),
-        ("let (?i) reach the Overpass server as literal text",
-         '        return f\'["{key}"~"{value[4:]}",i]\'',
-         '        return f\'["{key}"~"{value}"]\''),
-        ("accept an empty selector, which matches the whole bounding box",
-         '    if not selector:\n        raise ValueError("empty selector matches everything")',
-         "    if False:\n        pass"),
-        ("treat a multi-clause selector as satisfied by its first clause",
-         "    for key, op, value in selector:", "    for key, op, value in selector[:1]:"),
-        ("file an unmatched element under the first class instead of dropping it",
-         "    return None\n\n\ndef parse_element(", "    return CLASSES[0][0]\n\n\ndef parse_element("),
-        ("drop empty folders, so nothing found looks like nothing asked",
-         "        folders.append(", "        if not group:\n            continue\n        folders.append("),
-        ("skip the offline class check before a 17-minute live run",
-         "    problems = check_classes()\n    if problems:", "    problems = []\n    if problems:"),
+         'DEFAULT_OFF = {"schools", "government"}', "DEFAULT_OFF = set()"),
     ],
     SYM: [
         ("give nuclear the same symbol as everything else",
@@ -348,6 +338,9 @@ MUTATIONS = {
          '    "dams":                ("dam_icon",   "Water",              "point"),'),
     ],
     BUILD: [
+        ("drop the __ identity/version boundary from filenames",
+         'f"{state_abbr}_Counties__{edition(stamp, kml)}.kmz"',
+         'f"{state_abbr}_Counties_{edition(stamp, kml)}.kmz"'),
         ("stamp the filename with the date alone, as it was",
          '    return f"{safe(str(built).replace(\'-\', \'_\'))}_{h.hexdigest()[:6]}"',
          '    return safe(str(built).replace("-", "_"))'),
@@ -388,9 +381,6 @@ MUTATIONS = {
         ("ignore the .local.csv overlay",
          '    for name in (filename, f"{stem}.local.csv"):',
          "    for name in (filename,):"),
-        ("drop the __ identity/version boundary from filenames",
-         'f"{state_abbr}_Counties__{safe(stamp)}.kmz"',
-         'f"{state_abbr}_Counties_{safe(stamp)}.kmz"'),
         ("let one county name become the pack's descriptor",
          '    if len(uniq) < 2:\n        return ""',
          '    if len(uniq) < 0:\n        return ""'),
@@ -416,6 +406,7 @@ def check(path, entries):
     print(f"\n{path}")
     original = open(path, encoding="utf-8").read()
     survivors = 0
+    dead = 0
 
     # A finally does not run on SIGTERM. Without this, a killed run leaves the
     # file broken on purpose and says nothing about it.
@@ -430,8 +421,16 @@ def check(path, entries):
     try:
         for desc, old, new in entries:
             if old not in original:
-                print(f"  {desc:52s} !! TARGET NOT FOUND - update this entry")
-                survivors += 1
+                # NOT a survivor. A survivor is a real behaviour no test
+                # covers; this is a guard that has stopped pointing at any
+                # code at all, usually because the line moved in a refactor.
+                # Counting the two together buries the second in the first:
+                # 20 of 109 entries were dead before this was separated out,
+                # and the summary said "20 survived" as if the tests had
+                # gaps rather than the harness having rot.
+                print(f"  {desc:52s} !! TARGET NOT FOUND - this entry guards "
+                      f"nothing; repoint it at the code that moved")
+                dead += 1
                 continue
             open(path, "w", encoding="utf-8").write(original.replace(old, new, 1))
             n = failures()
@@ -443,7 +442,7 @@ def check(path, entries):
         open(path, "w", encoding="utf-8").write(original)
         for sig, handler in previous:
             signal.signal(sig, handler)
-    return survivors
+    return survivors, dead
 
 
 def main(argv):
@@ -453,10 +452,26 @@ def main(argv):
     if not targets:
         print(f"nothing matches {want!r}; try 'seed' or 'build'", file=sys.stderr)
         return 2
-    bad = sum(check(p, e) for p, e in targets)
-    print(f"\n{bad} mutation(s) survived" if bad
-          else "\nevery mutation is caught by at least one test")
-    return 1 if bad else 0
+    results = [check(p, e) for p, e in targets]
+    survivors = sum(r[0] for r in results)
+    dead = sum(r[1] for r in results)
+
+    # Reported apart, because they call for opposite work. A SURVIVOR means a
+    # real behaviour that no test covers - go and write the test. A DEAD entry
+    # means the guard has stopped pointing at any code, usually because a
+    # refactor moved the line - go and repoint the guard. Adding them together
+    # says "N survived" and sends someone hunting for test gaps that are not
+    # there.
+    if dead:
+        print(f"\n{dead} entr(y/ies) guard NOTHING - their target text is "
+              f"gone. Repoint them at the code that moved; a dead guard is "
+              f"not a test gap, it is harness rot.")
+    if survivors:
+        print(f"{survivors} mutation(s) survived - a real behaviour with no "
+              f"test. Write the test.")
+    if not survivors and not dead:
+        print("\nevery mutation is caught by at least one test")
+    return 1 if (survivors or dead) else 0
 
 
 if __name__ == "__main__":

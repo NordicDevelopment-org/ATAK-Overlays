@@ -5153,3 +5153,53 @@ def test_county_index_precomputes_a_usable_bounding_box(fake_state):
 
 def test_county_index_skips_a_county_with_no_geometry():
     assert osp.county_index([("27999", [])]) == []
+
+
+# --------------------------------------------------------------------------
+# The mutation harness guards this repo's behaviour. Nothing guarded the
+# harness. An entry whose target text has moved or been rewritten silently
+# stops testing anything: mutation_check prints TARGET NOT FOUND and counts it
+# as a SURVIVING mutation, so a dead guard looks like a finding rather than a
+# gap. Measured when this test was written: 20 of 109 entries were dead, 13 of
+# them from one refactor earlier the same day.
+# --------------------------------------------------------------------------
+def _mutation_table():
+    spec = importlib.util.spec_from_file_location(
+        "mutation_check", os.path.join(ROOT, "statepacks", "tools",
+                                       "mutation_check.py"))
+    mod = importlib.util.module_from_spec(spec)
+    try:
+        spec.loader.exec_module(mod)
+    except SystemExit:
+        pass
+    return mod.MUTATIONS
+
+
+def test_every_mutation_entry_targets_text_that_exists():
+    """A moved line turns a guard into a no-op without a word."""
+    dead = []
+    for path, entries in _mutation_table().items():
+        full = os.path.join(ROOT, path)
+        assert os.path.exists(full), f"mutation entry names a missing file: {path}"
+        body = open(full, encoding="utf-8").read()
+        for name, old, _new in entries:
+            if old not in body:
+                dead.append(f"{path}: {name}")
+    assert not dead, ("these mutation entries guard nothing:\n  "
+                      + "\n  ".join(dead))
+
+
+def test_every_mutation_entry_actually_changes_the_file():
+    """old == new is a guard that mutates nothing and always 'passes'."""
+    noop = [f"{path}: {name}"
+            for path, entries in _mutation_table().items()
+            for name, old, new in entries if old == new]
+    assert not noop, "\n  ".join(noop)
+
+
+def test_mutation_entry_names_are_unique_per_file():
+    """Two entries with one name make a report impossible to act on."""
+    for path, entries in _mutation_table().items():
+        names = [n for n, _o, _w in entries]
+        dupes = {n for n in names if names.count(n) > 1}
+        assert not dupes, f"{path}: duplicate entry name(s) {sorted(dupes)}"
