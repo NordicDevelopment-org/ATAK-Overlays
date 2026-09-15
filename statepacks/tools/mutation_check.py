@@ -223,6 +223,12 @@ MUTATIONS = {
          '    return "repeaters"'),
     ],
     INV: [
+        ("require a bare Placemark tag, missing an attributed one",
+         '                       re.findall(r"<Placemark\\b[^>]*>.*?<name>\\s*"',
+         '                       re.findall(r"<Placemark>.*?<name>\\s*"'),
+        ("drop back to plain-text-only names, missing CDATA",
+         '                                  r"(?:<!\\[CDATA\\[)?(.*?)(?:\\]\\]>)?\\s*</name>",',
+         '                                  r"([^<]{1,80})</name>",'),
         ("gate every check on --quick, so a real duplicate reports clean",
          "    problems = find_problems(rows)", "    problems = find_problems(rows) if deep else []"),
         ("pick newest by the minute-truncated string, not the raw float",
@@ -309,7 +315,8 @@ MUTATIONS = {
          '    asked = classes if classes is not None else spec["classes"]',
          '    asked = spec["classes"]'),
         ("stop naming the classes that were skipped",
-         '    skipped = [lbl for lay, _s, lbl in spec["classes"]', "    skipped = [] or ["),
+         '    skipped = [lbl for lay, _s, lbl in spec["classes"]',
+         '    skipped = [] and [lbl for lay, _s, lbl in spec["classes"]'),
         ("set visibility on the folder only, so it imports off and renders on",
          "        body = \"\".join(placemark(spec, r, style_id, visible=not hidden)\n"
          "                       for r in group)",

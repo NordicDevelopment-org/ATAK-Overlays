@@ -5,6 +5,7 @@
 #   ./atak-install.sh ~/atak-packs/*.kmz
 #   ./atak-install.sh ~/atak-packs            # a whole folder
 #   ./atak-install.sh --keep-old ~/atak-packs # keep previous editions too
+#   ./atak-install.sh ~/atak-packs --keep-old # the flag works in either position
 #
 # Installing a pack RETIRES older editions of the same pack, so a rebuild does
 # not leave the previous copy drawing underneath this one.
@@ -20,8 +21,18 @@ set -euo pipefail
 HERE="$(cd -- "$(dirname -- "$0")" && pwd -P)"
 . "$HERE/atak-env.sh"
 
+# --keep-old anywhere in the argument list, not just as $1. `if [ "$1" =
+# --keep-old ]` missed the completely natural `atak-install.sh <packs>
+# --keep-old`, and the one flag that exists to PREVENT deletion silently did
+# nothing when typed that way: it fell through to the file-collection loop
+# below, printed "skipping (not found): --keep-old", and the retire step ran
+# anyway. Verified by running the real script both ways.
 keep_old=0
-if [ "${1:-}" = "--keep-old" ]; then keep_old=1; shift; fi
+rest=()
+for arg in "$@"; do
+  if [ "$arg" = "--keep-old" ]; then keep_old=1; else rest+=("$arg"); fi
+done
+set -- "${rest[@]+"${rest[@]}"}"
 [ $# -ge 1 ] || die "usage: $0 [--keep-old] <file.kmz|folder> [more...]"
 [ -d "$ATAK_DIR" ] || die "ATAK overlays folder not found: $ATAK_DIR
 Open ATAK once so it creates it, or set ATAK_DIR to your path."
@@ -39,6 +50,68 @@ for arg in "$@"; do
   fi
 done
 [ ${#files[@]} -gt 0 ] || die "nothing to install"
+
+# Two editions of the SAME pack in one invocation must not both reach the
+# copy loop below. Each iteration of that loop retires every OTHER edition of
+# its own family already in ATAK_DIR - so with two same-family files in this
+# one batch, whichever is processed SECOND deletes the one processed FIRST,
+# regardless of which is actually newer. Bash glob order is alphabetical, and
+# an edition's trailing content-hash (added so a same-day rebuild gets a
+# distinct filename) has no relationship to build time - so the file that
+# survives was effectively a coin flip.
+#
+# Reproduced for real: two same-day editions in one folder, freshest built 5
+# minutes ago, the other left over from the day before. Installing both in
+# one call kept the DAY-OLD file and deleted the one just rebuilt.
+#
+# Fixed by settling each family to its single newest-by-mtime file BEFORE the
+# copy loop runs, so at most one candidate per family ever reaches it. Source
+# mtime is the right signal here - these are freshly built local files, not
+# something copied or extracted, so "when this file was written" is exactly
+# "how recently it was built". Older packs left in the same folder from a
+# PRIOR run (make-state-pack.sh's staging directory is never cleared) are
+# named and skipped, not silently dropped.
+declare -A newest_path newest_time
+skipped_older=()
+for f in "${files[@]}"; do
+  base="$(basename "$f")"
+  case "$base" in
+    *__*) fam="${base%%__*}" ;;
+    *)    fam="" ;;                       # no version boundary; nothing to dedup
+  esac
+  if [ -z "$fam" ]; then
+    continue
+  fi
+  mt=$(stat -c '%Y' -- "$f" 2>/dev/null || stat -f '%m' -- "$f" 2>/dev/null || echo 0)
+  if [ -z "${newest_time[$fam]:-}" ] || [ "$mt" -gt "${newest_time[$fam]}" ]; then
+    if [ -n "${newest_path[$fam]:-}" ]; then
+      skipped_older+=("${newest_path[$fam]}")
+    fi
+    newest_time[$fam]=$mt
+    newest_path[$fam]=$f
+  else
+    skipped_older+=("$f")
+  fi
+done
+if [ ${#skipped_older[@]} -gt 0 ]; then
+  say "${#skipped_older[@]} older edition(s) in this same batch will not be" \
+      "installed at all (a newer edition of the same pack is also in this" \
+      "batch):"
+  for s in "${skipped_older[@]}"; do
+    say "  $(basename "$s")"
+  done
+fi
+# Files with no "__" pass through unchanged - one per file, nothing to settle.
+settled=()
+for f in "${files[@]}"; do
+  base="$(basename "$f")"
+  case "$base" in
+    *__*) fam="${base%%__*}"
+          [ "$f" = "${newest_path[$fam]}" ] && settled+=("$f") ;;
+    *)    settled+=("$f") ;;
+  esac
+done
+files=("${settled[@]}")
 
 say "Installing ${#files[@]} file(s) into $ATAK_DIR"
 copied=0
@@ -81,7 +154,9 @@ for f in "${files[@]}"; do
             rm -f -- "$old" && printf '  %-46s %s\n' \
               "$(basename "$old")" "(superseded, removed)"
             retired=$((retired+1))
-          done < <(find "$ATAK_DIR/" -maxdepth 1 -type f -name "${family}__*.kmz" -print0)
+          done < <(find "$ATAK_DIR/" -maxdepth 1 -type f \
+                        \( -name "${family}__*.kmz" -o -name "${family}__*.kml" \) \
+                        -print0)
 
           # A pack built before the "__" convention has only one underscore, so
           # it matches neither the retire glob above nor its own - nothing ever
@@ -100,7 +175,9 @@ for f in "${files[@]}"; do
             warn "      version, so nothing will ever retire it and ATAK will draw"
             warn "      this pack twice. Remove it when you have checked it:"
             warn "        $HERE/atak-remove.sh '$ab'"
-          done < <(find "$ATAK_DIR/" -maxdepth 1 -type f -name "${family}_*.kmz" -print0)
+          done < <(find "$ATAK_DIR/" -maxdepth 1 -type f \
+                        \( -name "${family}_*.kmz" -o -name "${family}_*.kml" \) \
+                        -print0)
         fi
         ;;
     esac

@@ -5419,11 +5419,22 @@ def test_fetch_state_pages_past_an_exact_multiple_of_the_page_size(monkeypatch):
 
 
 def test_fetch_state_stops_immediately_on_a_short_page(monkeypatch):
+    """A short page is necessarily the last one - the ONLY exit this loop
+    has, now that the dead exceededTransferLimit check is gone. The mock is
+    deliberately BOUNDED (raises past a small call count) rather than
+    returning the same short page forever: an unbounded mock would make a
+    broken "never stop" implementation hang instead of failing, which is
+    indistinguishable from success to anything watching for a clean pytest
+    exit rather than actually waiting on it."""
     import json as _json
     calls = []
 
     def fake_get(url, log=print):
         calls.append(url)
+        if len(calls) > 3:
+            raise AssertionError(
+                "fetch_state kept paging past a short page - it must stop "
+                "after exactly one request here")
         return _json.dumps({"features": [{"properties": {"id": 1}}]}).encode()
 
     monkeypatch.setattr(pwr.bcp, "http_get", fake_get)
@@ -5625,3 +5636,244 @@ def test_nwr_footer_never_conflates_status_read_with_pack_built_for_a_snapshot()
     # "Pack built" legitimately says today; "Data as of" must not also say
     # today when the underlying snapshot is from 2019.
     assert f"Data as of: {today}" not in kml
+
+
+# --------------------------------------------------------------------------
+# atak-install.sh - a real bash script, tested by actually running it, the
+# same way this suite already subprocess-tests other CLIs. Three findings
+# from the audit, all confirmed by running the unmodified script before any
+# fix: the fresh rebuild in a same-day batch got deleted as "superseded" by
+# a stale leftover, --keep-old typed after the files did nothing, and the
+# retire glob only matched .kmz even though this same script installs .kml.
+# --------------------------------------------------------------------------
+INSTALL_SH = os.path.join(SP, "termux", "atak-install.sh")
+
+
+def _install_env(tmp_path):
+    """A throwaway ATAK_DIR plus an atak-env.sh that points at it.
+
+    Not a mock of the script - the REAL atak-install.sh runs unmodified.
+    Only atak-env.sh (which normally hardcodes the real device path and the
+    real `am` binary) is swapped for one pointed at a tmp_path.
+    """
+    dest = tmp_path / "dest"
+    dest.mkdir()
+    home = tmp_path / "home"
+    home.mkdir()
+    (home / "atak-env.sh").write_text(
+        f'ATAK_DIR="{dest}"\n'
+        'ATAK_PKG="com.atakmap.app.civ"\n'
+        'say() { printf "%s\\n" "$*"; }\n'
+        'warn() { printf "%s\\n" "$*" >&2; }\n'
+        'die() { warn "$*"; exit 1; }\n', encoding="utf-8")
+    script = home / "atak-install.sh"
+    script.write_text(open(INSTALL_SH, encoding="utf-8").read(), encoding="utf-8")
+    script.chmod(0o755)
+    return dest, script
+
+
+def _run_install(script, *args):
+    return subprocess.run(["bash", str(script), *[str(a) for a in args]],
+                          capture_output=True, text=True)
+
+
+def test_install_sh_parses_as_valid_bash():
+    r = subprocess.run(["bash", "-n", INSTALL_SH], capture_output=True, text=True)
+    assert r.returncode == 0, r.stderr
+
+
+def test_install_sh_keeps_the_newest_when_two_same_day_editions_are_installed_together(tmp_path):
+    """The actual data-loss reproduction. Bash glob order is alphabetical and
+    an edition's trailing content-hash has no relationship to build time, so
+    without this fix the file processed SECOND in the batch always wins,
+    regardless of which is objectively newer."""
+    dest, script = _install_env(tmp_path)
+    stage = tmp_path / "stage"
+    stage.mkdir()
+    old = stage / "MN_Counties__2026_09_14_zz9999.kmz"
+    new = stage / "MN_Counties__2026_09_14_aa1111.kmz"      # sorts BEFORE old
+    old.write_text("old-content", encoding="utf-8")
+    new.write_text("new-content", encoding="utf-8")
+    yesterday = time.time() - 86400
+    five_min_ago = time.time() - 300
+    os.utime(old, (yesterday, yesterday))
+    os.utime(new, (five_min_ago, five_min_ago))
+
+    r = _run_install(script, new, old)
+    survivors = list(dest.glob("*.kmz"))
+    assert len(survivors) == 1, r.stdout + r.stderr
+    assert survivors[0].read_text(encoding="utf-8") == "new-content", (
+        "the objectively newer file must survive, not whichever the batch "
+        "happened to process last")
+    assert "MN_Counties__2026_09_14_zz9999.kmz" in r.stdout
+
+
+def test_install_sh_keep_old_flag_works_after_the_files_too(tmp_path):
+    """`atak-install.sh <packs> --keep-old` is exactly as natural to type as
+    the flag-first form, and the safety flag must not silently do nothing."""
+    dest, script = _install_env(tmp_path)
+    (dest / "MN_Foo__2026_09_01.kmz").write_text("old", encoding="utf-8")
+    stage = tmp_path / "stage"
+    stage.mkdir()
+    new = stage / "MN_Foo__2026_09_15.kmz"
+    new.write_text("new", encoding="utf-8")
+
+    r = _run_install(script, new, "--keep-old")
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert (dest / "MN_Foo__2026_09_01.kmz").exists(), (
+        "--keep-old after the files must be honoured, not read as a "
+        "missing filename")
+    assert (dest / "MN_Foo__2026_09_15.kmz").exists()
+
+
+def test_install_sh_retire_glob_matches_a_kml_sibling_not_only_kmz(tmp_path):
+    """The file-collection step already accepts .kmz and .kml; the retire
+    step only checked .kmz, so a .kml edition of the same pack was never
+    retired by a .kmz rebuild, or the reverse."""
+    dest, script = _install_env(tmp_path)
+    (dest / "MN_Bar__2026_09_01.kml").write_text("old", encoding="utf-8")
+    stage = tmp_path / "stage"
+    stage.mkdir()
+    new = stage / "MN_Bar__2026_09_15.kmz"
+    new.write_text("new", encoding="utf-8")
+
+    r = _run_install(script, new)
+    assert not (dest / "MN_Bar__2026_09_01.kml").exists(), r.stdout + r.stderr
+    assert (dest / "MN_Bar__2026_09_15.kmz").exists()
+
+
+def test_install_sh_pre_dunder_ancestor_warning_also_catches_kml(tmp_path):
+    dest, script = _install_env(tmp_path)
+    (dest / "MN_Baz_2026_09_01.kml").write_text("ancestor", encoding="utf-8")
+    stage = tmp_path / "stage"
+    stage.mkdir()
+    new = stage / "MN_Baz__2026_09_15.kmz"
+    new.write_text("new", encoding="utf-8")
+
+    r = _run_install(script, new)
+    assert "MN_Baz_2026_09_01.kml" in (r.stdout + r.stderr)
+    assert "pre-'__' edition" in (r.stdout + r.stderr)
+    # A warning, not a deletion - this script does not get to guess.
+    assert (dest / "MN_Baz_2026_09_01.kml").exists()
+
+
+def test_install_sh_unrelated_families_are_never_touched_by_the_dedup(tmp_path):
+    """The same-batch dedup must key on family, not treat the whole batch as
+    one group."""
+    dest, script = _install_env(tmp_path)
+    stage = tmp_path / "stage"
+    stage.mkdir()
+    a = stage / "MN_Counties__2026_09_15_aaaaaa.kmz"
+    b = stage / "MN_PowerPlants__2026_09_15_bbbbbb.kmz"
+    a.write_text("counties", encoding="utf-8")
+    b.write_text("plants", encoding="utf-8")
+
+    r = _run_install(script, a, b)
+    assert (dest / a.name).exists() and (dest / b.name).exists(), r.stdout + r.stderr
+    assert "will not be installed at all" not in r.stdout
+
+
+# --------------------------------------------------------------------------
+# atak_inventory placemark-name extraction. A foreign KML - an Import
+# Manager copy, a Google Earth export, anything not built by this repo -
+# routinely writes <Placemark id="..."> and <name><![CDATA[...]]></name>,
+# neither of which the old regex matched. That file reported a healthy
+# placemark count and an EMPTY name set, and contained_in() silently skips
+# any row with no names - so the containment check went blind on exactly
+# the files nobody here has inspected, with no error and no message.
+# --------------------------------------------------------------------------
+def test_inspect_kmz_reads_a_name_from_an_attributed_placemark_tag(tmp_path):
+    """<Placemark id="pm1"> - the bare literal "<Placemark>" never matched
+    this, while the SEPARATE placemark-count check (text.count, no closing
+    bracket) did. That mismatch is exactly what went blind."""
+    p = tmp_path / "foreign.kmz"
+    doc = ('<?xml version="1.0"?><kml><Document>'
+          '<Placemark id="pm1"><name>Aitkin County</name>'
+          '<Point><coordinates>0,0</coordinates></Point></Placemark>'
+          '</Document></kml>')
+    with zipfile.ZipFile(p, "w") as z:
+        z.writestr("doc.kml", doc)
+    row = ainv.inspect_kmz(str(p))
+    assert row["placemarks"] == 1
+    assert row["pm_names"] == {"aitkin"}, (
+        "an attributed Placemark tag must still yield its name")
+
+
+def test_inspect_kmz_reads_a_cdata_wrapped_name(tmp_path):
+    """<name><![CDATA[...]]></name> is Google Earth's normal way to write a
+    name. [^<]{1,80} cannot start matching at a "<", so this used to
+    contribute nothing."""
+    p = tmp_path / "earth_export.kmz"
+    doc = ('<?xml version="1.0"?><kml><Document>'
+          '<Placemark><name><![CDATA[Aitkin County]]></name>'
+          '<Point><coordinates>0,0</coordinates></Point></Placemark>'
+          '</Document></kml>')
+    with zipfile.ZipFile(p, "w") as z:
+        z.writestr("doc.kml", doc)
+    row = ainv.inspect_kmz(str(p))
+    assert row["pm_names"] == {"aitkin"}
+
+
+def test_inspect_kmz_reads_a_name_longer_than_the_old_80_char_cap(tmp_path):
+    """The old pattern was all-or-nothing: a name at 81+ characters failed
+    the WHOLE match, not a truncated one - so it silently contributed no
+    name at all."""
+    long_name = "A" * 150
+    p = tmp_path / "longname.kmz"
+    doc = ('<?xml version="1.0"?><kml><Document>'
+          f'<Placemark><name>{long_name}</name>'
+          '<Point><coordinates>0,0</coordinates></Point></Placemark>'
+          '</Document></kml>')
+    with zipfile.ZipFile(p, "w") as z:
+        z.writestr("doc.kml", doc)
+    row = ainv.inspect_kmz(str(p))
+    assert row["pm_names"] == {ainv.normal_name(long_name)}
+
+
+def test_inspect_kmz_pairs_names_correctly_across_multiple_attributed_placemarks(tmp_path):
+    """The fix must not leak a name from one placemark onto its neighbour."""
+    p = tmp_path / "multi.kmz"
+    doc = ('<?xml version="1.0"?><kml><Document>'
+          '<Placemark id="1"><name>First County</name></Placemark>'
+          '<Placemark id="2"><name><![CDATA[Second County]]></name></Placemark>'
+          '</Document></kml>')
+    with zipfile.ZipFile(p, "w") as z:
+        z.writestr("doc.kml", doc)
+    row = ainv.inspect_kmz(str(p))
+    assert row["pm_names"] == {"first", "second"}
+
+
+def test_containment_now_sees_a_foreign_attributed_placemark_pack(tmp_path):
+    """End to end: the actual consequence of the blind spot. A foreign-style
+    rev2 file must still be caught as CONTAINED in the real county pack."""
+    d = tmp_path / "overlays"
+    os.makedirs(d, exist_ok=True)
+    with zipfile.ZipFile(d / "foreign_rev2.kmz", "w") as z:
+        z.writestr("doc.kml",
+                   '<?xml version="1.0"?><kml><Document>'
+                   '<Placemark id="pm1"><name>Aitkin County</name>'
+                   '<Point><coordinates>0,0</coordinates></Point></Placemark>'
+                   '</Document></kml>')
+    _county_kmz(str(d / "MN_Counties__Current_2026_09_14.kmz"),
+               ["Aitkin", "Anoka"], True)
+    problems = ainv.find_problems(ainv.scan(str(d)))
+    assert any(p[0] == "CONTAINED" and p[1] == "foreign_rev2.kmz"
+              for p in problems), problems
+
+
+def test_quick_flag_through_main_still_reports_a_real_duplicate(tmp_path, capsys):
+    """The gap the mutation harness actually found: every existing --quick
+    test either called find_problems() directly (bypassing main()'s own
+    `if deep` gate entirely) or ran main() --quick on a fixture with nothing
+    to find. This goes through main() itself, on a fixture with a genuine
+    duplicate, so main()'s own gating logic is what gets exercised."""
+    d = tmp_path / "overlays"
+    os.makedirs(d, exist_ok=True)
+    open(d / "MN_Counties__2026_09_13.kmz", "wb").write(b"x" * 50)
+    open(d / "MN_Counties__2026_09_14.kmz", "wb").write(b"y" * 90)
+    rc = ainv.main(["--dir", str(d), "--quick"])
+    out = capsys.readouterr().out
+    assert rc == 0
+    assert "DUPLICATE" in out, (
+        "main() --quick must still surface a real duplicate through its own "
+        "code path, not just when find_problems() is called directly")

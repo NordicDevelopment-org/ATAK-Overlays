@@ -152,8 +152,29 @@ def inspect_kmz(path, deep=True):
     # being inside another. 87 one-county files and a single 87-county pack
     # are not duplicates by filename and never will be - they are duplicates
     # by content, and content is the only place to see it.
+    #
+    # Three things a file THIS PROJECT never writes, but a foreign KML - an
+    # Import Manager copy, a Google Earth export, anything not built here -
+    # routinely does, and each used to make this go silently blind on that
+    # one file rather than fail loudly:
+    #   <Placemark id="pm1">   an attribute on the tag. The bare literal
+    #                          "<Placemark>" above never matched it, while
+    #                          the SEPARATE count on the line above (which has
+    #                          no closing bracket) did - so the file reported
+    #                          a healthy placemark count and an EMPTY name
+    #                          set, and contained_in() filters out any row
+    #                          with no names with no message at all.
+    #   <![CDATA[...]]>        Google Earth's normal way to write a name.
+    #                          [^<]{1,80} cannot start matching at a "<".
+    #   80-character cap       a name at 81+ characters failed the WHOLE
+    #                          match (there is no truncation - the pattern is
+    #                          all-or-nothing), so that placemark contributed
+    #                          no name either. Raised, not removed: an actual
+    #                          proximity-fenced input is still needed against
+    #                          a maliciously huge single line.
     out["pm_names"] = {normal_name(n) for n in
-                       re.findall(r"<Placemark>.*?<name>([^<]{1,80})</name>",
+                       re.findall(r"<Placemark\b[^>]*>.*?<name>\s*"
+                                  r"(?:<!\[CDATA\[)?(.*?)(?:\]\]>)?\s*</name>",
                                   text, re.S)}
     out["pm_names"].discard("")
     # Folder names are the eye-toggle tree in Overlay Manager, so they are what
