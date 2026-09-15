@@ -30,7 +30,7 @@ overlaybuilder build --aoi county:27025           # Chisago County, MN - everyth
 overlaybuilder build --aoi state:MN --sectors energy water --jobs 6
 overlaybuilder build --aoi region:upper-midwest --layers power_plants substations transmission_lines
 overlaybuilder build --aoi us --layers power_plants dams
-overlaybuilder build --aoi country:CA --sectors energy      # world tier (OpenStreetMap)
+overlaybuilder build --aoi country:CA --sectors energy      # world tier (OpenStreetMap); CA = Canada, not California
 overlaybuilder build --aoi bbox:-93.2,45.3,-92.6,45.8
 ```
 

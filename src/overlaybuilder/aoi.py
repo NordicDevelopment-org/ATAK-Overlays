@@ -8,7 +8,8 @@ scope its query (bbox envelope, attribute filter, OSM area, ...).
     state:MN              one US state (all sources, state-wide)
     region:upper-midwest  named preset = list of states (see regions.yaml)
     us                    whole United States
-    country:CA            one country by ISO 3166-1 alpha-2 (OSM tier)
+    country:CA            one country by ISO 3166-1 alpha-2 (OSM tier) -
+                          CA is Canada here, the country code, not California
     bbox:W,S,E,N          arbitrary WGS84 envelope
     world                 no spatial limit (only global-tier sources apply;
                           Overpass drivers refuse this without tiling)
@@ -198,7 +199,9 @@ def parse_aoi(spec: str, cache_dir: str = ".cache", county_name: Optional[str] =
     if kind == "country":
         cc = val.strip().upper()
         if not re.fullmatch(r"[A-Z]{2}", cc):
-            raise ValueError("country AOI needs ISO alpha-2, e.g. country:CA")
+            raise ValueError(
+                "country AOI needs ISO alpha-2, e.g. country:CA for Canada "
+                "(the country code, not the California state abbreviation)")
         if cc == "US":
             return parse_aoi("us")
         return Aoi("country", cc, f"Country {cc}", country=cc, bbox=None)
