@@ -75,7 +75,11 @@ def normal_name(raw):
     ways. Comparing them raw finds nothing, which is how 87 duplicate
     boundaries sat on the map looking fine to every check in this file.
     """
-    n = re.sub(r"<[^>]+>", " ", raw or "").lower()
+    n = re.sub(r"<[^>]+>", " ", raw or "").strip()
+    # A trailing ", MN" is how one builder writes what another leaves off.
+    # Bounded on purpose: a comma, two letters, end of string. Dropping any
+    # trailing two-letter token would eat real names.
+    n = re.sub(r",\s*[A-Za-z]{2}\s*$", "", n).lower()
     n = re.sub(r"[^a-z0-9 ]+", " ", n)
     n = re.sub(r"\b(county|co|parish|borough|city|of|the)\b", " ", n)
     return re.sub(r"\s+", " ", n).strip()
@@ -162,7 +166,18 @@ def scan(directory, deep=True):
     files = [os.path.join(directory, n) for n in entries
              if n.lower().endswith((".kmz", ".kml"))
              and os.path.isfile(os.path.join(directory, n))]
-    return [inspect_kmz(p, deep=deep) for p in files]
+    if not deep:
+        return [inspect_kmz(p, deep=False) for p in files]
+    # Opening and unzipping 100+ files off a phone's shared storage is slow
+    # enough to look like a hang, and a tool that looks hung gets killed
+    # halfway. Progress goes to stderr so `| grep` still works.
+    rows, total = [], len(files)
+    for i, path in enumerate(files, 1):
+        print(f"\r  reading {i}/{total} {os.path.basename(path)[:40]:<40}",
+              end="", file=sys.stderr, flush=True)
+        rows.append(inspect_kmz(path, deep=True))
+    print("\r" + " " * 60 + "\r", end="", file=sys.stderr, flush=True)
+    return rows
 
 
 def find_problems(rows):
@@ -264,9 +279,30 @@ def main(argv=None):
     ap.add_argument("--quick", action="store_true",
                     help="names, sizes and dates only; do not open the files")
     ap.add_argument("--json", metavar="FILE", help="also write the raw findings")
+    ap.add_argument("--names", metavar="SUBSTR", nargs="?", const="",
+                    help="print the placemark names each file carries, folded "
+                         "the way containment compares them; optionally only "
+                         "files whose name contains SUBSTR")
     a = ap.parse_args(argv)
     deep = not a.quick
     rows = scan(a.dir, deep=deep)
+
+    if a.names is not None:
+        # Containment compares folded names. If two packs that clearly cover
+        # the same ground are not being reported, this is the thing to look
+        # at: the fold is what decides, not the filename.
+        for r in rows:
+            if a.names and a.names.lower() not in r["name"].lower():
+                continue
+            names = sorted(r.get("pm_names") or [])
+            print(f"\n{r['name']}  ({len(names)} distinct folded name(s))")
+            if r.get("error"):
+                print(f"    [!] {r['error']}")
+            for n in names[:12]:
+                print(f"    {n!r}")
+            if len(names) > 12:
+                print(f"    ... and {len(names) - 12} more")
+        return 0
     problems = find_problems(rows) if deep else []
     report(a.dir, rows, problems, deep=deep)
     if a.json:
@@ -282,4 +318,13 @@ def main(argv=None):
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    try:
+        sys.exit(main())
+    except BrokenPipeError:
+        # `atak_inventory.py | head` closes the pipe partway through a long
+        # report. That is a reasonable thing to do and must not end in a
+        # traceback.
+        try:
+            sys.stdout.close()
+        finally:
+            os._exit(0)

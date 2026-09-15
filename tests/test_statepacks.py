@@ -4280,3 +4280,29 @@ def test_rebuilding_with_changed_icons_writes_a_new_file(stubbed, tmp_path):
     bcp.build_state("MN", str(tmp_path), log=lambda *a: None, today="2026-09-14")
     again = {p.name for p in tmp_path.glob("MN_Counties__*.kmz")}
     assert again == first, "an unchanged rebuild churned the filename"
+
+
+def test_inventory_containment_folds_a_trailing_state_suffix():
+    """One builder writes "Aitkin County, MN", another writes "Aitkin".
+
+    Without this the two spellings never match and 87 duplicate boundaries
+    stay invisible - the exact failure this check exists to catch.
+    """
+    assert ainv.normal_name("Aitkin County, MN") == ainv.normal_name("Aitkin")
+    assert ainv.normal_name("Cook County, MN") == ainv.normal_name("Cook County")
+    # Bounded: only a comma plus two letters at the very end.
+    assert ainv.normal_name("Washington, DC") == ainv.normal_name("Washington")
+    # A real name ending in two letters is untouched.
+    assert ainv.normal_name("Lake Ki") != ainv.normal_name("Lake")
+    assert "ki" in ainv.normal_name("Lake Ki")
+
+
+def test_inventory_names_flag_shows_the_folded_names(tmp_path, capsys):
+    """The diagnostic for why a containment did or did not fire."""
+    d = tmp_path / "overlays"
+    _county_kmz(str(d / "a.kmz"), ["Aitkin"], True)
+    rc = ainv.main(["--dir", str(d), "--names"])
+    out = capsys.readouterr().out
+    assert rc == 0
+    assert "aitkin" in out
+    assert "distinct folded name" in out

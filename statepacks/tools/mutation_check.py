@@ -193,6 +193,13 @@ MUTATIONS = {
          '    return "repeaters"'),
     ],
     INV: [
+        ("stop folding a trailing state suffix, so two spellings never match",
+         '    n = re.sub(r",\\s*[A-Za-z]{2}\\s*$", "", n).lower()',
+         "    n = n.lower()"),
+        ("read every file with no sign of progress, so it looks hung",
+         '        print(f"\\r  reading {i}/{total} {os.path.basename(path)[:40]:<40}",\n'
+         '              end="", file=sys.stderr, flush=True)',
+         "        pass"),
         ("stop noticing a pack whose placemarks are all inside another",
          "    for inner, outer, n in contained_in(rows):",
          "    for inner, outer, n in []:"),
