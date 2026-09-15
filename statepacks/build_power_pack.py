@@ -249,11 +249,21 @@ def pack_kml(state, feats, meta):
 
     # One style per fuel actually present, so a pack carries only the icons it
     # uses rather than the whole set.
+    #
+    # The icon filename is keyed on the FUEL (style_id(fuel)), not on the
+    # glyph name. Five fuels share the "flame" glyph shape with five
+    # DIFFERENT colours - coal grey, natural gas blue, petroleum orange,
+    # biomass green, geothermal pink - and colour is baked into the
+    # rendered PNG, not applied separately. Keying the filename on the glyph
+    # alone meant every fuel's <Style> pointed at the SAME icons/flame.png,
+    # and only whichever fuel happened to be first in iteration order over
+    # the plant list actually decided what colour that one file was - the
+    # other four rendered with a colour that was not their own, silently.
     styles = ""
     for fuel in sorted(by_fuel):
-        name, _rgb = style_for(fuel)
         styles += (f'<Style id="{style_id(fuel)}"><IconStyle><scale>1.0</scale>'
-                   f"<Icon><href>icons/{name}.png</href></Icon></IconStyle>"
+                   f"<Icon><href>icons/{style_id(fuel)}.png</href></Icon>"
+                   f"</IconStyle>"
                    f"<LabelStyle><scale>0.8</scale></LabelStyle></Style>")
 
     periods = sorted({str((f.get('properties') or {}).get('Period') or '')
@@ -298,7 +308,9 @@ def build(state, out_dir, feats, min_mw=0.0, url=EIA_URL, log=print):
         fuel = str((f.get("properties") or {}).get("PrimSource")
                    or "unknown").strip().lower() or "unknown"
         name, rgb = style_for(fuel)
-        icons.setdefault(f"icons/{name}.png", glyphs.render(name, rgb))
+        # Keyed by fuel, matching the <Style> writer above - see the comment
+        # there. A shape can be reused across fuels; a rendered colour cannot.
+        icons.setdefault(f"icons/{style_id(fuel)}.png", glyphs.render(name, rgb))
     if meta["dropped_no_coords"]:
         log(f"    [!] {meta['dropped_no_coords']} plant(s) had no usable "
             f"coordinates and were left out rather than placed at a guess")

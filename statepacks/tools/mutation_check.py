@@ -160,6 +160,12 @@ MUTATIONS = {
          '        subs = GLYPHS["bolt"]()'),
     ],
     PWR: [
+        ("key the icon filename on the glyph shape instead of the fuel",
+         '        icons.setdefault(f"icons/{style_id(fuel)}.png", glyphs.render(name, rgb))',
+         '        icons.setdefault(f"icons/{name}.png", glyphs.render(name, rgb))'),
+        ("point a fuel's <Style> at the glyph-named icon instead of its own",
+         'f"<Icon><href>icons/{style_id(fuel)}.png</href></Icon>"',
+         'f"<Icon><href>icons/{style_for(fuel)[0]}.png</href></Icon>"'),
         ("read an ArcGIS error body as zero features instead of raising",
          '        if "error" in page:\n            raise RuntimeError('
          'f"EIA service returned an error: {page[\'error\']}")',
@@ -168,9 +174,9 @@ MUTATIONS = {
          "        if len(feats) < EIA_PAGE:\n            break",
          "        if False:\n            break"),
         ("point an icon at a server the field tablet cannot reach",
-         '                   f"<Icon><href>icons/{name}.png</href></Icon></IconStyle>"',
+         '                   f"<Icon><href>icons/{style_id(fuel)}.png</href></Icon>"',
          '                   f"<Icon><href>http://maps.google.com/mapfiles/kml/'
-         'shapes/electronics.png</href></Icon></IconStyle>"'),
+         'shapes/electronics.png</href></Icon>"'),
         ("reference icons without putting them in the zip",
          "    size = bcp.write_kmz(path, kml, icons)", "    size = bcp.write_kmz(path, kml)"),
         ("merge nameplate and summer capacity into one number",

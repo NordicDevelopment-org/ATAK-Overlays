@@ -3749,11 +3749,48 @@ def test_every_icon_a_pack_references_is_actually_inside_it(tmp_path):
 
 
 def test_a_pack_carries_only_the_icons_it_uses(tmp_path):
+    """Icon filenames are keyed on FUEL (style_id), not on the glyph shape -
+    see test_five_fuels_sharing_one_glyph_still_get_five_distinct_icons for
+    why: two fuels sharing "trefoil" would collapse into one file and only
+    one of them would keep its correct colour."""
     path, _n = pwr.build("MN", str(tmp_path), [_plant(PrimSource="nuclear")],
                          log=lambda *a: None)
     with zipfile.ZipFile(path) as z:
         icons = [n for n in z.namelist() if n.startswith("icons/")]
-    assert icons == ["icons/trefoil.png"]
+    assert icons == ["icons/f_nuclear.png"]
+
+
+def test_five_fuels_sharing_one_glyph_still_get_five_distinct_icons(tmp_path):
+    """The actual bug: coal, natural gas, petroleum, biomass and geothermal
+    all use the "flame" glyph shape with five DIFFERENT colours. Keying the
+    icon filename on the glyph name alone collapsed all five into one
+    icons/flame.png file, and only whichever fuel's plant happened to come
+    first in the feature list actually decided what colour it was - the
+    other four rendered with a colour that was not their own, silently."""
+    flame_fuels = [fuel for fuel, (glyph, _rgb) in pwr.FUEL_STYLE.items()
+                  if glyph == "flame"]
+    assert len(flame_fuels) >= 2, "fixture no longer covers a real collision"
+    feats = [_plant(PrimSource=fuel, Plant_Code=str(i))
+            for i, fuel in enumerate(flame_fuels)]
+    path, _n = pwr.build("MN", str(tmp_path), feats, log=lambda *a: None)
+    with zipfile.ZipFile(path) as z:
+        icons = {n: z.read(n) for n in z.namelist() if n.startswith("icons/")}
+    assert len(icons) == len(flame_fuels), (
+        f"expected one icon per fuel ({len(flame_fuels)}), got {len(icons)} "
+        f"- fuels sharing a glyph collapsed into fewer files")
+    # And each one is rendered in ITS OWN fuel's colour, not whichever fuel
+    # happened to be processed first.
+    for fuel in flame_fuels:
+        glyph, rgb = pwr.style_for(fuel)
+        expected = pwr.glyphs.render(glyph, rgb)
+        key = f"icons/{pwr.style_id(fuel)}.png"
+        assert key in icons, f"missing icon for {fuel}"
+        assert icons[key] == expected, f"{fuel} was rendered with the wrong colour"
+    # No two fuels' bytes may be identical by accident either (that would
+    # mean two DIFFERENT rgb values rendered the same, which should not
+    # happen for the distinct colours FUEL_STYLE actually assigns them).
+    distinct_bytes = {bytes(v) for v in icons.values()}
+    assert len(distinct_bytes) == len(flame_fuels)
 
 
 def test_write_kmz_still_works_with_no_icons(tmp_path):
