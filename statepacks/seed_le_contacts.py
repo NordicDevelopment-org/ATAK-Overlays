@@ -49,6 +49,7 @@ import os
 import re
 import ssl
 import sys
+import tempfile
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -164,6 +165,39 @@ def http_json(url, params=None, tries=3, timeout=90):
     raise RuntimeError(f"GET failed: {url}\n  {last}")
 
 
+def probe_osm(log=print):
+    """A liveness check shaped for Overpass, not ArcGIS.
+
+    probe_sources() below asks every SOURCES entry the ArcGIS `?f=json` +
+    `.layers` question. Overpass has never answered that - its own SOURCES
+    entry already says so ("layer_re": None, "not an ArcGIS service") - so
+    every probe reported OpenStreetMap UNREACHABLE regardless of whether the
+    real service was up: it was being asked the wrong protocol's question,
+    not failing to answer the right one. `f=json` against
+    /api/interpreter is not valid Overpass QL, so the request itself is
+    rejected before there is anything to be "reachable" about.
+
+    This sends `out count;`, the smallest real question an Overpass mirror
+    can answer, using the same POST shape (urlencoded `data=`, the project's
+    own UA, SSL_CTX) the real tile fetch already uses - not a new mechanism,
+    the same one, just without its tiling and cooldown machinery.
+    """
+    query = "[out:json][timeout:10];out count;"
+    data = urlencode({"data": query}).encode()
+    for url in OVERPASS_MIRRORS:
+        try:
+            req = Request(url, data=data, headers=UA)
+            with urlopen(req, timeout=15, context=SSL_CTX) as r:
+                doc = json.loads(r.read().decode("utf-8", "replace"))
+            if "elements" in doc:
+                log(f"  OK    {url}")
+                return True
+            log(f"  DEAD  {url}\n        answered, but with no element count")
+        except Exception as e:                      # noqa: BLE001
+            log(f"  DEAD  {url}\n        {e}")
+    return False
+
+
 def probe_sources(log=print):
     """Report every candidate source: reachable? which layer? which fields?
 
@@ -175,6 +209,13 @@ def probe_sources(log=print):
         log(f"\n{src['name']}")
         log(f"  {src['url']}")
         log(f"  ({src['note']})")
+        if src["layer_re"] is None:
+            # Not an ArcGIS service - it has no ?f=json&layers concept to ask
+            # about, so asking it that question anyway is what made this
+            # source always report UNREACHABLE.
+            if probe_osm(log=log):
+                any_ok = True
+            continue
         try:
             info = http_json(src["url"], {"f": "json"}, tries=1, timeout=30)
         except Exception as e:                      # noqa: BLE001
@@ -361,13 +402,47 @@ def read_existing(path):
 
 
 def write_csv(path, rows, comments):
-    os.makedirs(os.path.dirname(path), exist_ok=True)
-    with open(path, "w", newline="", encoding="utf-8") as fh:
-        fh.writelines(comments)
-        w = csv.DictWriter(fh, fieldnames=FIELDS)
-        w.writeheader()
-        for g in sorted(rows):
-            w.writerow({k: rows[g].get(k, "") for k in FIELDS})
+    """Replace `path` with the new content, without ever leaving it half-written.
+
+    `path` is normally CSV_PATH - data/le_contacts.local.csv - the file a
+    person fills in phone numbers by hand, one county website at a time, and
+    the seeder is documented to never overwrite that work. `open(path, "w")`
+    truncates the file the instant it opens, before a single byte of the new
+    content is written. A phone that dies, an app killed in the background,
+    or a plain Ctrl-C between that open() and the last writerow() leaves
+    every row this file has ever accumulated - fetched AND hand-entered -
+    as an empty or partial file. Losing minutes of a live OSM fetch is a
+    nuisance; losing hours of hand-typed phone numbers, gone with no
+    warning, is the failure this function exists to prevent.
+
+    Written to a temp file in the SAME directory, then moved onto `path`
+    with os.replace() - atomic on the same filesystem, so `path` is either
+    the complete old file or the complete new one, never a partial third
+    thing. The same pattern atak-install.sh already uses to write a pack
+    into ATAK's overlay folder without a truncated file surviving a failed
+    copy.
+    """
+    directory = os.path.dirname(path) or "."
+    os.makedirs(directory, exist_ok=True)
+    fd, tmp = tempfile.mkstemp(dir=directory, prefix=".le_contacts.", suffix=".part")
+    try:
+        with os.fdopen(fd, "w", newline="", encoding="utf-8") as fh:
+            fh.writelines(comments)
+            w = csv.DictWriter(fh, fieldnames=FIELDS)
+            w.writeheader()
+            for g in sorted(rows):
+                w.writerow({k: rows[g].get(k, "") for k in FIELDS})
+        os.replace(tmp, path)
+    except BaseException:
+        # BaseException, not Exception: a KeyboardInterrupt mid-write is
+        # exactly the case this function exists to survive, and the ORIGINAL
+        # file must be left exactly as it was rather than replaced by a
+        # half-written temp file.
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
 
 
 def main(argv=None):
@@ -551,9 +626,31 @@ def main(argv=None):
                     raise RuntimeError(
                         f"county boundaries could not be fetched, so no agency "
                         f"can be placed in a county: {redact_err(ex)}") from ex
-                raw = _fetch_raw(st, use_osm, use_usgs, a, layer_id, shapes=shapes,
-                                 gaps_out=coverage)
-                if use_osm:
+                # Per-state, not the outer use_osm/use_usgs: falling back for
+                # ONE state that OSM could not answer must not force every
+                # OTHER state in this same --all run onto USGS too, and a hard
+                # --source osm choice must never fall back at all - only
+                # "auto" is a choice between sources rather than a specific
+                # one.
+                state_use_osm = use_osm
+                try:
+                    raw = _fetch_raw(st, state_use_osm, use_usgs, a, layer_id,
+                                     shapes=shapes, gaps_out=coverage)
+                except Exception as ex:              # noqa: BLE001
+                    if a.source != "auto" or not state_use_osm:
+                        raise
+                    # "auto tries OSM first ... then USGS for names only" is
+                    # the documented behaviour. Before this, use_osm was set
+                    # to True once for the whole run and never reconsidered,
+                    # so an OSM failure just failed the state - the help text
+                    # promised a fallback that the code never performed.
+                    print(f"    [!] {st}: OSM did not answer "
+                         f"({redact_err(ex)}); falling back to USGS for this "
+                         f"county (names only, no phone number)")
+                    state_use_osm = False
+                    raw = _fetch_raw(st, False, True, a, layer_id,
+                                     shapes=shapes, gaps_out=coverage)
+                if state_use_osm:
                     # The date the DATA was fetched, which for a cached tile is
                     # not today. Rows carry their own tile's date; this is only
                     # the fallback and the headline.

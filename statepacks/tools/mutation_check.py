@@ -50,6 +50,28 @@ REP = "statepacks/build_repeater_pack.py"
 
 MUTATIONS = {
     SEED: [
+        ("truncate the file before the new content is fully written",
+         "    fd, tmp = tempfile.mkstemp(dir=directory, "
+         'prefix=".le_contacts.", suffix=".part")',
+         '    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC); tmp = path'),
+        ("leave a half-written temp file behind on a crash",
+         "        try:\n            os.unlink(tmp)\n        except OSError:\n            pass\n        raise",
+         "        raise"),
+        ("ask Overpass the ArcGIS ?f=json question instead of real QL",
+         '    query = "[out:json][timeout:10];out count;"',
+         '    query = None  # placeholder'),
+        ("give up on the first OSM mirror instead of trying every one",
+         "    for url in OVERPASS_MIRRORS:",
+         "    for url in OVERPASS_MIRRORS[:1]:"),
+        ("route the non-ArcGIS source through the ArcGIS-shaped probe anyway",
+         '        if src["layer_re"] is None:',
+         "        if False:"),
+        ("let a hard --source osm choice silently fall back to USGS",
+         '                    if a.source != "auto" or not state_use_osm:',
+         "                    if False:"),
+        ("push every state in an --all run onto USGS after one OSM failure",
+         "                state_use_osm = use_osm",
+         "                state_use_osm = use_osm if a.source != \"auto\" else False"),
         ("let an invalid query reach the network",
          "    validate_query(query or OSM_QUERY)", "    pass"),
         ("cache an Overpass remark error as an empty tile",
@@ -379,6 +401,8 @@ MUTATIONS = {
          '    "dams":                ("dam_icon",   "Water",              "point"),'),
     ],
     BUILD: [
+        ("ignore the --census-key argument during --probe",
+         "    k = census_key(census_key_arg)", "    k = census_key()"),
         ("drop the __ identity/version boundary from filenames",
          'f"{state_abbr}_Counties__{edition(stamp, kml)}.kmz"',
          'f"{state_abbr}_Counties_{edition(stamp, kml)}.kmz"'),

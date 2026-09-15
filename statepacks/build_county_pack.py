@@ -895,13 +895,19 @@ def build_state(state_abbr, out_dir, acs_year=ACS_YEAR, per_county=False,
             "acs_year": acs_year if acs else None, "built": built}
 
 
-def probe(log=print):
+def probe(log=print, census_key_arg=None):
     """Check every endpoint this project uses, and SHOW what is there.
 
     A pass/fail probe tells you something is wrong but not what to do. This
     prints each MapServer's layer list with ids and names, so if the county
     layer has been renumbered you can read the right id straight off and pass
     it with --endpoint .../MapServer/<id>.
+
+    census_key_arg is main()'s --census-key value. Without threading it
+    through, `--probe --census-key <brand-new-key>` checked only the
+    environment variable and the saved key file, ignored the key the person
+    just typed, and reported NO KEY (exit 2) for a setup that a real build
+    would have used successfully.
     """
     ok = True
 
@@ -939,7 +945,7 @@ def probe(log=print):
 
     log("")
     log(f"POPULATION + HOUSING (ACS 5-year {ACS_YEAR})")
-    k = census_key()
+    k = census_key(census_key_arg)
     if not k:
         ok = False
         log("  NO KEY  the Census API requires one; a keyless request comes back")
@@ -947,7 +953,10 @@ def probe(log=print):
         log(f"          Free and instant: {ACS_KEY_SIGNUP}")
         log("          then: export CENSUS_API_KEY=your_key_here")
     else:
-        src = ("--census-key" if False else
+        # census_key(explicit) prefers explicit over the environment, and the
+        # environment over the file (see its own docstring), so a truthy
+        # census_key_arg is always what actually supplied `k`.
+        src = ("--census-key" if census_key_arg else
                "$CENSUS_API_KEY" if os.environ.get("CENSUS_API_KEY") else KEY_FILE)
         log(f"  key found via {src} (...{k[-4:]})")
         try:
@@ -1024,7 +1033,7 @@ def main(argv=None):
     globals()["HTTP_BUDGET_S"] = max(5, args.http_budget)
 
     if args.probe:
-        return 0 if probe() else 2
+        return 0 if probe(census_key_arg=args.census_key) else 2
 
     if args.all_states:
         targets = sorted(STATE_FIPS)

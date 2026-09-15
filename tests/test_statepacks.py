@@ -5914,3 +5914,248 @@ def test_quick_flag_through_main_still_reports_a_real_duplicate(tmp_path, capsys
     assert "DUPLICATE" in out, (
         "main() --quick must still surface a real duplicate through its own "
         "code path, not just when find_problems() is called directly")
+
+
+# --------------------------------------------------------------------------
+# write_csv - the actual precious file. CSV_PATH is data/le_contacts.local.csv,
+# the file a person fills in phone numbers by hand, one county website at a
+# time, and this project's own docs say the seeder never overwrites that
+# work. open(path, "w") truncates on open, before a single byte of new
+# content is written - a killed app or a plain Ctrl-C mid-write left every
+# row this file ever accumulated as an empty or partial file.
+# --------------------------------------------------------------------------
+def test_write_csv_survives_a_crash_mid_write(tmp_path, monkeypatch):
+    """The original file must be untouched if the write never completes."""
+    path = tmp_path / "le_contacts.local.csv"
+    path.write_text("geoid,agency\n27025,Original Sheriff\n", encoding="utf-8")
+
+    class Boom(Exception):
+        pass
+
+    real_writerow = sle.csv.DictWriter.writerow
+
+    def blow_up(self, row):
+        if row.get("geoid") == "27099":
+            raise Boom("simulated crash mid-write")
+        return real_writerow(self, row)
+
+    monkeypatch.setattr(sle.csv.DictWriter, "writerow", blow_up)
+    rows = {"27025": {"geoid": "27025", "agency": "New Sheriff"},
+           "27099": {"geoid": "27099", "agency": "Second County"}}
+    with pytest.raises(Boom):
+        sle.write_csv(str(path), rows, [])
+    assert path.read_text(encoding="utf-8") == "geoid,agency\n27025,Original Sheriff\n", (
+        "a crash mid-write must leave the ORIGINAL file untouched, not a "
+        "truncated or partial one")
+
+
+def test_write_csv_leaves_no_temp_file_behind_on_success(tmp_path):
+    path = tmp_path / "le_contacts.local.csv"
+    sle.write_csv(str(path), {"27025": {"geoid": "27025", "agency": "Sheriff"}}, [])
+    leftovers = [p for p in os.listdir(tmp_path) if p != path.name]
+    assert leftovers == [], f"temp file(s) left behind: {leftovers}"
+    assert "Sheriff" in path.read_text(encoding="utf-8")
+
+
+def test_write_csv_leaves_no_temp_file_behind_on_failure(tmp_path, monkeypatch):
+    def blow_up(self, row):
+        raise RuntimeError("boom")
+    monkeypatch.setattr(sle.csv.DictWriter, "writerow", blow_up)
+    path = tmp_path / "le_contacts.local.csv"
+    with pytest.raises(RuntimeError):
+        sle.write_csv(str(path), {"27025": {"geoid": "27025"}}, [])
+    assert not path.exists()
+    assert os.listdir(tmp_path) == [], "the failed temp file must be cleaned up"
+
+
+def test_write_csv_creates_the_directory_if_missing(tmp_path):
+    path = tmp_path / "nested" / "dir" / "le_contacts.local.csv"
+    sle.write_csv(str(path), {"27025": {"geoid": "27025", "agency": "X"}}, [])
+    assert path.exists()
+
+
+# --------------------------------------------------------------------------
+# --probe / --census-key threading, and probing OSM with a protocol it
+# actually speaks.
+# --------------------------------------------------------------------------
+def test_probe_uses_the_explicit_census_key_argument(monkeypatch):
+    """--probe --census-key <key> used to check only the environment and the
+    saved key file, ignoring the key just typed on the command line."""
+    monkeypatch.delenv("CENSUS_API_KEY", raising=False)
+    monkeypatch.setattr(bcp, "KEY_FILE", "/nonexistent/path/no-key-file")
+    monkeypatch.setattr(bcp, "get_json", lambda *a, **k: {"layers": []})
+    monkeypatch.setattr(bcp, "service_vintage", lambda *a, **k: "Current")
+    monkeypatch.setattr(bcp, "http_get",
+                        lambda *a, **k: b'[["NAME","P1"],["Test","5"]]')
+    said = []
+    ok = bcp.probe(log=said.append, census_key_arg="a-real-key-typed-on-the-cli")
+    joined = "\n".join(said)
+    assert "NO KEY" not in joined, joined
+    assert "--census-key" in joined
+
+
+def test_probe_without_an_explicit_key_falls_back_as_before(monkeypatch):
+    monkeypatch.delenv("CENSUS_API_KEY", raising=False)
+    monkeypatch.setattr(bcp, "KEY_FILE", "/nonexistent/path/no-key-file")
+    monkeypatch.setattr(bcp, "get_json", lambda *a, **k: {"layers": []})
+    monkeypatch.setattr(bcp, "service_vintage", lambda *a, **k: "Current")
+    said = []
+    bcp.probe(log=said.append, census_key_arg=None)
+    assert "NO KEY" in "\n".join(said)
+
+
+def test_probe_osm_sends_overpass_ql_not_arcgis_params(monkeypatch):
+    """The actual bug: every mirror got an ArcGIS ?f=json request, which
+    Overpass has never answered, so this source reported UNREACHABLE
+    regardless of whether the real service was up."""
+    seen = {}
+
+    class FakeResponse:
+        def __enter__(self):
+            return self
+        def __exit__(self, *a):
+            return False
+        def read(self):
+            return b'{"elements": []}'
+
+    def fake_request(url, data=None, headers=None):
+        seen["url"] = url
+        seen["body"] = data
+        return ("request", url, data)
+
+    def fake_urlopen(req, timeout=None, context=None):
+        return FakeResponse()
+
+    monkeypatch.setattr(sle, "Request", fake_request)
+    monkeypatch.setattr(sle, "urlopen", fake_urlopen)
+    ok = sle.probe_osm(log=lambda *a: None)
+    assert ok is True
+    # The body must be Overpass QL sent as urlencoded `data=`, not f=json.
+    decoded = seen["body"].decode()
+    assert "data=" in decoded
+    assert "f%3Djson" not in decoded and "f=json" not in decoded
+    assert "out+count" in decoded or "out count" in decoded.replace("+", " ")
+
+
+def test_probe_osm_tries_every_mirror_before_giving_up(monkeypatch):
+    calls = []
+
+    def fake_request(url, data=None, headers=None):
+        calls.append(url)
+        return url
+
+    def fake_urlopen(req, timeout=None, context=None):
+        raise TimeoutError("simulated")
+
+    monkeypatch.setattr(sle, "Request", fake_request)
+    monkeypatch.setattr(sle, "urlopen", fake_urlopen)
+    ok = sle.probe_osm(log=lambda *a: None)
+    assert ok is False
+    assert calls == sle.OVERPASS_MIRRORS
+
+
+def test_probe_sources_routes_the_non_arcgis_entry_to_probe_osm(monkeypatch):
+    """SOURCES already flags OSM with layer_re=None ("not an ArcGIS
+    service"); probe_sources must act on that flag rather than asking it
+    the ArcGIS question anyway. The OTHER two sources (HIFLD, USGS) ARE
+    genuinely ArcGIS-shaped and must still go through http_json as before -
+    this is about routing OSM specifically, not banning http_json outright.
+    """
+    called = []
+    arcgis_urls_asked = []
+    monkeypatch.setattr(sle, "probe_osm", lambda log=print: called.append(1) or True)
+
+    def fake_http_json(url, *a, **k):
+        arcgis_urls_asked.append(url)
+        return {"layers": []}
+    monkeypatch.setattr(sle, "http_json", fake_http_json)
+    sle.probe_sources(log=lambda *a: None)
+    assert called == [1], "probe_osm must be called exactly once, for the OSM entry"
+    assert sle.OSM["url"] not in arcgis_urls_asked, (
+        "the OSM url must never receive the ArcGIS-shaped ?f=json request")
+    assert len(arcgis_urls_asked) == 2, "HIFLD and USGS still use the normal path"
+
+
+# --------------------------------------------------------------------------
+# --source auto really falling back to USGS, per-state.
+# --------------------------------------------------------------------------
+def test_source_auto_falls_back_to_usgs_when_osm_fails(monkeypatch, capsys, tmp_path):
+    monkeypatch.setattr(sle, "CSV_PATH", str(tmp_path / "le.csv"))
+    monkeypatch.setattr(sle, "fetch_osm",
+                        lambda *a, **k: (_ for _ in ()).throw(
+                            TimeoutError("mirrors busy")))
+    monkeypatch.setattr(sle, "fetch_usgs", lambda st, layer: [
+        {"name": "Fallback Sheriff", "phone": "", "address": "1 Main",
+         "city": "Somewhere", "admintype": "county", "loaddate": "",
+         "lon": 1.0, "lat": 1.0}])
+    monkeypatch.setattr(sle, "county_shapes", _fake_shapes("27025"))
+
+    assert sle.main(["--state", "MN"]) == 0            # default --source auto
+    out = capsys.readouterr().out
+    assert "falling back to USGS" in out
+    assert "USGS law-enforcement points" in out
+
+
+def test_source_auto_uses_osm_normally_when_it_works(monkeypatch, capsys, tmp_path):
+    """The fallback must not fire on a success - a passing OSM fetch should
+    never even construct the USGS branch."""
+    monkeypatch.setattr(sle, "CSV_PATH", str(tmp_path / "le.csv"))
+    monkeypatch.setattr(sle, "fetch_usgs",
+                        lambda *a, **k: pytest.fail("USGS used when OSM worked"))
+    monkeypatch.setattr(sle, "fetch_osm", lambda st, mirrors=None, log=print, **kw: [
+        {"name": "Real Sheriff", "phone": "555-0100", "address": "1 Main",
+         "city": "Somewhere", "admintype": "county", "loaddate": "",
+         "lon": 1.0, "lat": 1.0}])
+    monkeypatch.setattr(sle, "county_shapes", _fake_shapes("27025"))
+    assert sle.main(["--state", "MN"]) == 0
+    assert "falling back" not in capsys.readouterr().out
+
+
+def test_source_osm_hard_choice_never_falls_back(monkeypatch, capsys, tmp_path):
+    """A HARD --source osm choice is a specific choice, not "pick one for
+    me" - it must raise through, not silently substitute USGS."""
+    monkeypatch.setattr(sle, "CSV_PATH", str(tmp_path / "le.csv"))
+    monkeypatch.setattr(sle, "fetch_osm",
+                        lambda *a, **k: (_ for _ in ()).throw(
+                            TimeoutError("mirrors busy")))
+    monkeypatch.setattr(sle, "fetch_usgs",
+                        lambda *a, **k: pytest.fail(
+                            "a hard --source osm choice must never fall back"))
+    monkeypatch.setattr(sle, "county_shapes", _fake_shapes("27025"))
+    assert sle.main(["--state", "MN", "--source", "osm"]) == 2
+    assert "mirrors busy" in capsys.readouterr().err
+
+
+def test_source_auto_fallback_is_per_state_not_global(monkeypatch, capsys, tmp_path):
+    """One state failing OSM must not push every OTHER state in an --all
+    run onto USGS too."""
+    monkeypatch.setattr(sle, "CSV_PATH", str(tmp_path / "le.csv"))
+    calls = {"osm": 0}
+
+    def fake_fetch_osm(st, mirrors=None, log=print, **kw):
+        calls["osm"] += 1
+        if calls["osm"] == 1:
+            raise TimeoutError("first state's mirrors busy")
+        return [{"name": "Second State Sheriff", "phone": "555-0199",
+                "address": "1 Main", "city": "Elsewhere", "admintype": "county",
+                "loaddate": "", "lon": 1.0, "lat": 1.0}]
+
+    monkeypatch.setattr(sle, "fetch_osm", fake_fetch_osm)
+    monkeypatch.setattr(sle, "fetch_usgs", lambda st, layer: [
+        {"name": "Fallback Sheriff", "phone": "", "address": "1 Main",
+         "city": "Somewhere", "admintype": "county", "loaddate": "",
+         "lon": 1.0, "lat": 1.0}])
+    shapes_by_state = {"27": _fake_shapes("27025"), "55": _fake_shapes("55025")}
+    monkeypatch.setattr(sle, "county_shapes",
+                        lambda sfp, **kw: shapes_by_state[sfp](sfp, **kw))
+    monkeypatch.setattr(sle, "STATE_FIPS", {"MN": "27", "WI": "55"})
+
+    class FakeArgs:
+        pass
+    # Drive it through main() with --all limited to our two fake states by
+    # patching STATE_FIPS above, since --all iterates sorted(STATE_FIPS).
+    assert sle.main(["--all"]) == 0
+    out = capsys.readouterr().out
+    assert out.count("falling back to USGS") == 1, (
+        "exactly one state's OSM failure must trigger exactly one fallback")
+    assert "OSM police features" in out             # the second state used OSM
