@@ -74,6 +74,28 @@ def arc_band(cx, cy, r_out, r_in, a0, a1, n=28):
 # --------------------------------------------------------------------------
 # the glyphs
 # --------------------------------------------------------------------------
+def hole(ring):
+    """The same ring wound the other way, so nonzero winding cuts it out.
+
+    The fill is nonzero, not even-odd (see _coverage), so an inner ring drawn
+    in the same direction as its outer one UNIONS with it and the shape comes
+    out solid. Three glyphs shipped as featureless blobs before anyone looked
+    at a rendering of them.
+    """
+    return list(reversed(ring))
+
+
+def rect(x0, y0, x1, y1):
+    return [(x0, y0), (x1, y0), (x1, y1), (x0, y1)]
+
+
+def bar(cx, cy, w, h, ang=0.0):
+    """A rectangle rotated about its own centre."""
+    ca, sa = math.cos(ang), math.sin(ang)
+    return [(cx + x * ca - y * sa, cy + x * sa + y * ca)
+            for x, y in ((-w, -h), (w, -h), (w, h), (-w, h))]
+
+
 def g_bolt():
     """Lightning bolt. Generation of any kind."""
     return [[(-0.08, 0.92), (0.50, 0.92), (0.14, 0.20), (0.60, 0.20),
@@ -209,11 +231,264 @@ def g_repeater():
     return subs
 
 
+
+# --------------------------------------------------------------------------
+# Infrastructure. One silhouette each, no interior detail, readable at 24 px.
+# Where two layers would need the same shape to be honest (food processing and
+# livestock are both "a plant"), they share it and the colour separates them -
+# a made-up distinction drawn as a picture is still a made-up distinction.
+# --------------------------------------------------------------------------
+def g_dam():
+    """A dam in elevation: wall, spillway notch, water below.
+
+    The arch-from-above version read as a plain dome, which is a hill. The
+    elevation has the one feature nothing else here has - a notch cut in the
+    top edge with water falling out of it.
+    """
+    # Cross-section, not elevation. The elevation versions read as a
+    # lampshade: a wall alone is just a shape. What makes it a dam is water
+    # standing against one face and nothing against the other, so that is
+    # what is drawn - a battered wall with the reservoir stacked behind it.
+    wall = [(-0.06, 0.88), (0.26, 0.88), (0.88, -0.84), (-0.06, -0.84)]
+    water = [rect(-0.92, y - 0.11, -0.14, y + 0.11)
+             for y in (0.54, 0.16, -0.22)]
+    return [wall] + water + [rect(-0.96, -0.96, 0.96, -0.84)]
+
+
+def g_substation():
+    """A transformer: tank with two bushings. Not a bolt - a bolt already
+    means generation, and a substation generates nothing."""
+    return [rect(-0.72, -0.72, 0.72, 0.28),
+            bar(-0.34, 0.54, 0.13, 0.30), bar(0.34, 0.54, 0.13, 0.30),
+            rect(-0.52, 0.22, 0.52, 0.34)]
+
+
+def g_pylon():
+    """A lattice tower with crossarms - transmission, not broadcast."""
+    return [[(-0.62, -0.92), (-0.30, -0.92), (-0.10, 0.52), (0.10, 0.52),
+             (0.30, -0.92), (0.62, -0.92), (0.30, 0.62), (-0.30, 0.62)],
+            rect(-0.86, 0.62, 0.86, 0.78)]
+
+
+def g_pipeline():
+    """A pipe run with flanges at both ends."""
+    return [rect(-0.92, -0.26, 0.92, 0.26),
+            rect(-0.92, -0.62, -0.62, 0.62), rect(0.62, -0.62, 0.92, 0.62)]
+
+
+def g_refinery():
+    """A distillation column: tall, capped, on a skirt."""
+    tall = [(-0.72, -0.72), (-0.28, -0.72), (-0.28, 0.62),
+            (-0.38, 0.86), (-0.62, 0.86), (-0.72, 0.62)]
+    short = [(0.18, -0.72), (0.62, -0.72), (0.62, 0.20),
+             (0.52, 0.40), (0.28, 0.40), (0.18, 0.20)]
+    return [tall, short, rect(-0.28, 0.06, 0.18, 0.20),
+            rect(-0.92, -0.92, 0.92, -0.70)]
+
+
+def g_flask():
+    """An Erlenmeyer flask - chemical and hazmat."""
+    return [[(-0.20, 0.88), (0.20, 0.88), (0.20, 0.30),
+             (0.74, -0.78), (-0.74, -0.78), (-0.20, 0.30)],
+            rect(-0.30, 0.82, 0.30, 0.94)]
+
+
+def g_cross():
+    """A thick medical cross - hospital, urgent care, nursing."""
+    a, b = 0.28, 0.88
+    return [[(-a, -b), (a, -b), (a, -a), (b, -a), (b, a), (a, a),
+             (a, b), (-a, b), (-a, a), (-b, a), (-b, -a), (-a, -a)]]
+
+
+def g_star_of_life():
+    """Six bars at 60 degrees - EMS. Distinct from the cross's four."""
+    return [bar(0, 0, 0.17, 0.92, math.radians(a)) for a in (0, 60, 120)]
+
+
+def g_hydrant():
+    """A hydrant - fire stations. A flame would say 'this is on fire'."""
+    return [rect(-0.34, -0.62, 0.34, 0.46),
+            rect(-0.62, -0.92, 0.62, -0.62),
+            rect(-0.86, -0.10, 0.86, 0.18),
+            [(-0.26, 0.46), (0.26, 0.46), (0.16, 0.78), (-0.16, 0.78)]]
+
+
+def g_shield():
+    """A shield - law enforcement."""
+    return [[(-0.68, 0.84), (0.68, 0.84), (0.68, 0.06),
+             (0.34, -0.60), (0.00, -0.92), (-0.34, -0.60), (-0.68, 0.06)]]
+
+
+def g_bars():
+    """Barred window - correctional. Reads as confinement, not a building."""
+    out = [rect(-0.80, 0.62, 0.80, 0.84), rect(-0.80, -0.84, 0.80, -0.62)]
+    for x in (-0.54, -0.18, 0.18, 0.54):
+        out.append(rect(x - 0.11, -0.72, x + 0.11, 0.72))
+    return out
+
+
+def g_capitol():
+    """Pediment on a block - government and EOC. Columns vanish at 24 px, so
+    the triangle does the work."""
+    return [[(-0.92, 0.18), (0.00, 0.80), (0.92, 0.18)],
+            rect(-0.74, -0.70, 0.74, 0.10),
+            rect(-0.92, -0.90, 0.92, -0.70)]
+
+
+def g_mortarboard():
+    """A graduation cap - schools."""
+    return [[(0.00, 0.78), (0.96, 0.30), (0.00, -0.18), (-0.96, 0.30)],
+            [(-0.56, 0.04), (0.56, 0.04), (0.56, -0.56), (0.00, -0.84),
+             (-0.56, -0.56)]]
+
+
+def g_shelter():
+    """A roof over an open space - shelters."""
+    return [[(-0.96, 0.16), (0.00, 0.86), (0.96, 0.16), (0.96, -0.02),
+             (0.00, 0.62), (-0.96, -0.02)],
+            rect(-0.68, -0.90, -0.44, 0.10), rect(0.44, -0.90, 0.68, 0.10)]
+
+
+def g_plane():
+    """A plan-view aircraft - airports."""
+    return [[(0.00, 0.94), (0.14, 0.44), (0.92, -0.10), (0.92, -0.32),
+             (0.14, -0.06), (0.14, -0.56), (0.40, -0.80), (0.40, -0.94),
+             (0.00, -0.82), (-0.40, -0.94), (-0.40, -0.80), (-0.14, -0.56),
+             (-0.14, -0.06), (-0.92, -0.32), (-0.92, -0.10), (-0.14, 0.44)]]
+
+
+def g_helipad():
+    """An H in a ring - heliports."""
+    return [circle(0, 0, 0.96), hole(circle(0, 0, 0.74)),
+            rect(-0.42, -0.48, -0.20, 0.48), rect(0.20, -0.48, 0.42, 0.48),
+            rect(-0.30, -0.12, 0.30, 0.12)]
+
+
+def g_anchor():
+    """An anchor - ports and terminals."""
+    return [rect(-0.11, -0.62, 0.11, 0.62), rect(-0.46, 0.38, 0.46, 0.58),
+            circle(0, 0.78, 0.22),
+            [(-0.82, -0.12), (-0.62, -0.20), (-0.34, -0.72), (0.00, -0.94),
+             (0.34, -0.72), (0.62, -0.20), (0.82, -0.12), (0.74, -0.44),
+             (0.36, -0.94), (-0.36, -0.94), (-0.74, -0.44)]]
+
+
+def g_rail():
+    """Track: two rails and the ties between them."""
+    out = [rect(-0.52, -0.94, -0.28, 0.94), rect(0.28, -0.94, 0.52, 0.94)]
+    for y in (-0.66, -0.22, 0.22, 0.66):
+        out.append(rect(-0.86, y - 0.10, 0.86, y + 0.10))
+    return out
+
+
+def g_bridge():
+    """A deck on an arch, with piers."""
+    return [rect(-0.96, 0.34, 0.96, 0.56),
+            arc_band(0, -0.62, 0.98, 0.74, math.radians(18), math.radians(162)),
+            rect(-0.92, -0.86, -0.68, 0.40), rect(0.68, -0.86, 0.92, 0.40),
+            rect(-0.96, -0.92, 0.96, -0.74)]
+
+
+def g_pick():
+    """Crossed pick and hammer - mines and quarries."""
+    return [bar(0, 0, 0.11, 0.90, math.radians(38)),
+            bar(0, 0, 0.11, 0.90, math.radians(-38)),
+            bar(0.46, 0.60, 0.30, 0.16, math.radians(-38)),
+            [(-0.72, 0.50), (-0.30, 0.86), (-0.44, 0.42)]]
+
+
+def g_silo():
+    """A tall domed cylinder - grain."""
+    return [rect(-0.40, -0.80, 0.40, 0.48),
+            [(-0.40, 0.48), (-0.26, 0.78), (0.26, 0.78), (0.40, 0.48)],
+            rect(-0.66, -0.94, 0.66, -0.78)]
+
+
+def g_tank():
+    """A squat storage tank - fuel, gas, LNG. Wider than the silo on
+    purpose: same family, different proportion, which is what the real
+    things look like too."""
+    return [rect(-0.88, -0.72, 0.88, 0.40),
+            [(-0.88, 0.40), (-0.62, 0.72), (0.62, 0.72), (0.88, 0.40)],
+            rect(-0.96, -0.86, 0.96, -0.70)]
+
+
+def g_pump():
+    """A fuel dispenser - fuel stations."""
+    return [rect(-0.76, -0.90, 0.06, 0.80),
+            hole(rect(-0.60, 0.22, -0.10, 0.62)),
+            rect(0.06, 0.40, 0.44, 0.58),
+            rect(0.44, -0.44, 0.62, 0.58),
+            rect(0.30, -0.62, 0.76, -0.44)]
+
+
+def g_water_tower():
+    """A tank on legs - the one thing every small town has."""
+    # The bowl has to be clearly narrower than the stance of the legs, or
+    # the whole thing reads as an anvil sitting on a block.
+    bowl = [(-0.52, 0.34), (-0.40, 0.84), (0.40, 0.84), (0.52, 0.34),
+            (0.00, 0.06)]
+    left = [(-0.34, 0.30), (-0.16, 0.24), (-0.52, -0.92), (-0.72, -0.92)]
+    right = [(0.16, 0.24), (0.34, 0.30), (0.72, -0.92), (0.52, -0.92)]
+    return [bowl, left, right, bar(0, -0.36, 0.46, 0.055)]
+
+
+def g_clarifier():
+    """A circular clarifier with its sweep arm - water and wastewater
+    treatment. It is what these plants look like from the air."""
+    return [circle(0, 0, 0.94), hole(circle(0, 0, 0.72)),
+            bar(0, 0, 0.88, 0.085, math.radians(28)), circle(0, 0, 0.26)]
+
+
+def g_well():
+    """A derrick over a wellhead - wells and gas processing."""
+    return [[(-0.66, -0.92), (-0.40, -0.92), (-0.14, 0.62), (0.14, 0.62),
+             (0.40, -0.92), (0.66, -0.92), (0.30, 0.86), (-0.30, 0.86)],
+            rect(-0.52, -0.34, 0.52, -0.20), rect(-0.86, -0.94, 0.86, -0.80)]
+
+
+def g_server():
+    """A rack - data centres and telecom exchanges."""
+    out = [rect(-0.74, -0.92, 0.74, 0.92)]
+    for y in (0.50, 0.06, -0.38):
+        out.append(hole(rect(-0.54, y - 0.13, 0.54, y + 0.13)))
+    return out
+
+
+def g_burst():
+    """A starburst - explosives storage."""
+    pts = []
+    for i in range(16):
+        a = math.pi * 2 * i / 16
+        r = 0.96 if i % 2 == 0 else 0.40
+        pts.append((r * math.cos(a), r * math.sin(a)))
+    return [pts]
+
+
+def g_factory():
+    """Sawtooth roof and a stack - generic industry, food, livestock, agri."""
+    return [rect(0.36, -0.80, 0.72, 0.88),
+            [(-0.92, -0.80), (-0.92, 0.10), (-0.52, 0.42), (-0.52, 0.10),
+             (-0.12, 0.42), (-0.12, 0.10), (0.28, 0.42), (0.28, -0.80)],
+            rect(-0.96, -0.94, 0.96, -0.78)]
+
+
 GLYPHS = {
     "bolt": g_bolt, "trefoil": g_trefoil, "flame": g_flame,
     "droplet": g_droplet, "turbine": g_turbine, "sun": g_sun,
     "battery": g_battery, "broadcast": g_broadcast, "tower": g_tower,
     "repeater": g_repeater,
+    # Infrastructure
+    "dam": g_dam, "substation": g_substation, "pylon": g_pylon,
+    "pipeline": g_pipeline, "refinery": g_refinery, "flask": g_flask,
+    "cross": g_cross, "star_of_life": g_star_of_life, "hydrant": g_hydrant,
+    "shield": g_shield, "bars": g_bars, "capitol": g_capitol,
+    "mortarboard": g_mortarboard, "shelter": g_shelter, "plane": g_plane,
+    "helipad": g_helipad, "anchor": g_anchor, "rail": g_rail,
+    "bridge": g_bridge, "pick": g_pick, "silo": g_silo, "tank": g_tank,
+    "pump": g_pump, "water_tower": g_water_tower, "clarifier": g_clarifier,
+    "well": g_well, "server": g_server, "burst": g_burst,
+    "factory": g_factory,
 }
 
 

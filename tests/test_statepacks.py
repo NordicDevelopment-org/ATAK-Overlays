@@ -4035,3 +4035,81 @@ def test_glyph_render_raises_for_a_name_nobody_defined():
     # A real one still renders a PNG.
     png = gly.render("bolt", (255, 209, 64))
     assert png[:8] == b"\x89PNG\r\n\x1a\n"
+
+
+# --------------------------------------------------------------------------
+# symbology - one table decides every layer's shape and colour. Three builders
+# had already picked their own independently; the risk is a fourth reusing a
+# colour that already means something else.
+# --------------------------------------------------------------------------
+sym = _load("symbology")
+
+
+def test_symbology_covers_every_catalog_layer():
+    """A layer added with no row builds with no icon and no complaint.
+
+    This is the check that makes the table enforce rather than describe. If it
+    fails, either add the row or say explicitly that the layer draws as a line
+    or polygon - both are answers, silence is not.
+    """
+    problems = sym.check(log=lambda *_a, **_k: None)
+    assert problems == [], "\n".join(problems)
+
+
+def test_symbology_every_named_glyph_actually_renders():
+    known = set(gly.glyph_names())
+    for layer, (glyph, _sector, _geom) in sym.LAYERS.items():
+        if glyph is not None:
+            assert glyph in known, f"{layer} names a glyph that does not exist"
+            assert gly.render(glyph, (255, 0, 0))[:8] == b"\x89PNG\r\n\x1a\n"
+
+
+def test_symbology_line_and_area_layers_get_no_icon():
+    """A pin at a 400-mile pipeline's midpoint is not a place."""
+    for layer, (glyph, _sector, geom) in sym.LAYERS.items():
+        if geom in ("line", "area"):
+            assert glyph is None, f"{layer} is a {geom} layer but has an icon"
+            assert sym.icon_for(layer) is None
+
+
+def test_symbology_sector_colours_are_distinct():
+    """Two sectors sharing a colour silently undoes the whole point."""
+    seen = {}
+    for sector, rgb in sym.SECTOR.items():
+        assert rgb not in seen, f"{sector} and {seen.get(rgb)} share {rgb}"
+        seen[rgb] = sector
+
+
+def test_symbology_colour_survives_greyscale():
+    """Colour-blind readers and washed-out screens both fall back to value.
+
+    Shape carries the meaning for exactly this reason, but sector colours
+    still must not collapse into one grey - that would make the colour channel
+    actively misleading rather than merely useless.
+    """
+    def luma(rgb):
+        return 0.2126 * rgb[0] + 0.7152 * rgb[1] + 0.0722 * rgb[2]
+    values = sorted(luma(c) for c in sym.SECTOR.values())
+    assert values[-1] - values[0] > 40
+
+
+def test_power_pack_reads_fuel_styles_from_the_one_table():
+    """It used to keep its own copy, and two copies drift.
+
+    Identity is not the assertion: _load() gives each module its own spec, so
+    the symbology the builder imports is a different object from the one this
+    file loaded. What matters is that the builder's source holds no second
+    literal - equal-today values would still drift apart tomorrow.
+    """
+    assert pwr.FUEL_STYLE == sym.FUEL_STYLE
+    src = open(os.path.join(SP, "build_power_pack.py"), encoding="utf-8").read()
+    assert "FUEL_STYLE = symbology.FUEL_STYLE" in src
+    assert '"nuclear":' not in src, "a second copy of the fuel table came back"
+    assert sym.glyph_for("nuclear_reactors") == "trefoil"
+    assert sym.FUEL_STYLE["nuclear"][0] == "trefoil"
+
+
+def test_symbology_unknown_layer_is_none_not_a_guess():
+    assert sym.glyph_for("no_such_layer") is None
+    assert sym.colour_for("no_such_layer") is None
+    assert sym.icon_for("no_such_layer") is None

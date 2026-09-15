@@ -38,6 +38,7 @@ SEED = "statepacks/seed_le_contacts.py"
 BUILD = "statepacks/build_county_pack.py"
 INV = "statepacks/atak_inventory.py"
 DUP = "statepacks/atak_find_dupes.py"
+SYM = "statepacks/symbology.py"
 RPT = "statepacks/repeater_diagnose.py"
 NWR = "statepacks/build_nwr_pack.py"
 PWR = "statepacks/build_power_pack.py"
@@ -218,6 +219,20 @@ MUTATIONS = {
         ("follow a symlinked root twice",
          "                real = os.path.realpath(path)",
          "                real = path"),
+    ],
+    SYM: [
+        ("give two sectors the same colour",
+         '    "Communications":     (170, 230, 140),   # green',
+         '    "Communications":     (255, 209, 64),    # green'),
+        ("hang a point icon on a line layer",
+         '    "pipelines":           (None,         "Energy - Oil & Gas", "line"),',
+         '    "pipelines":           ("pipeline",   "Energy - Oil & Gas", "line"),'),
+        ("stop checking that the table covers the catalog",
+         "    missing = catalog_layers(path) - set(LAYERS)",
+         "    missing = set()  # catalog_layers(path) - set(LAYERS)"),
+        ("name a glyph that was never drawn",
+         '    "dams":                ("dam",        "Water",              "point"),',
+         '    "dams":                ("dam_icon",   "Water",              "point"),'),
     ],
     BUILD: [
         ("pad a missing county code into a fake FIPS",

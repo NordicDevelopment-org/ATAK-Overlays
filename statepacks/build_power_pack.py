@@ -40,6 +40,7 @@ import urllib.parse
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import build_county_pack as bcp                             # noqa: E402
 import glyphs                                                # noqa: E402
+import symbology                                             # noqa: E402
 
 EIA_URL = ("https://services2.arcgis.com/FiaPA4ga0iQKduv3/arcgis/rest/services"
            "/Power_Plants_in_the_US/FeatureServer/0")
@@ -77,19 +78,9 @@ DEFAULT_ON = ("nuclear", "coal", "natural gas", "hydroelectric", "petroleum",
 # family, and both are set because colour alone fails in greyscale and for a
 # colour-blind reader. Anything not listed falls back to a bolt, which is true
 # of every entry here: they all make electricity.
-FUEL_STYLE = {
-    "nuclear":       ("trefoil",  (255, 240, 60)),
-    "coal":          ("flame",    (170, 170, 175)),
-    "natural gas":   ("flame",    (120, 200, 255)),
-    "petroleum":     ("flame",    (255, 150, 70)),
-    "biomass":       ("flame",    (150, 220, 120)),
-    "geothermal":    ("flame",    (230, 130, 190)),
-    "hydroelectric": ("droplet",  (90, 180, 255)),
-    "pumped storage": ("droplet", (140, 200, 255)),
-    "wind":          ("turbine",  (200, 235, 255)),
-    "solar":         ("sun",      (255, 210, 70)),
-    "batteries":     ("battery",  (140, 230, 190)),
-}
+# Fuel symbology lives in symbology.py so every builder picks colours from
+# one table. Imported, not copied: two copies drift.
+FUEL_STYLE = symbology.FUEL_STYLE
 FUEL_FALLBACK = ("bolt", (255, 209, 64))
 
 
