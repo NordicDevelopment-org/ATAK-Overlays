@@ -97,6 +97,10 @@ MUTATIONS = {
          "                        if not lock.acquire(blocking=False):"),
         ("report our own scheduling as a mirror failure",
          "raise MirrorsBusy(", "raise RuntimeError("),
+        ("give up on a tile whose mirrors are cooling from a SIBLING tile's "
+         "429 instead of waiting it out like a personally rate-limited one",
+         'if not state["limited"] and not saw_cooldown:',
+         'if not state["limited"]:'),
         ("serve a tile cache entry regardless of age",
          "if hit and _cache_fresh(hit[1], ttl_days):", "if hit:"),
         ("let the record order depend on how the fetch was carved up",

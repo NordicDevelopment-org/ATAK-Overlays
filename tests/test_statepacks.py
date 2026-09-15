@@ -2536,6 +2536,36 @@ def test_self_contention_is_not_reported_as_a_mirror_failure(monkeypatch, tmp_pa
                            deadline=sle.Deadline(0.2), locks=locks)
 
 
+def test_a_siblings_cooldown_is_waited_out_not_reported_as_mirrorsbusy(
+        monkeypatch, tmp_path):
+    """The other half of the same bug: a tile that never personally earned a
+    429 - every mirror was already cooling down because a DIFFERENT tile hit
+    one first - used to never set state["limited"] either, so it broke out
+    on its very first extra pass and was reported as MirrorsBusy ('this
+    run's own scheduling') with 'lower --jobs' advice. The real cause is a
+    mirror rate-limiting the whole run; --jobs would not have helped, and
+    the right answer - waiting - is exactly what a personally-rate-limited
+    tile already gets."""
+    monkeypatch.setattr(sle, "CACHE_DIR", str(tmp_path))
+    monkeypatch.setattr(sle, "OSM_COOLDOWN_S", 0.05)   # keep the test fast
+    mirrors = ["https://a.invalid/i"]
+    # A cooldown this tile never earned itself - set as if a SIBLING tile's
+    # 429 put this mirror to sleep moments ago.
+    cooldowns = {mirrors[0]: time.monotonic() + 0.05}
+
+    monkeypatch.setattr(
+        "urllib.request.urlopen",
+        lambda req, timeout=None, context=None: FakeHTTP(
+            {"elements": [{"type": "node", "id": 9, "lat": 1, "lon": 1}]}))
+
+    els, _from_cache, _fetched = sle._overpass_tile(
+        (0.0, 0.0, 1.0, 1.0), mirrors, 5, 1, lambda *a: None,
+        cooldowns=cooldowns)
+    assert [e["id"] for e in els] == [9], (
+        "the tile must wait for the shared cooldown to clear and then "
+        "succeed, not give up immediately as MirrorsBusy")
+
+
 class RecordingLock:
     """A lock that remembers HOW it was acquired, not just whether.
 

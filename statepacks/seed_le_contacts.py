@@ -1440,6 +1440,15 @@ def _overpass_tile(tile, mirrors, timeout, attempts, log, deadline=None,
     order = order[k:] + order[:k]
     state = {"last": None, "timeouts": 0, "limited": 0, "wait": 0}
     cooldowns = {} if cooldowns is None else cooldowns
+    # True when THIS tile was ever deferred by another tile's cooldown, not
+    # its own lock contention. Without this, a tile that never personally
+    # earned a 429 (every mirror was already cooling from a SIBLING tile's
+    # 429) never sets state["limited"] either, falls through "not
+    # state['limited']: break" below on its first pass, and is reported as
+    # MirrorsBusy - "this run's own scheduling" - when the real cause is a
+    # mirror rate-limiting the whole run, and the right answer is to wait it
+    # out exactly like a tile that hit the 429 itself would.
+    saw_cooldown = False
 
     def cool(url):
         """Seconds this mirror still wants to be left alone."""
@@ -1483,7 +1492,7 @@ def _overpass_tile(tile, mirrors, timeout, attempts, log, deadline=None,
     # helps it and a different mirror or a smaller box does not.
     for _attempt in range(max(1, attempts) + OSM_RATE_LIMIT_PASSES):
         if _attempt >= max(1, attempts):
-            if not state["limited"]:
+            if not state["limited"] and not saw_cooldown:
                 break                    # not a rate-limit problem; stop here
             pause = state["wait"] or OSM_COOLDOWN_S
             if deadline is not None and deadline.left() < pause + 5:
@@ -1498,6 +1507,7 @@ def _overpass_tile(tile, mirrors, timeout, attempts, log, deadline=None,
             for u in [u for u, until in cooldowns.items() if until - now <= pause]:
                 cooldowns.pop(u, None)
             state["limited"], state["wait"] = 0, 0
+            saw_cooldown = False
         # Pass 1: every mirror that is free right now. Pass 2: wait for one,
         # but only for the mirrors we skipped - never re-ask one that answered
         # with a failure, since that is the same question again.
@@ -1515,6 +1525,7 @@ def _overpass_tile(tile, mirrors, timeout, attempts, log, deadline=None,
                     # spending the budget re-earning the same refusal.
                     if phase == 0:
                         busy.append(url)
+                        saw_cooldown = True
                     continue
                 lock = (locks or {}).get(url)
                 if lock is not None:
