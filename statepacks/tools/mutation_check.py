@@ -207,6 +207,15 @@ MUTATIONS = {
          '    return "repeaters"'),
     ],
     INV: [
+        ("gate every check on --quick, so a real duplicate reports clean",
+         "    problems = find_problems(rows)", "    problems = find_problems(rows) if deep else []"),
+        ("pick newest by the minute-truncated string, not the raw float",
+         '            newest = max(versioned, key=lambda p: p[1]["mtime_raw"])',
+         '            newest = max(versioned, key=lambda p: p[1]["mtime"])'),
+        ("guess a winner on a genuine mtime tie instead of saying so",
+         "            times = {r[\"mtime_raw\"] for _e, r in versioned}\n"
+         "            if len(times) < len(versioned):",
+         "            if False:"),
         ("print a progress line long enough to wrap a phone terminal",
          '            print(f"\\r  reading {i}/{total}   ", end="", file=sys.stderr,',
          '            print(f"\\r  reading {i}/{total} {os.path.basename(path)[:40]:<40}", end="", file=sys.stderr,'),

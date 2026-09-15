@@ -112,11 +112,17 @@ def contained_in(rows, min_names=1):
 def inspect_kmz(path, deep=True):
     """Read one overlay. Returns a dict; never raises on a bad file."""
     out = {"name": os.path.basename(path), "bytes": 0, "mtime": "",
-           "placemarks": None, "folders": [], "provenance": None,
-           "pm_names": set(), "error": None}
+           "mtime_raw": 0.0, "placemarks": None, "folders": [],
+           "provenance": None, "pm_names": set(), "error": None}
     try:
         st = os.stat(path)
         out["bytes"] = st.st_size
+        # Display string is minute-precision on purpose - nobody needs
+        # seconds in a listing. "Newest edition" is decided on mtime_raw,
+        # the untruncated float, because two builds inside one minute is not
+        # a hypothetical: it happened repeatedly in the session that found
+        # this bug.
+        out["mtime_raw"] = st.st_mtime
         out["mtime"] = time.strftime("%Y-%m-%d %H:%M", time.localtime(st.st_mtime))
     except OSError as ex:                                   # noqa: BLE001
         out["error"] = f"cannot stat: {ex}"
@@ -218,7 +224,28 @@ def find_problems(rows):
     for ident, members in sorted(fams.items()):
         versioned = [(e, r) for e, r in members if e]
         if len(versioned) > 1:
-            newest = max(versioned, key=lambda p: p[1]["mtime"])
+            # Raw float mtime, not the minute-truncated display string - a
+            # string tie used to hand "newest" to whichever file sorted first
+            # alphabetically, which for date-stamped names is the OLDER one.
+            # Verified: two builds run seconds apart in one session compared
+            # equal under the old string key.
+            newest = max(versioned, key=lambda p: p[1]["mtime_raw"])
+            times = {r["mtime_raw"] for _e, r in versioned}
+            if len(times) < len(versioned):
+                # Still tied even at full precision - real, not hypothetical:
+                # unzip and some copy tools give every extracted file the
+                # archive's own recorded time, so a whole build's files can
+                # share one identical mtime. Guessing which is newer here
+                # would be exactly the invented value rule 1 forbids, so this
+                # says the file system cannot answer it rather than picking.
+                names = ", ".join(r["name"] for _e, r in versioned)
+                problems.append((
+                    "DUPLICATE", ident,
+                    f"{len(versioned)} editions with IDENTICAL timestamps, "
+                    f"so file time cannot say which is newer: {names}",
+                    "check the edition string in each filename by hand, or "
+                    "delete all and rebuild one"))
+                continue
             for e, r in versioned:
                 if r is not newest[1]:
                     problems.append((
@@ -284,8 +311,11 @@ def report(directory, rows, problems, log=print, deep=True):
             log(f"    [{sev}] {name}")
             log(f"        {what}")
             log(f"        -> {fix}")
-    else:
+    elif deep:
         log("\n  Nothing looks wrong.")
+    else:
+        log("\n  Nothing looks wrong in the filenames and timestamps checked "
+            "under --quick. Run without --quick to look inside the files.")
     log("")
     log("  Nothing here was changed. Removal lines are printed, not run.")
     log("")
@@ -329,7 +359,15 @@ def main(argv=None):
             if len(names) > 12:
                 print(f"    ... and {len(names) - 12} more")
         return 0
-    problems = find_problems(rows) if deep else []
+    # find_problems ALWAYS runs. DUPLICATE and STALE need only name, mtime
+    # and error - fields --quick already collects without opening a file -
+    # and the content checks (CONTAINED, EMPTY, NO SOURCE) are individually
+    # guarded to no-op on the None/empty values --quick leaves in place.
+    # Gating the whole function on `deep` used to mean a folder with the
+    # double-county-boundary bug this tool exists to catch printed "Nothing
+    # looks wrong" under --quick - a genuinely disabled check reporting a
+    # clean bill of health is worse than no check at all.
+    problems = find_problems(rows)
     report(a.dir, rows, problems, deep=deep)
     if a.json:
         with open(a.json, "w", encoding="utf-8") as fh:

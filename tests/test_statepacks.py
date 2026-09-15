@@ -5203,3 +5203,169 @@ def test_mutation_entry_names_are_unique_per_file():
         names = [n for n, _o, _w in entries]
         dupes = {n for n in names if names.count(n) > 1}
         assert not dupes, f"{path}: duplicate entry name(s) {sorted(dupes)}"
+
+
+# --------------------------------------------------------------------------
+# osm_pack cache prefix. Measured before this existed: 770 of 1,277 --only
+# subset pairs for the emergency pack collided after truncating the
+# class-name-derived prefix to 48 characters - two different queries silently
+# sharing one cache namespace.
+# --------------------------------------------------------------------------
+def test_cache_prefix_does_not_collide_across_only_subsets():
+    """The actual collision this bug produced, reproduced and pinned."""
+    import hashlib
+    a = [c for c in emg.CLASSES
+         if c[0] in ("hospitals", "nursing_homes", "fire_stations", "correctional")]
+    b = [c for c in emg.CLASSES
+         if c[0] in ("hospitals", "urgent_care", "nursing_homes",
+                    "fire_stations", "correctional")]
+    qa, qb = osp.build_query(emg.SPEC, a), osp.build_query(emg.SPEC, b)
+    assert qa != qb, "fixture no longer exercises two distinct queries"
+    pa = hashlib.sha1(qa.encode("utf-8")).hexdigest()[:10]
+    pb = hashlib.sha1(qb.encode("utf-8")).hexdigest()[:10]
+    assert pa != pb
+
+
+def test_cache_prefix_changes_when_a_selector_is_corrected():
+    """A fixed tag guess must invalidate the old cache, not read past it.
+
+    Emergency operations returned 0 on the first live run. If that selector
+    is later corrected, the class NAME does not change - only a hash of the
+    query text is guaranteed to change with it.
+    """
+    import hashlib
+    fixed_spec = {**emg.SPEC, "classes": [
+        (lay, sels, lbl) if lay != "eoc" else
+        (lay, [(("government", "=", "emergency"),)], lbl)
+        for lay, sels, lbl in emg.CLASSES]}
+    before = osp.build_query(emg.SPEC)
+    after = osp.build_query(fixed_spec)
+    assert before != after
+    ph_before = hashlib.sha1(before.encode("utf-8")).hexdigest()[:10]
+    ph_after = hashlib.sha1(after.encode("utf-8")).hexdigest()[:10]
+    assert ph_before != ph_after
+
+
+def test_cache_prefix_is_stable_for_an_unchanged_query():
+    """The point of the hash is not novelty on every run - a cache that
+    invalidates itself for no reason defeats the whole point of caching."""
+    import hashlib
+    q = osp.build_query(emg.SPEC)
+    assert (hashlib.sha1(q.encode("utf-8")).hexdigest()[:10]
+            == hashlib.sha1(q.encode("utf-8")).hexdigest()[:10])
+
+
+def test_build_state_derives_the_cache_prefix_from_query_text_not_names(monkeypatch):
+    """Pin the actual call site, not just the hash function in isolation."""
+    seen = {}
+
+    def fake_fetch_osm(state, mirrors=None, log=print, query=None, prefix=None,
+                       **kw):
+        seen["prefix"] = prefix
+        seen["query"] = query
+        return []
+
+    monkeypatch.setattr(osp.seed, "fetch_osm", fake_fetch_osm)
+    monkeypatch.setattr(osp, "clip_to_state", lambda rows, state, log=print: rows)
+    osp.build_state(emg.SPEC, "MN", "/tmp", log=lambda *a: None,
+                    only=["hospitals"])
+    import hashlib
+    q = osp.build_query(emg.SPEC, [c for c in emg.CLASSES if c[0] == "hospitals"])
+    expected = "emergency_" + hashlib.sha1(q.encode("utf-8")).hexdigest()[:10]
+    assert seen["prefix"] == expected
+    # Not a truncated join of class names.
+    assert "hospitals_urgent_care" not in seen["prefix"]
+
+
+# --------------------------------------------------------------------------
+# atak_inventory --quick and DUPLICATE. Two findings from the same audit,
+# fixed together because they are one root cause seen from two report lines:
+# find_problems() was gated on `deep`, and its "newest edition" pick used a
+# minute-truncated mtime STRING that a same-minute rebuild ties, handing
+# "newest" to whichever file sorts first alphabetically - the OLDER one for
+# a date-stamped name.
+# --------------------------------------------------------------------------
+def test_quick_mode_still_catches_the_real_double_county_incident(tmp_path):
+    """The exact scenario the module's own docstring describes.
+
+    Two editions of MN_Counties on disk. --quick used to open nothing, run no
+    checks, and print "Nothing looks wrong" - the precise incident this tool
+    was built to catch, invisible to its own fast path.
+    """
+    d = tmp_path / "overlays"
+    _mk = lambda p, b: (os.makedirs(os.path.dirname(p), exist_ok=True),
+                        open(p, "wb").write(b))
+    _mk(str(d / "MN_Counties__2026_09_13.kmz"), b"x" * 50)
+    _mk(str(d / "MN_Counties__2026_09_14.kmz"), b"y" * 90)
+    rows = ainv.scan(str(d), deep=False)
+    problems = ainv.find_problems(rows)
+    assert any(p[0] == "DUPLICATE" for p in problems), (
+        "quick mode must still catch a duplicate edition - it needs only "
+        "the filename and mtime, both already collected")
+
+
+def test_quick_mode_all_clear_states_its_own_scope(tmp_path, capsys):
+    d = tmp_path / "overlays"
+    os.makedirs(d)
+    open(d / "a.kmz", "wb").write(b"x")
+    rc = ainv.main(["--dir", str(d), "--quick"])
+    out = capsys.readouterr().out
+    assert rc == 0
+    assert "Nothing looks wrong" in out
+    assert "--quick" in out, "an all-clear from a partial check must say so"
+
+
+def test_deep_mode_all_clear_is_unqualified(tmp_path, capsys):
+    d = tmp_path / "overlays"
+    os.makedirs(d)
+    _county_kmz(str(d / "a.kmz"), ["Aitkin"], True)
+    ainv.main(["--dir", str(d)])
+    out = capsys.readouterr().out
+    assert "Nothing looks wrong.\n" in out or out.rstrip().endswith(
+        "Nothing looks wrong.")
+
+
+def test_duplicate_uses_raw_mtime_not_the_minute_truncated_string(tmp_path):
+    """Two builds seconds apart, same minute - real, not hypothetical: it
+    happened repeatedly in the session that found this bug."""
+    d = tmp_path / "overlays"
+    old_path = str(d / "P__2026_09_13.kmz")
+    new_path = str(d / "P__2026_09_14.kmz")
+    os.makedirs(d, exist_ok=True)
+    open(old_path, "wb").write(b"old")
+    open(new_path, "wb").write(b"new")
+    now = time.time()
+    # Same minute (truncated string ties) but the new one really is later.
+    os.utime(old_path, (now, now))
+    os.utime(new_path, (now + 5, now + 5))
+    rows = ainv.scan(str(d))
+    problems = ainv.find_problems(rows)
+    dup = [p for p in problems if p[0] == "DUPLICATE"]
+    assert len(dup) == 1
+    assert dup[0][1] == "P__2026_09_13.kmz"
+    assert "P__2026_09_14.kmz is newer" in dup[0][2]
+
+
+def test_duplicate_refuses_to_guess_on_a_genuine_tie(tmp_path):
+    """Some extraction tools give every file the archive's own recorded
+    time, so a whole build's files can share one identical mtime. Guessing
+    which is newer here is exactly the invented value rule 1 forbids."""
+    d = tmp_path / "overlays"
+    a, b = str(d / "P__2026_09_13.kmz"), str(d / "P__2026_09_14.kmz")
+    os.makedirs(d, exist_ok=True)
+    open(a, "wb").write(b"a")
+    open(b, "wb").write(b"b")
+    same = time.time()
+    os.utime(a, (same, same))
+    os.utime(b, (same, same))
+    problems = ainv.find_problems(ainv.scan(str(d)))
+    dup = [p for p in problems if p[0] == "DUPLICATE"]
+    assert len(dup) == 1
+    assert "IDENTICAL timestamps" in dup[0][2]
+    assert "cannot say which is newer" in dup[0][2]
+    # It must not claim EITHER specific file is the newer one - the whole
+    # point is that file time cannot answer that here.
+    assert "P__2026_09_13.kmz is newer" not in dup[0][2]
+    assert "P__2026_09_14.kmz is newer" not in dup[0][2]
+    # And it must not silently point atak-remove.sh at either file.
+    assert "atak-remove.sh" not in dup[0][3]

@@ -26,6 +26,7 @@ tag whose KEY is that whole text. Valid QL, always empty, and it reads as
 "there are no urgent care clinics in Minnesota".
 """
 import datetime as dt
+import hashlib
 import os
 import re
 import sys
@@ -447,13 +448,33 @@ def build_state(spec, state, out_dir, log=print, mirrors=None, deadline_s=None,
         chosen = [c for c in spec["classes"] if c[0] in want]
 
     log(f"[*] {state}: asking OpenStreetMap for {len(chosen)} class(es)")
+    query = build_query(spec, chosen)
     rows = seed.fetch_osm(
-        state, mirrors=mirrors, log=log, query=build_query(spec, chosen),
-        # The cache namespace includes which classes were asked for, so
-        # changing the table invalidates the tiles rather than serving answers
-        # to a question nobody is asking any more.
-        prefix=bcp.safe(spec["kind"]).lower() + "_" + bcp.safe(
-            "_".join(sorted(c[0] for c in chosen)))[:48],
+        state, mirrors=mirrors, log=log, query=query,
+        # The cache namespace is a hash of the ACTUAL QUERY TEXT, not the
+        # class names that produced it. Two defects came from doing this by
+        # class name instead:
+        #
+        # COLLISION. "hospitals_nursing_homes_fire_stations_correctional" and
+        # "hospitals_urgent_care_nursing_homes_fire_stations_correctional"
+        # both truncate to the same 48 characters. Measured across every
+        # --only subset of this pack's 11 classes: 770 of 1,277 pairs
+        # collided. Two different --only runs would silently read each
+        # other's cached tiles - a hospital query served fire-station data.
+        #
+        # STALENESS. A class name does not change when its SELECTOR does. If
+        # a tag guess turns out wrong (Emergency operations returned 0 on the
+        # first try) and the selector is corrected, the class name "eoc" is
+        # identical before and after, so the fix would silently keep reading
+        # the old query's cached tiles - passing "0 problems" while still
+        # answering yesterday's question.
+        #
+        # A hash of the query text has neither problem: it is fixed-length
+        # (no truncation to collide on) and it changes the instant the query
+        # does. This is the same fix repeater_diagnose.py already made for
+        # its own version of this exact trap.
+        prefix=bcp.safe(spec["kind"]).lower() + "_" + hashlib.sha1(
+            query.encode("utf-8")).hexdigest()[:10],
         parse=lambda t, lon, lat, f, el: parse_element(spec, t, lon, lat, f, el),
         allow_partial=allow_partial,
         deadline_s=deadline_s or seed.OSM_DEADLINE_S,
