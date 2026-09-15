@@ -9,10 +9,14 @@ sources:
     id: pipelines@eia-gas
     provider: eia
     entity: pipeline
-    driver: arcgis
-    url: https://geo.dot.gov/server/rest/services/Hosted/Natural_Gas_Pipelines_US_EIA/FeatureServer
-    layer_id: 0
-    spatial: bbox
+    driver: file
+    # geo.dot.gov's "Hosted" copy 404'd 2026-09-15 (confirmed by CI) - USDOT
+    # appears to have retired this whole ArcGIS "Hosted" pipeline group (see
+    # pipelines@eia-crude/eia-hgl below, same host, same day). Promoted the
+    # bulk-shapefile alternate that was already documented here: same host
+    # and path convention as eia-products, which CI confirms still answers.
+    url: https://www.eia.gov/maps/map_data/NaturalGas_InterIntrastate_Pipelines_US_EIA.zip
+    format: shp
     group_by: [type]
     name: "{operator} {substance}"
     fields:
@@ -21,20 +25,26 @@ sources:
       operator: {from: [Operator]}
       status: {from: [Status]}
     style: {color: "ffff00aa", width: 2}
-    source_name: "EIA Natural Gas Interstate and Intrastate Pipelines (USDOT BTS NTAD mirror)"
+    source_name: "EIA Natural Gas Interstate and Intrastate Pipelines (bulk shapefile)"
     source_url: https://atlas.eia.gov/datasets/eia::natural-gas-interstate-and-intrastate-pipelines/about
     notes: "Major transmission pipelines only. No diameter/capacity attributes in the public layer"
-    confidence: high
+    confidence: medium
     alternates:
-      - {driver: file, url: "https://www.eia.gov/maps/map_data/NaturalGas_InterIntrastate_Pipelines_US_EIA.zip", note: "EIA bulk shapefile"}
+      - {driver: arcgis, url: "https://geo.dot.gov/server/rest/services/Hosted/Natural_Gas_Pipelines_US_EIA/FeatureServer", layer_id: 0, note: "DEAD 2026-09-15 - 404 Service not found; was the primary. geo.dot.gov appears to have retired its Hosted pipeline mirrors"}
 
   - layer: pipelines
     id: pipelines@eia-crude
     provider: eia-crude
     entity: pipeline
-    driver: arcgis
-    url: https://geo.dot.gov/server/rest/services/hosted/Crude_Oil_Pipelines_US_EIA/FeatureServer
-    layer_id: 0
+    driver: file
+    # Same geo.dot.gov retirement as eia-gas above (404 confirmed 2026-09-15).
+    # This replacement was not independently fetched - found via three
+    # separate search queries all resolving to the identical filename,
+    # following the exact eia.gov/maps/map_data/<Substance>_Pipelines_US_EIA.zip
+    # convention already confirmed live for eia-gas and eia-products. Spot-check
+    # with `overlaybuilder probe` on a connected device before trusting it fully.
+    url: https://www.eia.gov/maps/map_data/CrudeOil_Pipelines_US_EIA.zip
+    format: shp
     spatial: bbox
     title: "pipelines (crude oil)"
     name: "{name} - crude oil"
@@ -43,10 +53,12 @@ sources:
       name: {from: [Pipename, PIPENAME, Pipeline, Name]}
       operator: {from: [Operator, Opername]}
     style: {color: "ff2020c0", width: 2}
-    source_name: "EIA Crude Oil Pipelines (USDOT BTS NTAD mirror)"
+    source_name: "EIA Crude Oil Pipelines (bulk shapefile)"
     source_url: https://atlas.eia.gov/datasets/eia::crude-oil-pipelines/about
-    notes: "Capacity (b/d) is only in EIA's separate liquids pipeline projects table"
+    notes: "Capacity (b/d) is only in EIA's separate liquids pipeline projects table. URL found by search, not yet directly fetch-confirmed - see comment above"
     confidence: medium
+    alternates:
+      - {driver: arcgis, url: "https://geo.dot.gov/server/rest/services/hosted/Crude_Oil_Pipelines_US_EIA/FeatureServer", layer_id: 0, note: "DEAD 2026-09-15 - 404 Service not found; was the primary"}
 
   - layer: pipelines
     id: pipelines@eia-hgl
@@ -56,6 +68,7 @@ sources:
     url: https://geo.dot.gov/server/rest/services/hosted/HGL_Pipelines_US_EIA/FeatureServer
     layer_id: 0
     spatial: bbox
+    enabled: false
     title: "pipelines (HGL / NGL)"
     name: "{name} - HGL"
     fields:
@@ -65,7 +78,8 @@ sources:
     style: {color: "ffc000c0", width: 2}
     source_name: "EIA Hydrocarbon Gas Liquids Pipelines (USDOT BTS NTAD mirror)"
     source_url: https://atlas.eia.gov/datasets/eia::hydrocarbon-gas-liquids-hgl-pipelines/about
-    confidence: high
+    notes: "HOST DEAD 2026-09-15: geo.dot.gov returns 404 Service not found, same as the sibling gas/crude pipeline entries in this file, which USDOT appears to have retired together. Unlike those two, no eia.gov/maps/map_data bulk-zip filename for HGL/NGL was found by search (tried HGL_Pipelines_US_EIA.zip and Hydrocarbon_Gas_Liquids_Pipelines_US_EIA.zip - no hits). Disabled until a real replacement is confirmed live"
+    confidence: dead
 
   - layer: pipelines
     id: pipelines@eia-products
@@ -122,21 +136,26 @@ sources:
   - layer: gas_storage
     id: gas_storage@eia
     provider: eia
-    driver: arcgis
-    url: https://services7.arcgis.com/FGr1D95XCGALKXqM/arcgis/rest/services/Natural_Gas_Underground_Storage/FeatureServer
-    layer_id: 39
-    spatial: bbox
+    driver: file
+    # ArcGIS FeatureServer (services7.arcgis.com/FGr1D95XCGALKXqM/.../layer_id
+    # 39) returned 499 Token Required in CI 2026-09-15 - the same org as the
+    # power_plants@eia "_Testing" service that failed the same way the same
+    # day (see energy_electric.yaml); a prior search summary had already
+    # flagged this one as token-gated. Promoted the bulk-zip alternate this
+    # catalog was already carrying for exactly this case.
+    url: https://www.eia.gov/maps/map_data/NaturalGas_UndergroundStorage_US_EIA.zip
+    format: shp
     group_by: [type]
     fields:
       name: {from: [Field, FIELD, Name, Site]}
       type: {from: [Type, TYPE, Storage_Type, Reservoir]}
       operator: {from: [Operator, Owner, Company]}
-    source_name: "EIA Natural Gas Underground Storage (Form EIA-191)"
+    source_name: "EIA Natural Gas Underground Storage (Form EIA-191, bulk shapefile)"
     source_url: https://atlas.eia.gov/datasets/beffe709475c45909ff7423426ccb220_39/about
-    notes: "One search summary reported this endpoint as token-gated; if it errors, switch to the bulk zip alternate"
+    notes: "ArcGIS FeatureServer mirror DEAD 2026-09-15 (499 Token Required in CI); promoted to the bulk zip this catalog already listed as a fallback"
     confidence: medium
     alternates:
-      - {driver: file, url: "https://www.eia.gov/maps/map_data/NaturalGas_UndergroundStorage_US_EIA.zip"}
+      - {driver: arcgis, url: "https://services7.arcgis.com/FGr1D95XCGALKXqM/arcgis/rest/services/Natural_Gas_Underground_Storage/FeatureServer", layer_id: 39, note: "DEAD 2026-09-15 - 499 Token Required; was the primary"}
 
   - layer: lng_terminals
     id: lng_terminals@eia
@@ -191,6 +210,7 @@ sources:
     url: https://services7.arcgis.com/FGr1D95XCGALKXqM/arcgis/rest/services/Ethanol_Plants_US_EIA/FeatureServer
     layer_id: 112
     spatial: bbox
+    enabled: false
     name: "{name} ({capacity_mgy})"
     fields:
       name: {from: [Site, Plant, Name, Company]}
@@ -198,8 +218,8 @@ sources:
       operator: {from: [Company, Operator]}
     source_name: "EIA Ethanol Plants (Form EIA-819)"
     source_url: https://atlas.eia.gov/datasets/eia::ethanol-plants/about
-    notes: "Locations researched from public sources (approximate); capacity in million gal/yr"
-    confidence: high
+    notes: "HOST DEAD 2026-09-15: services7.arcgis.com/FGr1D95XCGALKXqM returns 499 Token Required in CI, same org as the sibling gas_storage FeatureServer above and power_plants@eia's old '_Testing' primary (energy_electric.yaml) - looks like one org-wide lockdown, not three separate failures. Searched for a eia.gov/maps/map_data bulk-zip replacement (Ethanol_Plants_US_EIA.zip, EthanolPlants_US_EIA.zip) - no hits; only a non-EIA third-party mirror (gispublic.waterboards.ca.gov) turned up, not used here per the provenance rule. Disabled until a real EIA replacement is confirmed live. Locations were researched from public sources (approximate); capacity in million gal/yr"
+    confidence: dead
 
   - layer: biodiesel_plants
     id: biodiesel_plants@eia

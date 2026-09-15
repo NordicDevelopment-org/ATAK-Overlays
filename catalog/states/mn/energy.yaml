@@ -14,7 +14,10 @@ sources:
     layer_id: 0
     spatial: bbox
     hidden: true
+    enabled: false
     source_name: "Minnesota Electric Utility Service Areas (MN PUC via MnGeo)"
     source_url: https://gisdata.mn.gov/dataset/util-eusa
-    notes: "Field names not verified - read with `overlaybuilder probe <url>/0`; defaults map NAME/UTILITY/etc. automatically"
-    confidence: medium
+    notes: "HOST DEAD 2026-09-15: app.gisdata.mn.gov no longer resolves (DNS failure, reproduced independently) - not blocked, not IPv6. The EUSA dataset itself is still active (gisdata.mn.gov/dataset/util-eusa, last modified 2025-07-22); only this hostname is gone. Candidate replacement feat.gisdata.mn.gov carries the identical /arcgis/rest/services/EUSA/EUSA/FeatureServer path per search-index evidence and resolves via DNS, but has NOT been probed live from a connected device - confirm with `overlaybuilder probe https://feat.gisdata.mn.gov/arcgis/rest/services/EUSA/EUSA/FeatureServer/0` before promoting it to primary. Field names still unverified either way"
+    confidence: dead
+    alternates:
+      - {driver: arcgis, url: "https://feat.gisdata.mn.gov/arcgis/rest/services/EUSA/EUSA/FeatureServer", layer_id: 0, note: "UNCONFIRMED candidate replacement for the dead app.gisdata.mn.gov host - same service path, resolves via DNS, but no live probe run yet (sandbox egress policy blocks *.gisdata.mn.gov)"}

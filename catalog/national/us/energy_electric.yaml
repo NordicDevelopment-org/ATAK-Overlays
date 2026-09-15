@@ -16,7 +16,17 @@ sources:
     provider: eia
     entity: power_plant
     driver: arcgis
-    url: https://services7.arcgis.com/FGr1D95XCGALKXqM/arcgis/rest/services/Power_Plants_Testing/FeatureServer
+    # The org's own service name says "_Testing" - never a stable production
+    # endpoint - and it started returning 499 Token Required 2026-09-15,
+    # confirmed by CI. Promoted the fedmaps mirror below (already the first
+    # alternate) to primary: independently confirmed live on two federal
+    # hosts (ArcGIS Hub + FEMA's Geospatial Resource Center mirroring the
+    # same item id), matching schema, and already the exact URL
+    # statepacks/build_power_pack.py uses to build a real, verified 782-plant
+    # Minnesota pack (docs/PLAN.md 2.1). The old primary is kept below as a
+    # dead alternate for the record, per the alternate-endpoint-rewrites-
+    # provenance rule.
+    url: https://services2.arcgis.com/FiaPA4ga0iQKduv3/arcgis/rest/services/Power_Plants_in_the_US/FeatureServer
     layer_id: 0
     where_by_aoi:
       state: "State = '{state_name}'"        # EIA stores the full state name
@@ -29,15 +39,15 @@ sources:
       nameplate_mw: {from: [Install_MW]}     # installed / nameplate
       fuel: {from: [PrimSource]}
       technology: {from: [tech_desc]}
-      operator: {from: [Utility_Name]}
+      operator: {from: [Utility_Name, Utility_Na]}   # this mirror truncates to 10 chars
       source_id: {from: [Plant_Code]}
-      type: {from: [sector_name]}
-    source_name: "EIA U.S. Energy Atlas - Power Plants (operable, >= 1 MW)"
+      type: {from: [sector_name, sector_nam]}        # same truncation
+    source_name: "EIA U.S. Energy Atlas - Power Plants (operable, >= 1 MW), Esri fedmaps mirror"
     source_url: https://atlas.eia.gov/datasets/eia::power-plants/about
-    notes: "Per-fuel MW columns (Coal_MW, NG_MW, Nuclear_MW, Hydro_MW, HydroPS_MW, Solar_MW, Wind_MW, Bat_MW, Bio_MW, Geo_MW, Crude_MW, Other_MW) ride in the source-attribute table; Period = data vintage. Monthly-quarterly refresh from EIA-860M"
+    notes: "Per-fuel MW columns (Coal_MW, NG_MW, Nuclear_MW, Hydro_MW, HydroPS_MW, Solar_MW, Wind_MW, Bat_MW, Bio_MW, Geo_MW, Crude_MW, Other_MW) ride in the source-attribute table; Period = data vintage. Monthly-quarterly refresh from EIA-860M. Esri fedmaps copy, checked monthly; shapefile-truncated names (Utility_Na, sector_nam) - both the full and truncated spellings are mapped above since a 10-char DBF truncation is not a case or punctuation difference the field lookup's three passes would otherwise catch"
     confidence: high
     alternates:
-      - {driver: arcgis, url: "https://services2.arcgis.com/FiaPA4ga0iQKduv3/arcgis/rest/services/Power_Plants_in_the_US/FeatureServer", layer_id: 0, note: "Esri fedmaps copy, checked monthly; shapefile-truncated names (Utility_Na, sector_nam)"}
+      - {driver: arcgis, url: "https://services7.arcgis.com/FGr1D95XCGALKXqM/arcgis/rest/services/Power_Plants_Testing/FeatureServer", layer_id: 0, note: "DEAD 2026-09-15 - 499 Token Required; was the primary until this org's service name (\"_Testing\") and lockdown made clear it was never meant to be one. Kept for the record"}
       - {driver: file, url: "https://www.eia.gov/maps/map_data/PowerPlants_US_EIA.zip", note: "bulk shapefile, same schema"}
       - {driver: file, url: "https://atlas.eia.gov/api/download/v1/items/bf5c5110b1b944d299bb683cdbd02d2a/geojson?layers=0", note: "Hub GeoJSON export"}
 

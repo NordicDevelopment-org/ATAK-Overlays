@@ -40,8 +40,51 @@ KML_NS = "http://www.opengis.net/kml/2.2"
 ET.register_namespace("", KML_NS)
 
 
-def _tag(name):
-    return f"{{{KML_NS}}}{name}"
+def _local(tag):
+    """An element's tag with any {namespace} prefix stripped."""
+    return tag.rsplit("}", 1)[-1]
+
+
+def _same_ns_tag(sibling, name):
+    """A qualified tag using the SAME namespace as `sibling` (or none) - for
+    a new child that must not look mismatched next to elements this
+    placemark already carries from its own source file."""
+    if sibling.tag.startswith("{"):
+        return f"{sibling.tag.split('}', 1)[0]}}}{name}"
+    return name
+
+
+def _child(parent, name):
+    """First DIRECT child matching `name`, in ANY namespace or none.
+
+    A merge input is not obligated to be kml/2.2 to be real KML - an older
+    Google Earth export (2.0, 2.1) or a generator that skips xmlns entirely
+    are both valid, and hardcoding 2.2 made every lookup below miss on such
+    a file. Nothing raised: doc.find() just returned None for name,
+    description, every Style, every Placemark - a whole file silently read
+    as empty, which is worse than an error naming it.
+    """
+    for el in parent:
+        if _local(el.tag) == name:
+            return el
+    return None
+
+
+def _descendant(parent, name):
+    """First matching element anywhere under `parent` (not `parent` itself),
+    any namespace - coordinates sits inside Point/LineString/Polygon, itself
+    a child of the placemark, so a shallow search would miss it."""
+    for el in parent.iter():
+        if el is not parent and _local(el.tag) == name:
+            return el
+    return None
+
+
+def _all(parent, name):
+    """Every matching element anywhere under `parent`, any namespace -
+    Style/Placemark/etc can sit at any depth inside Document/Folder
+    nesting."""
+    return [el for el in parent.iter() if _local(el.tag) == name]
 
 
 def read_pack(path):
@@ -79,31 +122,28 @@ def read_pack(path):
         out["error"] = f"not parseable XML: {ex}"
         return out
 
-    doc = root.find(_tag("Document"))
+    doc = _child(root, "Document")
     if doc is None:
         doc = root
-    n = doc.find(_tag("name"))
+    n = _child(doc, "name")
     out["doc_name"] = (n.text or "").strip() if n is not None else ""
-    d = doc.find(_tag("description"))
+    d = _child(doc, "description")
     out["description"] = (d.text or "").strip() if d is not None else ""
-    for st in doc.iter(_tag("Style")):
-        out["styles"].append(st)
-    for st in doc.iter(_tag("StyleMap")):
-        out["styles"].append(st)
-    out["placemarks"] = list(doc.iter(_tag("Placemark")))
+    out["styles"] = _all(doc, "Style") + _all(doc, "StyleMap")
+    out["placemarks"] = _all(doc, "Placemark")
     return out
 
 
 def fields_of(placemark):
     """{key: value} from ExtendedData, both Data and SimpleData spellings."""
     out = {}
-    for data in placemark.iter(_tag("Data")):
+    for data in _all(placemark, "Data"):
         key = data.get("name")
         if not key:
             continue
-        val = data.find(_tag("value"))
+        val = _child(data, "value")
         out[key] = (val.text or "").strip() if val is not None else ""
-    for sd in placemark.iter(_tag("SimpleData")):
+    for sd in _all(placemark, "SimpleData"):
         key = sd.get("name")
         if key:
             out[key] = (sd.text or "").strip()
@@ -111,12 +151,12 @@ def fields_of(placemark):
 
 
 def name_of(placemark):
-    n = placemark.find(_tag("name"))
+    n = _child(placemark, "name")
     return (n.text or "").strip() if n is not None else ""
 
 
 def coords_of(placemark):
-    c = placemark.find(".//" + _tag("coordinates"))
+    c = _descendant(placemark, "coordinates")
     return (c.text or "").strip() if c is not None else ""
 
 
@@ -249,9 +289,9 @@ def merge(packs, name, label=None, folder_by=None, log=print):
             if new is None:
                 skipped += 1
                 continue
-            node = pm.find(_tag("name"))
+            node = _child(pm, "name")
             if node is None:
-                node = ET.SubElement(pm, _tag("name"))
+                node = ET.SubElement(pm, _same_ns_tag(pm, "name"))
             node.text = new
             relabelled += 1
         log(f"    {relabelled} placemark(s) relabelled")

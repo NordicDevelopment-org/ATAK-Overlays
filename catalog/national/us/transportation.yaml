@@ -141,21 +141,24 @@ sources:
     provider: bts
     url: https://services.arcgis.com/xOi1kZaI0eWDREZv/arcgis/rest/services/NTAD_Principal_Ports/FeatureServer
     layer_id: 0
+    enabled: false
     fields:
       name: {from: [PORT_NAME, port_name, NAME]}
       type: {from: [TYPE, type]}
     source_name: "USDOT BTS NTAD - Principal Ports"
     source_url: https://geodata.bts.gov/
-    notes: "Service name follows the NTAD_<Name> pattern - confirm with probe"
-    confidence: medium
+    notes: "HOST DEAD 2026-09-15 (confirmed by CI): \"400 Invalid URL\" - ArcGIS Online's way of saying no service by this name exists in this org. Search of the org's indexed contents found no NTAD_Principal_Ports and nothing close enough to call a typo - the dataset itself is still current per BTS/geodata.bts.gov, just not under this name/org anymore. The documented alternate below is on the same geo.dot.gov Hosted/<Name>_DS FeatureServer group that USDOT retired wholesale 2026-09-15 (see the eia-gas/eia-crude/eia-hgl pipeline entries and rail_facilities@ntad-intermodal in this same catalog, same host, same day), so it is likely also dead, not a working fallback. Disabled pending a live probe. Service name follows the NTAD_<Name> pattern - confirm with probe"
+    confidence: dead
     alternates:
-      - {driver: arcgis, url: "https://geo.dot.gov/server/rest/services/Hosted/Principal_Ports_DS/FeatureServer", layer_id: 0}
+      - {driver: arcgis, url: "https://geo.dot.gov/server/rest/services/Hosted/Principal_Ports_DS/FeatureServer", layer_id: 0, note: "Same geo.dot.gov Hosted/<Name>_DS group retired 2026-09-15 elsewhere in this catalog - likely also dead, unconfirmed"}
+      - {driver: arcgis, url: "https://geo.dot.gov/server/rest/services/hosted/principal_ports_view/FeatureServer", layer_id: 0, note: "UNCONFIRMED candidate found by search (different name, no _DS suffix) - not independently fetched"}
 
   - layer: rail_facilities
     id: rail_facilities@ntad-intermodal
     provider: bts-intermodal
     url: https://geo.dot.gov/server/rest/services/Hosted/Intermodal_Freight_Facilities_Rail_TOFC_COFC_DS/FeatureServer
     layer_id: 0
+    enabled: false
     title: "rail_facilities (intermodal)"
     hidden: true
     fields:
@@ -163,4 +166,7 @@ sources:
       owner: {from: [RAILROAD]}
     source_name: "USDOT BTS NTAD - Intermodal Freight Facilities (Rail TOFC/COFC)"
     source_url: https://geodata.bts.gov/
-    confidence: low
+    notes: "HOST DEAD 2026-09-15 (confirmed by CI): geo.dot.gov/server/rest/services/Hosted/... returns 404 Service not found, the same 'Hosted' ArcGIS group USDOT appears to have retired wholesale (see the eia-gas/eia-crude/eia-hgl pipeline entries and ports@ntad in this catalog, same host, same day). The dataset itself is still current per BTS/geodata.bts.gov. Search surfaced a same-name candidate under a different context root, geo.dot.gov/mapping/rest/services/NTAD/Intermodal_Freight_Facilities_Rail_TOFC_COFC/MapServer, but a sibling in that same NTAD/ folder (Ports_Major/MapServer/0) came back \"Application Error\" in the search index, so that layout isn't uniformly healthy either - not confirmed live, not written in as primary. This entry has no alternates: to fall back on, unlike its two live rail_facilities siblings. Disabled until a real replacement is confirmed live"
+    confidence: dead
+    alternates:
+      - {driver: arcgis, url: "https://geo.dot.gov/mapping/rest/services/NTAD/Intermodal_Freight_Facilities_Rail_TOFC_COFC/MapServer", note: "UNCONFIRMED candidate found by search (different context root/folder, MapServer not FeatureServer) - not independently fetched; a sibling service in the same folder errors, so treat with caution"}

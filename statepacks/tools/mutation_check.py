@@ -97,6 +97,10 @@ MUTATIONS = {
          "                        if not lock.acquire(blocking=False):"),
         ("report our own scheduling as a mirror failure",
          "raise MirrorsBusy(", "raise RuntimeError("),
+        ("give up on a tile whose mirrors are cooling from a SIBLING tile's "
+         "429 instead of waiting it out like a personally rate-limited one",
+         'if not state["limited"] and not saw_cooldown:',
+         'if not state["limited"]:'),
         ("serve a tile cache entry regardless of age",
          "if hit and _cache_fresh(hit[1], ttl_days):", "if hit:"),
         ("let the record order depend on how the fetch was carved up",
@@ -435,6 +439,15 @@ MUTATIONS = {
          "    provenance = [live[0][\"description\"]]\n    for p in []:"),
         ("scan a list per placemark instead of hashing ids",
          "        kept = {id(pm) for pm in placemarks}", "        kept = placemarks"),
+        ("require an exact namespace match again, so a non-kml/2.2 input "
+         "file reads as if it had no name, no placemarks and no styles",
+         '    return tag.rsplit("}", 1)[-1]', "    return tag"),
+        ("assume kml/2.2 for a brand-new <name> instead of matching the "
+         "nameless placemark's own namespace",
+         "    if sibling.tag.startswith(\"{\"):\n"
+         "        return f\"{sibling.tag.split('}', 1)[0]}}}{name}\"\n"
+         "    return name",
+         '    return f"{{http://www.opengis.net/kml/2.2}}{name}"'),
     ],
     EMG: [
         ("import every layer switched on, however dense",

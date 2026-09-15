@@ -57,8 +57,8 @@ endpoints, and backs off on 429/504. For a whole country or the planet use the
 
 | layer | source | endpoint | rating fields | conf. | status |
 |---|---|---|---|---|---|
-| power_plants | EIA U.S. Energy Atlas - Power Plants | `services7.arcgis.com/FGr1D95XCGALKXqM/.../Power_Plants_Testing/FeatureServer/0` | Total_MW (net summer), Install_MW (nameplate), per-fuel *_MW, PrimSource, tech_desc | high | live, monthly-quarterly |
-| power_plants (alt) | Esri fedmaps copy | `services2.arcgis.com/FiaPA4ga0iQKduv3/.../Power_Plants_in_the_US/FeatureServer/0` | Total_MW, Install_MW | high | live |
+| power_plants | Esri fedmaps copy (promoted to primary 2026-09-15; old `Power_Plants_Testing` primary now `enabled: false` 499 Token Required) | `services2.arcgis.com/FiaPA4ga0iQKduv3/.../Power_Plants_in_the_US/FeatureServer/0` | Total_MW (net summer), Install_MW (nameplate), per-fuel *_MW, PrimSource, tech_desc | high | live |
+| power_plants (alt, dead) | EIA U.S. Energy Atlas - Power Plants | `services7.arcgis.com/FGr1D95XCGALKXqM/.../Power_Plants_Testing/FeatureServer/0` | same | high | dead 2026-09-15, 499 Token Required |
 | power_plants (alt) | EIA bulk shapefile | `eia.gov/maps/map_data/PowerPlants_US_EIA.zip` | same | medium | live |
 | generators | EIA-860M monthly generator XLSX (stdlib xlsx reader; month auto-resolved) | `eia.gov/electricity/data/eia860m/xls/<month>_generator<YYYY>.xlsx` | Nameplate Capacity (MW), Net Summer Capacity (MW), Technology, Status, Operating Year; Plant ID = Plant_Code | medium | live, monthly |
 | nuclear_reactors | FEMA / NRC reactor status | `gis.fema.gov/arcgis/rest/services/Partner/Nuclear_Plant_Power_Reactor_Status/FeatureServer/0` | power (% daily), epz10m, epz50m | high | live, daily |
@@ -67,24 +67,24 @@ endpoints, and backs off on 429/504. For a whole country or the planet use the
 | substations | HIFLD third-party mirror | `services.arcgis.com/G4S1dGvn7PIgYd6Y/.../HIFLD_electric_power_substations/FeatureServer` | MAX_VOLT, MIN_VOLT, LINES, TYPE (TAP = line tap) | low | frozen, vintage unknown |
 | service_territories (off) | HIFLD ERST via NASA mirror | `.../hifld_open/energy/FeatureServer/26` | SUMMR_PEAK, WINTR_PEAK (MW), CUSTOMERS | medium | frozen |
 | rto_regions (off) | EIA RTO Regions | `services7.arcgis.com/FGr1D95XCGALKXqM/ArcGIS/rest/services/RTO_Regions/FeatureServer/0` | - | medium | live |
-| pipelines (gas) | EIA via BTS NTAD | `geo.dot.gov/server/rest/services/Hosted/Natural_Gas_Pipelines_US_EIA/FeatureServer/0` | TYPEPIPE, Operator, Status | high | live |
-| pipelines (crude) | EIA via BTS NTAD | `geo.dot.gov/.../hosted/Crude_Oil_Pipelines_US_EIA/FeatureServer/0` | Operator | medium | live |
-| pipelines (HGL) | EIA via BTS NTAD | `geo.dot.gov/.../hosted/HGL_Pipelines_US_EIA/FeatureServer/0` | Operator | high | live |
+| pipelines (gas) | EIA bulk shapefile (promoted to primary 2026-09-15; geo.dot.gov `Hosted` primary now a dead alternate) | `eia.gov/maps/map_data/NaturalGas_InterIntrastate_Pipelines_US_EIA.zip` | TYPEPIPE, Operator, Status | medium | live |
+| pipelines (crude) | EIA bulk shapefile (promoted 2026-09-15; search-found, not yet directly fetch-confirmed) | `eia.gov/maps/map_data/CrudeOil_Pipelines_US_EIA.zip` | Operator | medium | unconfirmed |
+| pipelines (HGL) | EIA via BTS NTAD | `geo.dot.gov/.../hosted/HGL_Pipelines_US_EIA/FeatureServer/0` | Operator | dead | disabled 2026-09-15, 404 Service not found, no replacement found |
 | pipelines (products) | EIA bulk shapefile | `eia.gov/maps/map_data/PetroleumProduct_Pipelines_US_EIA.zip` | Operator | medium | live |
 | compressor_stations | HIFLD via NASA mirror | `.../hifld_open/energy/FeatureServer/6` | none (no HP) | medium | frozen |
 | gas_processing | EIA bulk shapefile | `eia.gov/maps/map_data/NaturalGas_ProcessingPlants_US_EIA.zip` | Cap_MMcfd, Plant_Flow | medium | live |
-| gas_storage | EIA Atlas | `services7.arcgis.com/FGr1D95XCGALKXqM/.../Natural_Gas_Underground_Storage/FeatureServer/39` | working gas (Bcf) | medium | live (may need token; zip alt) |
+| gas_storage | EIA bulk shapefile (promoted to primary 2026-09-15; ArcGIS FeatureServer now a dead alternate, 499 Token Required) | `eia.gov/maps/map_data/NaturalGas_UndergroundStorage_US_EIA.zip` | working gas (Bcf) | medium | live |
 | lng_terminals | EIA bulk shapefile | `eia.gov/maps/map_data/LNG_ImportExportTerminals_US_EIA.zip` | Bcf/d capacities | medium | live |
 | refineries | EIA bulk shapefile | `eia.gov/maps/map_data/Petroleum_Refineries_US_EIA.zip` | AD_Mbpd (x1000 = b/d), VDist_Mbpd | high | live, annual |
 | fuel_terminals | EIA bulk shapefile | `eia.gov/maps/map_data/PetroleumProduct_Terminals_US_EIA.zip` | storage bbl | medium | live |
-| ethanol_plants | EIA Atlas | `services7.arcgis.com/FGr1D95XCGALKXqM/.../Ethanol_Plants_US_EIA/FeatureServer/112` | Cap_Mmgal | high | live, annual |
+| ethanol_plants | EIA Atlas | `services7.arcgis.com/FGr1D95XCGALKXqM/.../Ethanol_Plants_US_EIA/FeatureServer/112` | Cap_Mmgal | dead | disabled 2026-09-15, 499 Token Required, no bulk-zip replacement found |
 | biodiesel_plants | EIA bulk shapefile | `eia.gov/maps/map_data/Biodiesel_Plants_US_EIA.zip` | Cap_Mmgal | medium | live |
 | fuel_stations (off) | NREL/AFDC alt-fuel API | `developer.nrel.gov/api/alt-fuel-stations/v1.geojson?api_key=...` | EV ports, fuel types | medium | live, key required |
 | dams | USACE National Inventory of Dams CSV | `nid.sec.usace.army.mil/api/nation/csv` | NID Height (Ft), Max Storage (Acre-Ft), Hazard Potential Classification, Condition Assessment | high | live |
 | levees, leveed_areas | USACE National Levee Database | `geospatial.sec.usace.army.mil/dls/rest/services/NLD/Public/FeatureServer/15,16` | SYSTEM_NAME | medium | live |
 | wastewater_treatment | EPA FRS / ICIS-NPDES | `geodata.epa.gov/arcgis/rest/services/OEI/FRS_Wastewater/MapServer/1` | CWP_TOTAL_DESIGN_FLOW_NMBR (MGD), CWP_FACILITY_TYPE_INDICATOR | high | live |
 | water_service_areas | EPA CWS Service Area Boundaries | `services.arcgis.com/cJ9YHowT8TU7DUyn/.../Water_System_Boundaries/FeatureServer/0` | Population Served Count | medium | live |
-| comm_towers | FCC Antenna Structure Registration (weekly) | `data.fcc.gov/download/pub/uls/complete/r_tower.zip` | height AGL/AMSL (m), structure type, owner, status | high | live, weekly |
+| comm_towers | FCC Antenna Structure Registration (weekly) | `data.fcc.gov/download/pub/uls/complete/r_tower.zip` | height AGL/AMSL (m), structure type, owner, status | dead | disabled 2026-09-15, 403 Forbidden, may be transient bot-defense - needs on-device check |
 | comm_towers (cellular) | HIFLD-derived FCC ULS extract, Esri Federal User Community | `services2.arcgis.com/FiaPA4ga0iQKduv3/.../Cellular_Towers_in_the_United_States/FeatureServer/0` | LICENSEE, CALLSIGN, ALLSTRUC (m) | medium | frozen |
 | comm_towers (microwave) | HIFLD 2019 snapshot, NASA NCCS re-host | `maps.nccs.nasa.gov/mapping/rest/services/hifld_open/communications/FeatureServer` (microwave_service_towers) | allstruc, supstruc (m) | medium | frozen |
 | psap | HIFLD PSAP 911 service-area polygons, NASA re-host | `.../hifld_open/emergency_services/FeatureServer` (psap) | - | medium | frozen |
@@ -99,15 +99,15 @@ endpoints, and backs off on 429/504. For a whole country or the planet use the
 | correctional | HIFLD Prison Boundaries, NASA re-host | `.../hifld_open/law_enforcement/FeatureServer` (prison_boundaries) | CAPACITY, POPULATION, SECURELVL | medium | frozen |
 | eoc | FEMA State EOCs | `gis.fema.gov/arcgis/rest/services/FEMA/STATE_EOC/FeatureServer/0` | - | high | live |
 | eoc (local) | HIFLD Local EOCs, NASA re-host | `.../hifld_open/emergency_services/FeatureServer` (local_emergency_ops_centers) | - | low | frozen, no successor |
-| shelters | FEMA National Shelter System facilities | `gis.fema.gov/arcgis/rest/services/NSS/NSS_flex_facilities/FeatureServer` | EVACUATION_CAPACITY, POST_IMPACT_CAPACITY | medium | live |
+| shelters | FEMA National Shelter System facilities | `gis.fema.gov/arcgis/rest/services/NSS/NSS_flex_facilities/FeatureServer` | EVACUATION_CAPACITY, POST_IMPACT_CAPACITY | dead | disabled 2026-09-15, 500 service not started; two unconfirmed successor candidates added as alternates |
 | schools | NCES EDGE public schools 2023-24 | `nces.ed.gov/opengis/rest/services/K12_School_Locations/EDGE_GEOCODE_PUBLICSCH_2324/MapServer/0` | - | high | live |
 | schools (colleges) | NCES EDGE postsecondary (IPEDS) | `services1.arcgis.com/Ua5sjt3LWTPigjyD/.../Postsecondary_School_Locations_Current/FeatureServer/0` | - | high | live |
 | airports | FAA ADDS Airports | `services6.arcgis.com/ssFJjBXIUyZDrSYZ/.../US_Airport/FeatureServer/0` | TYPE_CODE, ELEVATION, OPERSTATUS | high | live |
 | railways | BTS NTAD North American Rail Network Lines | `services.arcgis.com/xOi1kZaI0eWDREZv/.../NTAD_North_American_Rail_Network_Lines/FeatureServer/0` | RROWNER1, TRACKS, NET, MILES | high | live (Apr 2026) |
-| rail_facilities | NTAD Rail Yards, Amtrak Stations, Intermodal (TOFC/COFC) | `.../NTAD_Rail_Yards/0`, `.../NTAD_Amtrak_Stations/0`, `geo.dot.gov/.../Intermodal_Freight_Facilities_Rail_TOFC_COFC_DS/0` | MILES, STNTYPE | medium-high | live |
+| rail_facilities | NTAD Rail Yards, Amtrak Stations (still live) + Intermodal TOFC/COFC (dead) | `.../NTAD_Rail_Yards/0`, `.../NTAD_Amtrak_Stations/0` live; `geo.dot.gov/.../Intermodal_Freight_Facilities_Rail_TOFC_COFC_DS/0` disabled 2026-09-15, 404, part of USDOT's wholesale `Hosted` group retirement | MILES, STNTYPE | medium-high | yards/amtrak live, intermodal dead |
 | rail_crossings | NTAD Railroad Grade Crossings (FRA) | `.../NTAD_Railroad_Grade_Crossings/FeatureServer/0` | POSXING, TYPEXING | medium | live (schema changed summer 2026) |
 | bridges | FHWA NBI via NTAD | `.../NTAD_National_Bridge_Inventory/FeatureServer/0` (name pattern; alt geo.dot.gov `_DS`) | YEAR_BUILT_027, ADT_029, condition | medium | live |
-| ports | BTS NTAD Principal Ports | `.../NTAD_Principal_Ports/FeatureServer/0` (name pattern; alt geo.dot.gov `_DS`) | - | medium | live |
+| ports | BTS NTAD Principal Ports | `.../NTAD_Principal_Ports/FeatureServer/0` (name pattern; alt geo.dot.gov `_DS`) | - | dead | disabled 2026-09-15, 400 Invalid URL (service no longer under this org); the `_DS` alt is on the same retired `Hosted` group, likely also dead |
 | roads, county/state/city boundaries | Census TIGER/Line | `www2.census.gov/geo/tiger/TIGER2024/...` | RTTYP, MTFCC | high | live, annual |
 | building_footprints | OSM via Overpass (county scale) | - | - | high | live |
 
@@ -139,13 +139,13 @@ them on. `overlaybuilder doctor --aoi <aoi> --include-disabled` tests them.
 
 | state | layer | source | endpoint | conf. |
 |---|---|---|---|---|
-| MN | service_territories | MN PUC Electric Utility Service Areas (MnGeo) | `app.gisdata.mn.gov/arcgis/rest/services/EUSA/EUSA/FeatureServer/0` | medium |
+| MN | service_territories | MN PUC Electric Utility Service Areas (MnGeo) | `app.gisdata.mn.gov/arcgis/rest/services/EUSA/EUSA/FeatureServer/0` | dead - disabled 2026-09-15, DNS failure (host no longer resolves); dataset still active per gisdata.mn.gov, unconfirmed candidate `feat.gisdata.mn.gov` added as alternate |
 | MN | wastewater_treatment | MPCA Wastewater Facilities | `enterprise.gisdata.mn.gov/aghost/rest/services/us_mn_state_pca/util_wastewater_facilities/FeatureServer/0` | medium |
 | MN | dams | MN DNR Inventory of Dams (GeoPackage) | `resources.gisdata.mn.gov/pub/gdrs/data/pub/us_mn_state_dnr/struc_mn_dams_inventory_pub/gpkg_struc_mn_dams_inventory_pub.zip` | medium |
 | WI | service_territories | WI PSC Electric Service Territories (3 layers) | `maps.psc.wi.gov/server/rest/services/Electric/PSC_ElectricServiceTerritories/MapServer/0-2` | high |
 | WI | dams | WI DNR Repository of Dams | `dnrmaps.wi.gov/arcgis2/rest/services/WT_DAM/WT_Dam_WTM_Ext/MapServer` | medium |
 | IA | wastewater_treatment | Iowa DNR NPDES facilities | `programs.iowadnr.gov/geospatial/rest/services/OneStop/QueryEnvFacs/MapServer/12` | medium |
-| IA | fire_stations, hospitals, shelters, schools | Iowa HSEMD EmergencyManagement service | `eoc.iowa.gov/arcgis/rest/services/Public/EmergencyManagement/MapServer` (FireStations, Hospital, Shelter, School) | medium |
+| IA | fire_stations, hospitals, shelters, schools | Iowa HSEMD EmergencyManagement service | `eoc.iowa.gov/arcgis/rest/services/Public/EmergencyManagement/MapServer` (FireStations, Hospital, Shelter, School) | dead - disabled 2026-09-15, timed out on 2 separate CI runs an hour apart after answering fine on the run before that |
 | WI | hospitals, nursing_homes | WI DHS Facilities | `dhsgis.wi.gov/server/rest/services/DHS_GIS/Facilities/MapServer` (Hospital 5, Nursing Home 4) | high |
 | WI | ems | WI DHS licensed EMS services | `dhsgis.wi.gov/server/rest/services/DHS_RAFT/Emergency_Management_Resources/MapServer/0` | medium |
 | MN | fire_stations, police, hospitals (off) | U-Spatial / MnGeo datasets - resolve service URL from gis.data.mn.gov | see `catalog/states/mn/emergency.yaml` | low |
