@@ -391,9 +391,14 @@ def main(argv=None):
     problems = find_problems(rows)
     report(a.dir, rows, problems, deep=deep)
     if a.json:
+        # pm_names is a set in every row - fine for the <= subset test
+        # contained_in() runs on it, not fine for json.dump, which raises on
+        # a set with no mention of which field, so --json crashed on every
+        # inventory that had read a single file.
+        jsonable = [dict(r, pm_names=sorted(r["pm_names"])) for r in rows]
         with open(a.json, "w", encoding="utf-8") as fh:
             json.dump({"dir": a.dir, "scanned": time.strftime("%Y-%m-%d"),
-                       "files": rows,
+                       "files": jsonable,
                        "problems": [{"severity": s, "file": n, "what": w,
                                      "fix": f} for s, n, w, f in problems]},
                       fh, indent=1, ensure_ascii=False)

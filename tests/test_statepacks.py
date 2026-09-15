@@ -5541,6 +5541,25 @@ def test_deep_mode_all_clear_is_unqualified(tmp_path, capsys):
         "Nothing looks wrong.")
 
 
+def test_json_output_survives_a_row_with_placemark_names(tmp_path):
+    """Every row carries pm_names as a set (cheap for the <= subset test
+    contained_in() runs on it) - json.dump raises on a set with no mention
+    of which field, so --json crashed on every inventory that had read even
+    one file with a placemark in it."""
+    d = tmp_path / "overlays"
+    os.makedirs(d)
+    _county_kmz(str(d / "a.kmz"), ["Aitkin", "Anoka"], True)
+    out_json = tmp_path / "out.json"
+    rc = ainv.main(["--dir", str(d), "--json", str(out_json)])
+    assert rc == 0
+    doc = json.loads(out_json.read_text(encoding="utf-8"))
+    names = doc["files"][0]["pm_names"]
+    assert isinstance(names, list)
+    assert sorted(names) == names, "written non-deterministically ordered"
+    assert set(names) == {ainv.normal_name("Aitkin County"),
+                          ainv.normal_name("Anoka County")}
+
+
 def test_duplicate_uses_raw_mtime_not_the_minute_truncated_string(tmp_path):
     """Two builds seconds apart, same minute - real, not hypothetical: it
     happened repeatedly in the session that found this bug."""

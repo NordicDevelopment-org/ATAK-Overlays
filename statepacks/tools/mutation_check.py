@@ -346,6 +346,14 @@ MUTATIONS = {
          "    pass"),
         ("count placemarks in quick mode, which never opened the file",
          "    if not deep:\n        return out", "    if False:\n        return out"),
+        ("hand json.dump a set of placemark names, which it cannot serialize",
+         '        jsonable = [dict(r, pm_names=sorted(r["pm_names"])) for r in rows]\n'
+         '        with open(a.json, "w", encoding="utf-8") as fh:\n'
+         '            json.dump({"dir": a.dir, "scanned": time.strftime("%Y-%m-%d"),\n'
+         '                       "files": jsonable,',
+         '        with open(a.json, "w", encoding="utf-8") as fh:\n'
+         '            json.dump({"dir": a.dir, "scanned": time.strftime("%Y-%m-%d"),\n'
+         '                       "files": rows,'),
     ],
     DUP: [
         ("sweep only the overlays folder, which is the bug it exists for",
