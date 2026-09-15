@@ -4,7 +4,7 @@
   overlaybuilder build --aoi state:MN --sectors energy    # state-wide energy layers
   overlaybuilder build --aoi region:upper-midwest --layers power_plants substations transmission_lines
   overlaybuilder build --aoi us --layers power_plants     # national
-  overlaybuilder build --aoi country:CA --sectors energy  # world tier (OSM)
+  overlaybuilder build --aoi country:CA --sectors energy  # world tier (OSM); CA = Canada here
   overlaybuilder build --aoi bbox:-93.2,45.3,-92.6,45.8
   overlaybuilder sources --aoi county:27025               # what would build
   overlaybuilder doctor  --aoi county:27025               # probe every endpoint, report dead ones
