@@ -12,3 +12,14 @@ venv/
 .DS_Store
 demo/
 doctor.md
+
+# Locally fetched/verified enrichment data - never committed, never conflicts
+statepacks/data/*.local.csv
+
+# Coverage output and tool caches
+.coverage
+.coverage.*
+htmlcov/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/

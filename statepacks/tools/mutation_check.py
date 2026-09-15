@@ -1,0 +1,660 @@
+#!/usr/bin/env python3
+"""Mutation-test the statepacks builders: break one behaviour, run the suite,
+put it back. A mutation that leaves every test green means that behaviour is
+not actually tested, however many tests mention it.
+
+    python3 statepacks/tools/mutation_check.py          # both files
+    python3 statepacks/tools/mutation_check.py seed     # just the seeder
+    python3 statepacks/tools/mutation_check.py build    # just the pack builder
+
+Every entry is a rule this project cares about, written as the mistake: "pad a
+missing county code into a fake FIPS", "show a missing value instead of
+omitting it", "answer a 429 by splitting the tile". Six of these survived when
+they were first written - among them "if no sheriff phone, then don't", which
+nothing was checking, and OSM_JOBS = 1, which quietly undoes the whole point of
+fetching tiles concurrently.
+
+IT REVERTS WITH `git checkout --`, so it refuses to run against uncommitted
+changes and restores the file in a finally. It has eaten uncommitted work once;
+that is why both guards are here.
+
+A `finally` does not run when the process is KILLED, so a `timeout`, a Ctrl-C
+or a closed terminal used to leave a deliberately-broken file in the tree -
+which happened, leaving build_county_pack.py with the "__" boundary removed and
+a stop-hook asking to commit it. SIGTERM and SIGINT now restore before exiting,
+and a run that dies some other way leaves `git checkout -- <file>` as the fix.
+This takes minutes: do not wrap it in a short `timeout`.
+
+Add an entry whenever you fix something that a test should have caught. The
+question it answers is not "is there a test for this" but "would the test fail
+if the behaviour went away".
+"""
+import re
+import signal
+import subprocess
+import sys
+
+SEED = "statepacks/seed_le_contacts.py"
+BUILD = "statepacks/build_county_pack.py"
+INV = "statepacks/atak_inventory.py"
+DUP = "statepacks/atak_find_dupes.py"
+SYM = "statepacks/symbology.py"
+EMG = "statepacks/build_emergency_pack.py"
+MPK = "statepacks/merge_packs.py"
+OSP = "statepacks/osm_pack.py"
+RPT = "statepacks/repeater_diagnose.py"
+NWR = "statepacks/build_nwr_pack.py"
+PWR = "statepacks/build_power_pack.py"
+GLY = "statepacks/glyphs.py"
+REP = "statepacks/build_repeater_pack.py"
+
+MUTATIONS = {
+    SEED: [
+        ("truncate the file before the new content is fully written",
+         "    fd, tmp = tempfile.mkstemp(dir=directory, "
+         'prefix=".le_contacts.", suffix=".part")',
+         '    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC); tmp = path'),
+        ("leave a half-written temp file behind on a crash",
+         "        try:\n            os.unlink(tmp)\n        except OSError:\n            pass\n        raise",
+         "        raise"),
+        ("ask Overpass the ArcGIS ?f=json question instead of real QL",
+         '    query = "[out:json][timeout:10];out count;"',
+         '    query = None  # placeholder'),
+        ("give up on the first OSM mirror instead of trying every one",
+         "    for url in OVERPASS_MIRRORS:",
+         "    for url in OVERPASS_MIRRORS[:1]:"),
+        ("route the non-ArcGIS source through the ArcGIS-shaped probe anyway",
+         '        if src["layer_re"] is None:',
+         "        if False:"),
+        ("let a hard --source osm choice silently fall back to USGS",
+         '                    if a.source != "auto" or not state_use_osm:',
+         "                    if False:"),
+        ("push every state in an --all run onto USGS after one OSM failure",
+         "                state_use_osm = use_osm",
+         "                state_use_osm = use_osm if a.source != \"auto\" else False"),
+        ("let an invalid query reach the network",
+         "    validate_query(query or OSM_QUERY)", "    pass"),
+        ("cache an Overpass remark error as an empty tile",
+         "            if bad is not None:\n                raise bad",
+         "            if False:\n                raise bad"),
+        ("lose a good response when the cache write fails",
+         "                    except OSError as ex:",
+         "                    except ZeroDivisionError as ex:"),
+        ("cut the socket at the server's own timeout",
+         "want = timeout + OSM_SOCKET_SLACK", "want = timeout"),
+        ("fetch tiles one at a time after all",
+         "OSM_JOBS = 3", "OSM_JOBS = 1"),
+        ("unwire --jobs and --no-split",
+         "jobs=args.jobs,\n                         shapes=shapes, "
+         "split=not args.no_split,", "shapes=shapes,"),
+        ("unwire --refresh-shapes",
+         "county_shapes(sfp, refresh=a.refresh_shapes,",
+         "county_shapes(sfp, refresh=False,"),
+        ("wait on a busy mirror instead of skipping it",
+         "                    if phase == 0:\n"
+         "                        if not lock.acquire(blocking=False):",
+         "                    if False:\n"
+         "                        if not lock.acquire(blocking=False):"),
+        ("report our own scheduling as a mirror failure",
+         "raise MirrorsBusy(", "raise RuntimeError("),
+        ("serve a tile cache entry regardless of age",
+         "if hit and _cache_fresh(hit[1], ttl_days):", "if hit:"),
+        ("let the record order depend on how the fetch was carved up",
+         "elements.sort(key=lambda p: _element_key(p[0]))", "    pass"),
+        ("report a never-fetched county as 'not in the source'",
+         'uncovered=coverage.get("uncovered") or ()', "uncovered=()"),
+        ("answer a 429 by splitting the tile",
+         "if k in bad and not isinstance(bad[k], (TimeoutError, MirrorsBusy,\n"
+         "                                                     RateLimited))]",
+         "if k in bad and not isinstance(bad[k], (TimeoutError, MirrorsBusy))]"),
+        ("re-earn one tile's 429 with every other tile",
+         "                if cool(url) > 0:", "                if False:"),
+        ("lower the server timeout that was measured to work",
+         "OSM_SERVER_TIMEOUT_S = 90", "OSM_SERVER_TIMEOUT_S = 30"),
+        ("read a city PD's name as if it were the county's",
+         "    return bool(county_name) and county_name.lower() in agency.lower()",
+         "    return True"),
+        ("call one county's own name a vocabulary term",
+         "def discover_terms(unmatched, match, county_names, min_counties=2,",
+         "def discover_terms(unmatched, match, county_names, min_counties=1,"),
+        ("print every window onto one term as a separate finding",
+         "        if any(n == m and (g in k or k in g) for k, m in kept):",
+         "        if False:"),
+        ("only ever test Minnesota's vocabulary against another state",
+         "    found = discover_terms(\n"
+         '        {g: [r["agency"] for r in by_county[g]] for g in unmatched},'
+         "\n        match, names)",
+         "    found = []"),
+        ("require the second f, and lose Clark County WI",
+         'SHERIFF_RX = r"sherr?if"', 'SHERIFF_RX = r"sherr?iff"'),
+        ("call a record with no name at all widenable",
+         "    unmatched = sorted(g for g in geoids if g not in chosen and named(g))",
+         "    unmatched = sorted(g for g in geoids if g not in chosen and by_county.get(g))"),
+        ("miss a two-edit typo, which is the only kind there is",
+         "def near_misses(unmatched, chosen, county_names, min_len=6, limit=2):",
+         "def near_misses(unmatched, chosen, county_names, min_len=6, limit=1):"),
+        ("report a city PD's typo as the county's",
+         "            if not is_county_level(a, county_names.get(geoid, \"\")):\n"
+         "                continue\n"
+         "            for w in re.split",
+         "            if False:\n"
+         "                continue\n"
+         "            for w in re.split"),
+        ("serve one query's cached tiles to a different query",
+         'return os.path.join(CACHE_DIR, f"osm_{prefix}_{key}.json")',
+         'return os.path.join(CACHE_DIR, f"osm_police_{key}.json")'),
+        ("ignore the caller's query and always ask about police",
+         "    q = (query or OSM_QUERY).format(timeout=timeout, s=s_, w=w, n=n, e=e)",
+         "    q = OSM_QUERY.format(timeout=timeout, s=s_, w=w, n=n, e=e)"),
+        ("drop the caller's parse and hand back police rows",
+         "        if parse is not None:", "        if False:"),
+        ("unwire --gaps-dump",
+         "                            dump=a.gaps_dump)", "                            dump=None)"),
+        ("unpack _overpass_tile's 3-tuple into two names, so --show --raw "
+         "against osm silently reports every tile as empty",
+         "                els, from_cache, _fetched = _overpass_tile(",
+         "                els, from_cache = _overpass_tile("),
+    ],
+    REP: [
+        ("let a 4x join fan-out through as real repeaters",
+         "        k = _key(f)\n        if k in exact:", "        k = id(f)\n        if k in exact:"),
+        ("stop collapsing whitespace-only duplicates",
+         "        k = _key(f, squash=True)", "        k = _key(f)"),
+        ("rewrite the kept record with the squashed value",
+         "    if isinstance(value, str):\n"
+         '        return re.sub(r"\\s+", " ", value).strip()',
+         "    if isinstance(value, str):\n        return value"),
+        ("call one coordinate in two towns a normal two-entry site",
+         "        (two_towns if len(cities) > 1 else same_town).append(",
+         "        (same_town if True else two_towns).append("),
+        ("drop the contested entries instead of reporting them",
+         "    kept, n_marked = mark_contested(kept)",
+         "    kept = [f for f in kept if True]; n_marked = 0"),
+        ("keep the disputed position out of the popup",
+         '        ("Position disputed",', '        ("_unused",'),
+        ("hide a real two-town stack behind a third entry at another point",
+         "    for ident, group in sorted(by.items()):\n        by_coord = {}",
+         "    for ident, group in sorted(by.items()):\n"
+         "        if len({json.dumps((f.get('geometry') or {}).get('coordinates'))"
+         "\n                for f in group}) != 1:\n"
+         "            continue\n        by_coord = {}"),
+        ("let build() key its icon set on an unnormalized mode",
+         "    modes = sorted({norm_mode((f.get('properties') or {}).get('mode'))\n"
+         "                    for f in feats})",
+         "    modes = sorted({str((f.get('properties') or {}).get('mode') or 'unknown')\n"
+         "                    for f in feats})"),
+        ("call a confirmed non-dispute missing data in the popup",
+         "    missing = [label for label, value, note in rows\n"
+         '               if not value and label != "Position disputed"]',
+         "    missing = [label for label, value, note in rows if not value]"),
+        ("let repeater provenance silently fall back to a plausible-looking string",
+         '    ap.add_argument("--source", required=True,',
+         '    ap.add_argument("--source", default="",'),
+    ],
+    GLY: [
+        ("skip size normalization, so glyphs clip and sit unevenly",
+         "    subs = normalize(GLYPHS[name]())", "    subs = GLYPHS[name]()"),
+        ("normalize to an extent that clips the outline",
+         "GLYPH_EXTENT = 1.66", "GLYPH_EXTENT = 1.95"),
+        ("stretch a glyph to fill the box, losing its aspect ratio",
+         "    longest = max(w, h)", "    longest = min(w, h)"),
+        ("fall back to a circle for a glyph nobody defined",
+         '        raise KeyError(f"unknown glyph {name!r}. Known: '
+         "{', '.join(glyph_names())}\")",
+         '        subs = GLYPHS["bolt"]()'),
+        ("go back to growing a glyph's outline from the origin, which misses "
+         "its own fill on anything not star-shaped about the centre",
+         "    fill = _coverage(subs, n)\n"
+         "    radius = max(1, round(OUTLINE_MARGIN * n / 2))\n"
+         "    grown = _dilate(fill, n, radius)",
+         "    fill = _coverage(subs, n)\n"
+         "    grown = _coverage([[(x * 1.14, y * 1.14) for x, y in sp] "
+         "for sp in subs], n)"),
+        ("render every glyph in sheet() a second time just to throw it away",
+         "    names = glyph_names()\n"
+         "    # Decoding our own PNGs back would be silly; render straight "
+         "to a canvas",
+         "    names = glyph_names()\n"
+         "    _wasted = [render(nm, (255, 209, 64), size) for nm in names]\n"
+         "    # Decoding our own PNGs back would be silly; render straight "
+         "to a canvas"),
+    ],
+    PWR: [
+        ("key the icon filename on the glyph shape instead of the fuel",
+         '        icons.setdefault(f"icons/{style_id(fuel)}.png", glyphs.render(name, rgb))',
+         '        icons.setdefault(f"icons/{name}.png", glyphs.render(name, rgb))'),
+        ("point a fuel's <Style> at the glyph-named icon instead of its own",
+         'f"<Icon><href>icons/{style_id(fuel)}.png</href></Icon>"',
+         'f"<Icon><href>icons/{style_for(fuel)[0]}.png</href></Icon>"'),
+        ("read an ArcGIS error body as zero features instead of raising",
+         '        if "error" in page:\n            raise RuntimeError('
+         'f"EIA service returned an error: {page[\'error\']}")',
+         "        pass"),
+        ("keep paging past a short page instead of stopping",
+         "        if len(feats) < EIA_PAGE:\n            break",
+         "        if False:\n            break"),
+        ("point an icon at a server the field tablet cannot reach",
+         '                   f"<Icon><href>icons/{style_id(fuel)}.png</href></Icon>"',
+         '                   f"<Icon><href>http://maps.google.com/mapfiles/kml/'
+         'shapes/electronics.png</href></Icon>"'),
+        ("reference icons without putting them in the zip",
+         "    size = bcp.write_kmz(path, kml, icons)", "    size = bcp.write_kmz(path, kml)"),
+        ("merge nameplate and summer capacity into one number",
+         '        ("Nameplate capacity", f"{nameplate:,.1f} MW" if nameplate is not None else ""),\n'
+         '        ("Max summer capacity", f"{summer:,.1f} MW" if summer is not None else ""),',
+         '        ("Capacity", f"{nameplate:,.1f} MW" if nameplate is not None else ""),'),
+        ("turn an unparseable capacity into zero",
+         "    except (TypeError, ValueError):\n        return None",
+         "    except (TypeError, ValueError):\n        return 0.0"),
+        ("let 519 solar sites import switched on",
+         '    hidden = fuel not in DEFAULT_ON', "    hidden = False"),
+        ("replace EIA's reporting period with the build date",
+         'f"EIA reporting period: {bcp.esc(str(p.get(\'Period\') or \'not stated\'))}<br/>"',
+         'f"EIA reporting period: {bcp.esc(meta[\'built\'])}<br/>"'),
+        ("turn a plant's unreported nameplate into a 0 that --min-mw then "
+         "silently drops",
+         "        feats = [f for f, mw in zip(feats, mws) if mw is None or mw >= min_mw]",
+         "        feats = [f for f, mw in zip(feats, mws) if (mw or 0) >= min_mw]"),
+    ],
+    NWR: [
+        ("claim today's date for an old --from-file snapshot",
+         '    data_as_of = meta.get("data_as_of", meta.get("built", ""))',
+         '    data_as_of = meta.get("built", "")'),
+        ("stop marking a from-file snapshot as unverified",
+         '    as_of_note = ("" if meta.get("data_verified_live", True)',
+         '    as_of_note = ("" if True'),
+        ("use today's date instead of the file's own mtime for --as-of",
+         "            data_as_of = dt.date.fromtimestamp(mtime).isoformat()",
+         "            data_as_of = dt.date.today().isoformat()"),
+        ("find the first bracket instead of the cclData assignment",
+         r'    m = re.search(r"var\s+cclData\s*=\s*(\[.*\])\s*;?\s*$", text,',
+         r'    m = re.search(r"(\[.*\])", text,'),
+        ("print the site twice when the source repeats itself",
+         "    if nm and loc and nm.lower() != loc.lower():",
+         "    if nm and loc:"),
+        ("place a transmitter that has no coordinate",
+         "    except (TypeError, ValueError):\n"
+         "        return None                       # no coordinate, no point. Not guessed.",
+         "    except (TypeError, ValueError):\n        lat, lon = 0.0, 0.0"),
+        ("hide an out-of-service transmitter among the working ones",
+         '        status = str(s.get("status") or "UNKNOWN").strip().upper() or "UNKNOWN"',
+         '        status = "NORMAL"'),
+        ("pick the transmitter icon's colour locally instead of from "
+         "symbology's shared table, so it drifts from broadcast_towers'",
+         '    icons = {"icons/broadcast.png": glyphs.render(\n'
+         '        symbology.glyph_for("nwr_transmitters"),\n'
+         '        symbology.colour_for("nwr_transmitters"))}',
+         '    icons = {"icons/broadcast.png": glyphs.render('
+         '"broadcast", (255, 209, 64))}'),
+    ],
+    RPT: [
+        ("anchor the query on a parent key the data does not carry",
+         '    "communication:amateur_radio:repeater:frequency_out",\n'
+         '    "communication:amateur_radio:repeater:frequency_in",',
+         '    "communication:amateur_radio:repeater",'),
+        ("let a generic key anchor a statewide query",
+         'TOO_GENERIC = ("name", "official_name",', 'TOO_GENERIC = ("zzz",'),
+        ("keep one cache namespace across a changed query",
+         '    h = hashlib.sha1(query.encode("utf-8")).hexdigest()[:8]\n'
+         "    return f\"repeaters{'_deep' if deep else ''}_{h}\"",
+         '    return "repeaters"'),
+    ],
+    INV: [
+        ("require a bare Placemark tag, missing an attributed one",
+         '                       re.findall(r"<Placemark\\b[^>]*>.*?<name>\\s*"',
+         '                       re.findall(r"<Placemark>.*?<name>\\s*"'),
+        ("drop back to plain-text-only names, missing CDATA",
+         '                                  r"(?:<!\\[CDATA\\[)?(.*?)(?:\\]\\]>)?\\s*</name>",',
+         '                                  r"([^<]{1,80})</name>",'),
+        ("gate every check on --quick, so a real duplicate reports clean",
+         "    problems = find_problems(rows)", "    problems = find_problems(rows) if deep else []"),
+        ("pick newest by the minute-truncated string, not the raw float",
+         '            newest = max(versioned, key=lambda p: p[1]["mtime_raw"])',
+         '            newest = max(versioned, key=lambda p: p[1]["mtime"])'),
+        ("guess a winner on a genuine mtime tie instead of saying so",
+         "            times = {r[\"mtime_raw\"] for _e, r in versioned}\n"
+         "            if len(times) < len(versioned):",
+         "            if False:"),
+        ("print a progress line long enough to wrap a phone terminal",
+         '            print(f"\\r  reading {i}/{total}   ", end="", file=sys.stderr,',
+         '            print(f"\\r  reading {i}/{total} {os.path.basename(path)[:40]:<40}", end="", file=sys.stderr,'),
+        ("open every file in the folder to answer a filtered name query",
+         "             and (not only or only.lower() in n.lower())]",
+         "             ]"),
+        ("stop folding a trailing state suffix, so two spellings never match",
+         '    n = re.sub(r",\\s*[A-Za-z]{2}\\s*$", "", n).lower()',
+         "    n = n.lower()"),
+        ("read every file with no sign of progress, so it looks hung",
+         "    show = sys.stderr.isatty()", "    show = False"),
+        ("spray a progress line into redirected output",
+         "    show = sys.stderr.isatty()", "    show = True"),
+        ("stop noticing a pack whose placemarks are all inside another",
+         "    for inner, outer, n in contained_in(rows):",
+         "    for inner, outer, n in []:"),
+        ("compare placemark names raw, so 'Aitkin' never matches 'Aitkin County'",
+         '    n = re.sub(r"\\b(county|co|parish|borough|city|of|the)\\b", " ", n)',
+         "    n = n"),
+        ("report identical packs as contained, which deletes the layer",
+         "            if outer[\"pm_names\"] <= a:          # identical, not contained\n"
+         "                continue",
+         "            pass"),
+        ("read one underscore as the version boundary",
+         '        ident, _, edition = stem.partition("__")',
+         '        ident, _, edition = stem.partition("_")'),
+        ("call the inventory's findings a licence to delete",
+         '    log("  Nothing here was changed. Removal lines are printed, not run.")',
+         "    pass"),
+        ("count placemarks in quick mode, which never opened the file",
+         "    if not deep:\n        return out", "    if False:\n        return out"),
+        ("hand json.dump a set of placemark names, which it cannot serialize",
+         '        jsonable = [dict(r, pm_names=sorted(r["pm_names"])) for r in rows]\n'
+         '        with open(a.json, "w", encoding="utf-8") as fh:\n'
+         '            json.dump({"dir": a.dir, "scanned": time.strftime("%Y-%m-%d"),\n'
+         '                       "files": jsonable,',
+         '        with open(a.json, "w", encoding="utf-8") as fh:\n'
+         '            json.dump({"dir": a.dir, "scanned": time.strftime("%Y-%m-%d"),\n'
+         '                       "files": rows,'),
+    ],
+    DUP: [
+        ("sweep only the overlays folder, which is the bug it exists for",
+         'ROOTS = ["/storage/emulated/0/atak", "/sdcard/atak"]',
+         'ROOTS = ["/storage/emulated/0/atak/overlays"]'),
+        ("drop a stale edition from the report when a byte-copy exists",
+         '        if "__" not in f["name"] or f["sha"] in first_of_sha:',
+         '        if "__" not in f["name"] or f["sha"] in first_of_sha '
+         'or f["sha"] in same_bytes:'),
+        ("call two files of the same name an edition pair",
+         '        if "__" not in f["name"] or f["sha"] in first_of_sha:',
+         '        if f["sha"] in first_of_sha:'),
+        ("follow a symlinked root twice",
+         "                real = os.path.realpath(path)",
+         "                real = path"),
+    ],
+    OSP: [
+        ("scope classify() to the full table even under --only",
+         '    scoped_spec = {**spec, "classes": chosen} if only else spec',
+         "    scoped_spec = spec"),
+        ("quote key and value as one string, the bug that returns nothing",
+         '        return f\'["{key}"="{value}"]\'',
+         '        return f\'["{key}={value}"]\''),
+        ("let (?i) reach the Overpass server as literal text",
+         '        return f\'["{key}"~"{value[4:]}",i]\'',
+         '        return f\'["{key}"~"{value}"]\''),
+        ("accept an empty selector, which matches the whole bounding box",
+         '    if not selector:\n        raise ValueError("empty selector matches everything")',
+         "    if False:\n        pass"),
+        ("treat a multi-clause selector as satisfied by its first clause",
+         "    for key, op, value in selector:", "    for key, op, value in selector[:1]:"),
+        ("file an unmatched element under the first class instead of dropping it",
+         "    return None\n\n\ndef check_spec(spec):",
+         "    return spec[\"classes\"][0][0]\n\n\ndef check_spec(spec):"),
+        ("drop empty folders, so nothing found looks like nothing asked",
+         "        folders.append(", "        if not group:\n            continue\n        folders.append("),
+        ("skip the offline class check before a 6-17 minute live run",
+         "    problems = check_spec(spec)\n    if problems:", "    problems = []\n    if problems:"),
+        ("stop validating the query in the offline check",
+         "        seed.validate_query(build_query(spec))", "        pass"),
+        ("write the bounding box in Overpass Turbo syntax, which every mirror 400s",
+         '    box = "({s:.4f},{w:.4f},{n:.4f},{e:.4f})"', '    box = "({{bbox}})"'),
+        ("report a zero for every class, including ones nobody asked for",
+         '    asked = classes if classes is not None else spec["classes"]',
+         '    asked = spec["classes"]'),
+        ("stop naming the classes that were skipped",
+         '    skipped = [lbl for lay, _s, lbl in spec["classes"]',
+         '    skipped = [] and [lbl for lay, _s, lbl in spec["classes"]'),
+        ("set visibility on the folder only, so it imports off and renders on",
+         "        body = \"\".join(placemark(spec, r, style_id, visible=not hidden)\n"
+         "                       for r in group)",
+         "        body = \"\".join(placemark(spec, r, style_id) for r in group)"),
+        ("skip the clip, so the pack carries the neighbouring states",
+         "    rows = clip_to_state(rows, state, log=log)", "    pass"),
+        ("file a point outside every county under the last one tested",
+         "        if geoid is None:\n            dropped += 1\n            continue",
+         "        if geoid is None:\n            geoid = index[0][0]"),
+        ("clip after counting, so the report includes the neighbours",
+         "    rows = clip_to_state(rows, state, log=log)\n"
+         "    report(spec, rows, log=log, classes=chosen)",
+         "    report(spec, rows, log=log, classes=chosen)\n"
+         "    rows = clip_to_state(rows, state, log=log)"),
+        ("trust the bounding box instead of the polygon",
+         "            if any(seed.point_in_polygon(x, y, rings) for rings in polys):",
+         "            if True:"),
+    ],
+    MPK: [
+        ("write a half-filled label, which reads as a real one",
+         "        if v is None or v == \"\":\n            return None",
+         "        if v is None or v == \"\":\n            values[key] = \"\"; continue"),
+        ("sort folders lexicographically, putting 115 kV before 69 kV",
+         '    m = re.match(r"\\s*(-?\\d+(?:\\.\\d+)?)", label)\n'
+         '    return (0, float(m.group(1)), "") if m else (1, 0.0, label.lower())',
+         "    return (0, 0.0, label.lower())"),
+        ("drop features missing the folder field instead of naming them",
+         '    return value.strip() or missing', "    return value.strip()"),
+        ("claim one provenance for a merge of several sources",
+         "    provenance = []\n    for p in live:",
+         "    provenance = [live[0][\"description\"]]\n    for p in []:"),
+        ("scan a list per placemark instead of hashing ids",
+         "        kept = {id(pm) for pm in placemarks}", "        kept = placemarks"),
+    ],
+    EMG: [
+        ("import every layer switched on, however dense",
+         'DEFAULT_OFF = {"schools", "government"}', "DEFAULT_OFF = set()"),
+    ],
+    SYM: [
+        ("give nuclear the same symbol as everything else",
+         '    "nuclear":        ("trefoil",  (255, 240, 60)),',
+         '    "nuclear":        ("bolt",     (255, 240, 60)),'),
+        ("give two sectors the same colour",
+         '    "Communications":     (170, 230, 140),   # green',
+         '    "Communications":     (255, 209, 64),    # green'),
+        ("hang a point icon on a line layer",
+         '    "pipelines":           (None,         "Energy - Oil & Gas", "line"),',
+         '    "pipelines":           ("pipeline",   "Energy - Oil & Gas", "line"),'),
+        ("stop checking that the table covers the catalog",
+         "    missing = catalog_layers(path) - set(LAYERS)",
+         "    missing = set()  # catalog_layers(path) - set(LAYERS)"),
+        ("name a glyph that was never drawn",
+         '    "dams":                ("dam",        "Water",              "point"),',
+         '    "dams":                ("dam_icon",   "Water",              "point"),'),
+    ],
+    BUILD: [
+        ("ignore the --census-key argument during --probe",
+         "    k = census_key(census_key_arg)", "    k = census_key()"),
+        ("drop the __ identity/version boundary from filenames",
+         'f"{state_abbr}_Counties__{edition(stamp, kml)}.kmz"',
+         'f"{state_abbr}_Counties_{edition(stamp, kml)}.kmz"'),
+        ("stamp the filename with the date alone, as it was",
+         '    return f"{safe(str(built).replace(\'-\', \'_\'))}_{h.hexdigest()[:6]}"',
+         '    return safe(str(built).replace("-", "_"))'),
+        ("digest only the kml, leaving a changed icon invisible",
+         "    for name, data in sorted((icons or {}).items()):\n"
+         "        h.update(name.encode(\"utf-8\"))\n"
+         "        h.update(data)",
+         "    pass"),
+        ("pad a missing county code into a fake FIPS",
+         "    return None\n\n\ndef county_label(props):",
+         '    return (sfp or "00") + (cfp or "000")\n\n\ndef county_label(props):'),
+        ("append ' County' to every name",
+         '    for key in ("NAMELSAD", "NAME"):\n        v = p.get(key)\n'
+         "        if v:\n            return str(v).strip()",
+         '    for key in ("NAMELSAD", "NAME"):\n        v = p.get(key)\n'
+         '        if v:\n            return str(v).strip() + " County"'),
+        ("stop stripping XML-illegal control characters",
+         '    s = _XML_ILLEGAL.sub("", str(s))', "    s = str(s)"),
+        ("stop paging on the server's own limit flag",
+         "                if not batch or not more:", "                if True:"),
+        ("hardcode the TIGER vintage",
+         '    m = re.search(r"/(\\d+)/?$", url)',
+         '    return "2024"\n    m = re.search(r"/(\\d+)/?$", url)'),
+        ("show a missing value instead of omitting it",
+         "    present = [(label, sv) for label, sv in rows if sv]",
+         "    present = list(rows)"),
+        ("drop the grey provenance tag",
+         '            line += f\' <font color="{GREY}">[{esc(tag)}]</font>\'',
+         "            pass"),
+        ("stop bolding the value",
+         '        line = f"{esc(label)}: <b>{esc(value)}</b>"',
+         '        line = f"{esc(label)}: {esc(value)}"'),
+        ("use the projected area instead of ALAND",
+         "        def area(label, *keys):\n            for key in keys:",
+         '        def area(label, *keys):\n'
+         '            keys = ("SHAPE__AREA",) + tuple(keys)\n'
+         "            for key in keys:"),
+        ("ignore the .local.csv overlay",
+         '    for name in (filename, f"{stem}.local.csv"):',
+         "    for name in (filename,):"),
+        ("let one county name become the pack's descriptor",
+         '    if len(uniq) < 2:\n        return ""',
+         '    if len(uniq) < 0:\n        return ""'),
+    ],
+}
+
+TESTS = ["tests/test_statepacks.py", "tests/test_kmz.py"]
+# Roughly 5x a normal ~22s uncontested run. A mutation that hangs the whole
+# suite (an unbounded mock with no failure path, paired with a mutation that
+# removes its only stopping condition) is the worst outcome this harness can
+# hit - not a clean pass - and a subprocess call with no bound at all is how
+# that turned into an observed multi-minute, multi-gigabyte runaway process
+# that read as "0 test(s) fail".
+FAILURES_TIMEOUT_S = 120
+
+
+def failures():
+    """Count of pytest failures, or None if the run never produced one.
+
+    None covers BOTH a timeout and a completed-but-unparseable run (killed,
+    crashed, output cut off mid-line) - neither printed a normal summary, so
+    there is no honest count to report. This must never collapse to 0: doing
+    so is exactly how a hang under mutation gets reported as the cleanest
+    possible result instead of the harness's own bug to go fix.
+    """
+    try:
+        out = subprocess.run([sys.executable, "-m", "pytest", *TESTS, "-q"],
+                             capture_output=True, text=True,
+                             timeout=FAILURES_TIMEOUT_S).stdout
+    except subprocess.TimeoutExpired:
+        return None
+    last = out.splitlines()[-1] if out else ""
+    m = re.search(r"(\d+) failed", last)
+    if m:
+        return int(m.group(1))
+    if re.search(r"\d+ passed", last) or "no tests ran" in last.lower():
+        return 0
+    return None
+
+
+def check(path, entries):
+    """(survivors, dead, skipped, incomplete) for one file's mutation entries.
+
+    survivors: a real behaviour with no test catching it.
+    dead: an entry whose target text no longer exists in the file.
+    skipped: this file was not checked at all - currently only the dirty-tree
+    refusal. Kept apart from the other two on purpose: this refusal used to
+    return a bare 1, which main()'s old boolean-sum treated as "one mutation
+    survived" - a refusal to run read exactly like a real, confirmed gap. A
+    file this script never touched must never be reported the same way as
+    one it touched and found clean, or the same way as one it found broken.
+    incomplete: the mutated suite never finished. Never folded into
+    survivors - survivors specifically means "ran clean, 0 failures", and an
+    unfinished run proves nothing either way. Conflating the two would bury a
+    hang behind the exact same "nothing tests this" message a genuine gap
+    gets, when a hang is the harness's own bug, not a missing test.
+    """
+    if subprocess.run(["git", "diff", "--quiet", "--", path]).returncode != 0:
+        print(f"REFUSING: {path} has uncommitted changes - this script reverts "
+              f"with 'git checkout --' and would delete them.", file=sys.stderr)
+        return 0, 0, 1, 0
+    print(f"\n{path}")
+    original = open(path, encoding="utf-8").read()
+    survivors = 0
+    dead = 0
+    incomplete = 0
+
+    # A finally does not run on SIGTERM. Without this, a killed run leaves the
+    # file broken on purpose and says nothing about it.
+    def restore_and_die(signum, _frame):
+        open(path, "w", encoding="utf-8").write(original)
+        print(f"\n  interrupted ({signal.Signals(signum).name}) - {path} "
+              f"restored", file=sys.stderr)
+        sys.exit(130)
+
+    previous = [(sig, signal.signal(sig, restore_and_die))
+                for sig in (signal.SIGTERM, signal.SIGINT)]
+    try:
+        for desc, old, new in entries:
+            if old not in original:
+                # NOT a survivor. A survivor is a real behaviour no test
+                # covers; this is a guard that has stopped pointing at any
+                # code at all, usually because the line moved in a refactor.
+                # Counting the two together buries the second in the first:
+                # 20 of 109 entries were dead before this was separated out,
+                # and the summary said "20 survived" as if the tests had
+                # gaps rather than the harness having rot.
+                print(f"  {desc:52s} !! TARGET NOT FOUND - this entry guards "
+                      f"nothing; repoint it at the code that moved")
+                dead += 1
+                continue
+            open(path, "w", encoding="utf-8").write(original.replace(old, new, 1))
+            n = failures()
+            open(path, "w", encoding="utf-8").write(original)
+            if n is None:
+                print(f"  {desc:52s} !! the mutated suite never finished "
+                      f"(timeout or crash) - not clean, look at why")
+                incomplete += 1
+                continue
+            flag = "   <-- SURVIVES, so nothing tests this" if n == 0 else ""
+            survivors += n == 0
+            print(f"  {desc:52s} {n} test(s) fail{flag}")
+    finally:
+        open(path, "w", encoding="utf-8").write(original)
+        for sig, handler in previous:
+            signal.signal(sig, handler)
+    return survivors, dead, 0, incomplete
+
+
+def main(argv):
+    want = argv[1] if len(argv) > 1 else ""
+    targets = [(p, e) for p, e in MUTATIONS.items()
+               if not want or want in p]
+    if not targets:
+        print(f"nothing matches {want!r}; try 'seed' or 'build'", file=sys.stderr)
+        return 2
+    results = [check(p, e) for p, e in targets]
+    survivors = sum(r[0] for r in results)
+    dead = sum(r[1] for r in results)
+    skipped = sum(r[2] for r in results)
+    incomplete = sum(r[3] for r in results)
+
+    # Reported apart, because each calls for different work, and conflating
+    # any two of them makes a wrong claim:
+    #   SURVIVOR    a real behaviour no test covers -> go write the test.
+    #   DEAD        a guard pointing at moved/rewritten code -> repoint it.
+    #   SKIPPED     never checked at all (dirty tree) -> commit, then re-run.
+    #   INCOMPLETE  the mutated suite never finished -> the harness's own
+    #               bug (usually an unbounded mock), not a missing test.
+    # A skipped file folded into "0 survived" is the exact bug this file was
+    # first written to describe: a refusal to run reads as a clean result.
+    if skipped:
+        print(f"\n{skipped} file(s) SKIPPED - uncommitted changes, so nothing "
+              f"in them was checked. Commit first, then run this again; "
+              f"reporting them as passing would be reporting nothing as clean.")
+    if dead:
+        print(f"\n{dead} entr(y/ies) guard NOTHING - their target text is "
+              f"gone. Repoint them at the code that moved; a dead guard is "
+              f"not a test gap, it is harness rot.")
+    if incomplete:
+        print(f"\n{incomplete} mutation(s) left the suite unable to finish "
+              f"(timeout after {FAILURES_TIMEOUT_S}s, or a crash) - unproven, "
+              f"not clean. Usually a mock with no bound on it: find the test "
+              f"that hung and give it the same kind of stopping condition a "
+              f"sibling test already uses.")
+    if survivors:
+        print(f"{survivors} mutation(s) survived - a real behaviour with no "
+              f"test. Write the test.")
+    if not survivors and not dead and not skipped and not incomplete:
+        print("\nevery mutation is caught by at least one test")
+    return 1 if (survivors or dead or skipped or incomplete) else 0
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv))

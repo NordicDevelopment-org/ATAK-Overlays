@@ -47,7 +47,8 @@ def _sources():
 def test_end_to_end(tmp_path):
     aoi = parse_aoi("county:27025", county_name="Chisago")
     ctx = Context(aoi=aoi)
-    m = run_build(ctx, _sources(), str(tmp_path), ["kmz", "geojson"], True, log=lambda *a: None)
+    m = run_build(ctx, _sources(), str(tmp_path), ["kmz", "geojson"], True,
+                  group_by="both", log=lambda *a: None)
     rows = {r["id"]: r for r in m["layers"]}
     assert ctx.boundary is not None and ctx.bbox == (-93.2, 45.3, -92.6, 45.8)
     assert rows["pp_eia"]["features"] == 1 and rows["pp_eia"]["dropped_outside_aoi"] == 1 and rows["pp_eia"]["deduped"] == 1
@@ -56,6 +57,8 @@ def test_end_to_end(tmp_path):
     files = set(os.listdir(tmp_path))
     assert {"ALL.kmz", "power_plants.kmz", "power_plants__osm.kmz", "manifest.json", "reconcile.md",
             "power_plants.geojson", "county_boundary.kmz"} <= files
+    # group_by="both" also writes the per-sector packs, named for the AOI
+    assert {"MN-Chisago_Energy-Electric.kmz", "MN-Chisago_Base.kmz"} <= files
     z = zipfile.ZipFile(tmp_path / "ALL.kmz")
     kml = z.read("doc.kml").decode()
     minidom.parseString(kml)
@@ -270,3 +273,99 @@ def test_demo_covers_every_sector_it_ships_styles_for():
     for want in ("Energy - Electric", "Water", "Communications", "Chemical &amp; Hazmat",
                  "Agriculture &amp; Food", "Mining"):
         assert want in sectors, f"{want} missing from the demo pack"
+
+
+def test_group_by_sector_is_the_default(tmp_path):
+    """One KMZ per sector, named <AOI>_<Sector>.kmz, and no per-layer files."""
+    ctx = Context(aoi=parse_aoi("county:27025", county_name="Chisago"))
+    m = run_build(ctx, _sources(), str(tmp_path), ["kmz"], False,
+                  do_reconcile=False, log=lambda *a: None)
+    files = set(os.listdir(tmp_path))
+    assert "MN-Chisago_Energy-Electric.kmz" in files
+    assert "MN-Chisago_Base.kmz" in files
+    assert "power_plants.kmz" not in files          # per-layer files are off by default
+    assert "ALL.kmz" not in files                   # combined=False honoured
+
+    # both sources of power_plants land in the one sector pack, each keeping its
+    # own provenance - a merged pack must never speak for a source it didn't use
+    z = zipfile.ZipFile(tmp_path / "MN-Chisago_Energy-Electric.kmz")
+    kml = z.read("doc.kml").decode()
+    minidom.parseString(kml)
+    assert kml.count("Fake-eia") >= 1 and kml.count("Fake-osm") >= 1
+    assert "icons/power_plants.png" in z.namelist()
+    # no redundant sector folder inside a pack that IS one sector
+    assert "<name>Energy - Electric</name>" not in kml
+
+    sector_rows = [r for r in m["layers"] if str(r["id"]).startswith("SECTOR:")]
+    assert {r["sector"] for r in sector_rows} == {"Energy - Electric", "Base"}
+    assert all(r["placemarks"] > 0 for r in sector_rows)
+
+
+def test_group_by_layer_restores_per_layer_files(tmp_path):
+    ctx = Context(aoi=parse_aoi("county:27025", county_name="Chisago"))
+    run_build(ctx, _sources(), str(tmp_path), ["kmz"], False, group_by="layer",
+              do_reconcile=False, log=lambda *a: None)
+    files = set(os.listdir(tmp_path))
+    assert {"power_plants.kmz", "power_plants__osm.kmz", "county_boundary.kmz"} <= files
+    assert not [f for f in files if f.startswith("MN-Chisago_")]
+
+
+def test_group_by_rejects_nonsense(tmp_path):
+    import pytest
+    ctx = Context(aoi=parse_aoi("county:27025", county_name="Chisago"))
+    with pytest.raises(ValueError, match="group_by"):
+        run_build(ctx, _sources()[:1], str(tmp_path), ["kmz"], False,
+                  group_by="per-county", log=lambda *a: None)
+
+
+def test_sector_and_aoi_filename_tokens():
+    from overlaybuilder.aoi import parse_aoi as _p
+    from overlaybuilder.build import aoi_prefix, sector_slug
+    assert sector_slug("Energy - Oil & Gas") == "Energy-Oil-Gas"
+    assert sector_slug("Emergency & Health") == "Emergency-Health"
+    assert sector_slug("Water") == "Water"
+    assert sector_slug("") == "Other"
+    assert aoi_prefix(_p("state:MN")) == "MN"
+    assert aoi_prefix(_p("county:27025", county_name="Chisago")) == "MN-Chisago"
+    assert aoi_prefix(_p("us")) == "US"
+
+
+def test_empty_sector_writes_no_pack(tmp_path):
+    """A source that returned nothing must not become an empty overlay: an empty
+    pack in Import Manager reads as "nothing here", which is a claim we cannot make."""
+    srcs = [{"layer": "county_boundary", "driver": "_fake", "id": "cb"},
+            {"layer": "hospitals", "driver": "_fake", "id": "h"}]     # _fake returns [] for hospitals
+    ctx = Context(aoi=parse_aoi("county:27025", county_name="Chisago"))
+    m = run_build(ctx, srcs, str(tmp_path), ["kmz"], False, do_reconcile=False, log=lambda *a: None)
+    files = set(os.listdir(tmp_path))
+    assert "MN-Chisago_Base.kmz" in files                       # boundary has a feature
+    assert "MN-Chisago_Emergency-Health.kmz" not in files       # hospitals came back empty
+    assert not [r for r in m["layers"] if r.get("doc") == "MN-Chisago_Emergency-Health.kmz"]
+
+
+def test_attribution_does_not_claim_osm_lives_in_its_own_file(tmp_path):
+    """The ODbL notice used to say OSM layers are separate documents. Sector
+    packs merge them with public-domain sources, so that sentence had to go."""
+    @driver("_odbl")
+    def _odbl(logical, spec, ctx):
+        prov = Provenance("OpenStreetMap", "https://osm.org", "ODbL 1.0", "2026-09-14", "_odbl")
+        return LayerResult(logical, [Feature({"type": "Point", "coordinates": [-92.9, 45.5]},
+                                             {"name": "P"})], prov)
+
+    srcs = [{"layer": "county_boundary", "driver": "_fake", "id": "cb"},
+            {"layer": "power_plants", "driver": "_odbl", "id": "pp_osm", "provider": "osm"}]
+    ctx = Context(aoi=parse_aoi("county:27025", county_name="Chisago"))
+    run_build(ctx, srcs, str(tmp_path), ["kmz"], False, do_reconcile=False, log=lambda *a: None)
+    txt = (tmp_path / "ATTRIBUTION.txt").read_text()
+    assert "ODbL" in txt                                    # the notice really rendered
+    assert "kept as separate" not in txt                    # the sentence sector packs falsified
+    assert "their own folder and" in txt and "provenance footer inside every KMZ" in txt
+
+
+def test_sector_pack_document_carries_every_contributing_source(tmp_path):
+    ctx = Context(aoi=parse_aoi("county:27025", county_name="Chisago"))
+    run_build(ctx, _sources(), str(tmp_path), ["kmz"], False, do_reconcile=False, log=lambda *a: None)
+    kml = zipfile.ZipFile(tmp_path / "MN-Chisago_Energy-Electric.kmz").read("doc.kml").decode()
+    head = kml[:kml.index("<Style")]
+    assert "2 sources in this pack" in head
+    assert "Fake-eia" in head and "Fake-osm" in head

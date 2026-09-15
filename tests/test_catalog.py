@@ -125,3 +125,50 @@ def test_new_sectors_are_present_and_styled():
         assert key in LAYER_STYLE and key in HEADLINES
     sectors = {s.get("sector") for s in catalog.global_sources(CATALOG)}
     assert {"Chemical & Hazmat", "Agriculture & Food", "Mining"} <= sectors
+
+
+def test_duplicate_yaml_keys_are_rejected_not_silently_merged(tmp_path):
+    """YAML keeps the LAST of a repeated key and discards the first without a
+    word. An edit that appends a second `notes:` to a source therefore deletes
+    the original note while the file still parses and validate still says zero
+    problems. A catalog is a record; losing part of one quietly is worse than
+    failing loudly."""
+    import pytest
+    import yaml
+    from overlaybuilder import catalog
+
+    d = tmp_path / "national" / "us"
+    d.mkdir(parents=True)
+    good = d / "ok.yaml"
+    good.write_text(
+        "sources:\n"
+        "  - layer: hospitals\n"
+        "    driver: arcgis\n"
+        "    url: http://example/0\n"
+        '    notes: "the original note"\n'
+    )
+    assert len(catalog.all_sources(str(tmp_path))) == 1
+
+    good.write_text(
+        "sources:\n"
+        "  - layer: hospitals\n"
+        "    driver: arcgis\n"
+        "    url: http://example/0\n"
+        '    notes: "the original note"\n'
+        '    notes: "an appended note that would erase it"\n'
+    )
+    with pytest.raises(yaml.YAMLError, match="duplicate key"):
+        catalog.all_sources(str(tmp_path))
+
+
+def test_no_catalog_source_points_at_a_host_known_dead():
+    """maps.nccs.nasa.gov stopped resolving on 2026-09-14. Anything still
+    pointing at it as its PRIMARY url must be disabled, or a build spends its
+    retries on a host that no longer exists."""
+    from overlaybuilder import catalog
+    dead_host = "nccs.nasa.gov"
+    live = [s for s in catalog.all_sources("catalog")
+            if dead_host in str(s.get("url", "")) and s.get("enabled", True)]
+    assert not live, (
+        "these sources still point at a dead host while enabled: "
+        + ", ".join(s["id"] for s in live))

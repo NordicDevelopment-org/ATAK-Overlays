@@ -44,10 +44,11 @@ sources:
     source_name: "HIFLD Hospitals (final HIFLD Open snapshot, NASA NCCS re-host)"
     source_url: https://maps.nccs.nasa.gov/mapping/rest/services/hifld_open/public_health/FeatureServer
     license: "Public domain (US Government work) - unofficial re-host; frozen snapshot, check SOURCEDATE"
-    notes: "BEDS, TRAUMA, HELIPAD, TTL_STAFF, OWNER, NAICS_DESC in attributes. -999 = not available"
-    confidence: high
+    notes: "BEDS, TRAUMA, HELIPAD, TTL_STAFF, OWNER, NAICS_DESC in attributes. -999 = not available || HOST DEAD 2026-09-14: maps.nccs.nasa.gov no longer resolves ('ping: unknown host', 'curl: Could not resolve host') - not blocked, not IPv6; the NASA NCCS re-host of HIFLD Open is gone from DNS. Disabled until a live mirror is found."
+    confidence: dead
     alternates:
       - {driver: file, url: "https://source.coop/seerai/hifld", note: "SeerAI GeoParquet archive of the same snapshot, CC BY 4.0"}
+    enabled: false
 
   - layer: hospitals
     id: hospitals@usgs
@@ -88,8 +89,9 @@ sources:
     source_name: "HIFLD Nursing Homes (final snapshot, NASA NCCS re-host)"
     source_url: https://maps.nccs.nasa.gov/mapping/rest/services/hifld_open/public_health/FeatureServer
     license: "Public domain (US Government work) - unofficial re-host; frozen"
-    notes: "Field names are lowercase on this mirror. CMS Nursing Home Provider Information (data.cms.gov, has lat/lon + certified beds) is the live successor - roadmap"
-    confidence: high
+    notes: "Field names are lowercase on this mirror. CMS Nursing Home Provider Information (data.cms.gov, has lat/lon + certified beds) is the live successor - roadmap || HOST DEAD 2026-09-14: maps.nccs.nasa.gov no longer resolves ('ping: unknown host', 'curl: Could not resolve host') - not blocked, not IPv6; the NASA NCCS re-host of HIFLD Open is gone from DNS. Disabled until a live mirror is found."
+    confidence: dead
+    enabled: false
 
   - layer: urgent_care
     id: urgent_care@hifld-nasa
@@ -103,12 +105,14 @@ sources:
     source_name: "HIFLD Urgent Care Facilities (final snapshot, NASA NCCS re-host)"
     source_url: https://maps.nccs.nasa.gov/mapping/rest/services/hifld_open/public_health/FeatureServer
     license: "Public domain (US Government work) - unofficial re-host; frozen"
-    confidence: medium
+    confidence: dead
+
+    notes: "HOST DEAD 2026-09-14: maps.nccs.nasa.gov no longer resolves ('ping: unknown host', 'curl: Could not resolve host') - not blocked, not IPv6; the NASA NCCS re-host of HIFLD Open is gone from DNS. Disabled until a live mirror is found."
+    enabled: false
 
   - layer: pharmacies
     id: pharmacies@hifld-nasa
     provider: hifld
-    enabled: false                          # ~65k points; enable for county packs if wanted
     url: https://maps.nccs.nasa.gov/mapping/rest/services/hifld_open/public_health/FeatureServer
     layer_match: "^pharmacies$"
     where_by_aoi:
@@ -119,9 +123,12 @@ sources:
     source_name: "HIFLD Pharmacies (final snapshot, NASA NCCS re-host)"
     source_url: https://maps.nccs.nasa.gov/mapping/rest/services/hifld_open/public_health/FeatureServer
     license: "Public domain (US Government work) - unofficial re-host; frozen"
-    confidence: medium
+    confidence: dead
 
   # ---------------- fire / EMS / police ----------------
+    notes: "HOST DEAD 2026-09-14: maps.nccs.nasa.gov no longer resolves ('ping: unknown host', 'curl: Could not resolve host') - not blocked, not IPv6; the NASA NCCS re-host of HIFLD Open is gone from DNS. Disabled until a live mirror is found."
+    enabled: false
+
   - layer: fire_stations
     id: fire_stations@hifld-nasa
     provider: hifld
@@ -140,7 +147,10 @@ sources:
     source_name: "HIFLD Fire Stations (final snapshot, NASA NCCS re-host)"
     source_url: https://maps.nccs.nasa.gov/mapping/rest/services/hifld_open/emergency_services/FeatureServer
     license: "Public domain (US Government work) - unofficial re-host; frozen"
-    confidence: high
+    confidence: dead
+
+    notes: "HOST DEAD 2026-09-14: maps.nccs.nasa.gov no longer resolves ('ping: unknown host', 'curl: Could not resolve host') - not blocked, not IPv6; the NASA NCCS re-host of HIFLD Open is gone from DNS. Disabled until a live mirror is found."
+    enabled: false
 
   - layer: fire_stations
     id: fire_stations@usgs
@@ -177,8 +187,9 @@ sources:
     source_name: "HIFLD EMS Stations (final snapshot, NASA NCCS re-host)"
     source_url: https://maps.nccs.nasa.gov/mapping/rest/services/hifld_open/emergency_services/FeatureServer
     license: "Public domain (US Government work) - unofficial re-host; frozen"
-    notes: "Field names are lowercase on this mirror (level_ = licensure level)"
-    confidence: high
+    notes: "Field names are lowercase on this mirror (level_ = licensure level) || HOST DEAD 2026-09-14: maps.nccs.nasa.gov no longer resolves ('ping: unknown host', 'curl: Could not resolve host') - not blocked, not IPv6; the NASA NCCS re-host of HIFLD Open is gone from DNS. Disabled until a live mirror is found."
+    confidence: dead
+    enabled: false
 
   - layer: police
     id: police@hifld-nasa
@@ -201,7 +212,10 @@ sources:
     source_name: "HIFLD Local Law Enforcement Locations (final snapshot, NASA NCCS re-host)"
     source_url: https://maps.nccs.nasa.gov/mapping/rest/services/hifld_open/law_enforcement/FeatureServer
     license: "Public domain (US Government work; derived from DOJ BJS) - unofficial re-host; frozen"
-    confidence: high
+    confidence: dead
+
+    notes: "HOST DEAD 2026-09-14: maps.nccs.nasa.gov no longer resolves ('ping: unknown host', 'curl: Could not resolve host') - not blocked, not IPv6; the NASA NCCS re-host of HIFLD Open is gone from DNS. Disabled until a live mirror is found."
+    enabled: false
 
   - layer: police
     id: police@usgs
@@ -239,9 +253,12 @@ sources:
     source_name: "HIFLD Prison Boundaries (final snapshot, NASA NCCS re-host)"
     source_url: https://maps.nccs.nasa.gov/mapping/rest/services/hifld_open/law_enforcement/FeatureServer
     license: "Public domain (US Government work) - unofficial re-host; frozen"
-    confidence: medium
+    confidence: dead
 
   # ---------------- EOCs and shelters ----------------
+    notes: "HOST DEAD 2026-09-14: maps.nccs.nasa.gov no longer resolves ('ping: unknown host', 'curl: Could not resolve host') - not blocked, not IPv6; the NASA NCCS re-host of HIFLD Open is gone from DNS. Disabled until a live mirror is found."
+    enabled: false
+
   - layer: eoc
     id: eoc@fema-state
     provider: fema
@@ -274,7 +291,10 @@ sources:
     source_name: "HIFLD Local Emergency Operations Centers (final snapshot, NASA NCCS re-host)"
     source_url: https://maps.nccs.nasa.gov/mapping/rest/services/hifld_open/emergency_services/FeatureServer
     license: "Public domain (US Government work) - unofficial re-host; frozen, no live successor"
-    confidence: low
+    confidence: dead
+
+    notes: "HOST DEAD 2026-09-14: maps.nccs.nasa.gov no longer resolves ('ping: unknown host', 'curl: Could not resolve host') - not blocked, not IPv6; the NASA NCCS re-host of HIFLD Open is gone from DNS. Disabled until a live mirror is found."
+    enabled: false
 
   - layer: shelters
     id: shelters@fema-nss

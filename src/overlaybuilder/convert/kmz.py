@@ -368,6 +368,29 @@ def _prov_cdata(p) -> str:
             f"{('<br/>note: ' + _esc(p.notes)) if p.notes else ''}]]>")
 
 
+def _prov_cdata_multi(results: List[LayerResult]) -> str:
+    """Document-level provenance for a pack built from MANY sources.
+
+    A per-layer KMZ can name one source in its Document description. A sector
+    pack merges several, so it has to name every one of them - PROJECT RULES:
+    provenance everywhere, and a merged pack must never speak for a source it
+    did not use. De-duplicated, order preserved.
+    """
+    seen, lines = set(), []
+    for r in results:
+        p = r.provenance
+        key = (p.source_name, p.source_url)
+        if key in seen:
+            continue
+        seen.add(key)
+        lines.append(f"{_esc(p.source_name)}<br/>&nbsp;&nbsp;url: {_esc(p.source_url)}"
+                     f"<br/>&nbsp;&nbsp;license: {_esc(p.license)}"
+                     f"<br/>&nbsp;&nbsp;retrieved: {_esc(p.retrieved)}"
+                     + (f"<br/>&nbsp;&nbsp;note: {_esc(p.notes)}" if p.notes else ""))
+    head = f"{len(lines)} source{'s' if len(lines) != 1 else ''} in this pack:"
+    return "<![CDATA[" + head + "<br/><br/>" + "<br/><br/>".join(lines) + "]]>"
+
+
 def layer_kml(result: LayerResult, spec: Optional[dict] = None, precision: int = 6,
               title: Optional[str] = None) -> Tuple[str, Dict[str, bytes]]:
     """Full KML Document for one logical layer. Returns (kml, icons)."""
@@ -391,12 +414,17 @@ def layer_kml(result: LayerResult, spec: Optional[dict] = None, precision: int =
 
 
 def combined_kml(results: List[LayerResult], specs: Optional[Dict[str, dict]] = None,
-                 precision: int = 6, title: str = "Overlays") -> Tuple[str, Dict[str, bytes]]:
+                 precision: int = 6, title: str = "Overlays",
+                 sector_folders: bool = True) -> Tuple[str, Dict[str, bytes]]:
     """One Document: Folder per sector > Folder per source document > bucket folders.
 
     `specs` is keyed by each result's `doc_key` (falling back to its layer key), so
     two sources of the same layer - EIA and OSM power plants, rail yards and Amtrak
     stations - keep their own titles, visibility, name templates and style rules.
+
+    `sector_folders=False` drops the sector level and hangs the document folders
+    straight off the Document. A per-sector pack is already named for its sector,
+    so the extra folder would just be one more tap in ATAK's Overlay Manager.
     """
     specs = specs or {}
     styles, icons = [], {}
@@ -424,11 +452,22 @@ def combined_kml(results: List[LayerResult], specs: Optional[Dict[str, dict]] = 
         by_sector.setdefault(sector, []).append(
             f"<Folder><name>{_esc(name)} ({sub.count('<Placemark>')})</name>{vis}<open>0</open>"
             f"<description>{_prov_cdata(r.provenance)}</description>{sub}</Folder>")
-    folders = "".join(f"<Folder><name>{_esc(sec)}</name><open>0</open>{''.join(fs)}</Folder>"
-                      for sec, fs in by_sector.items())
+    if sector_folders:
+        folders = "".join(f"<Folder><name>{_esc(sec)}</name><open>0</open>{''.join(fs)}</Folder>"
+                          for sec, fs in by_sector.items())
+    else:
+        folders = "".join("".join(fs) for fs in by_sector.values())
+    # a pack every one of whose layers is hidden must import switched off, the
+    # way a single hidden layer's own KMZ does
+    any_visible = any(not style_for(r.logical, specs.get(getattr(r, "doc_key", r.logical)))[4]
+                      for r in results)
+    doc_vis = "" if any_visible else "<visibility>0</visibility>"
+    # KML 2.2 sequence: name, visibility, open, description, styles, features
     kml = ('<?xml version="1.0" encoding="UTF-8"?>'
            '<kml xmlns="http://www.opengis.net/kml/2.2"><Document>'
-           f"<name>{_esc(title)}</name><open>1</open>{''.join(styles)}{folders}</Document></kml>")
+           f"<name>{_esc(title)}</name>{doc_vis}<open>1</open>"
+           f"<description>{_prov_cdata_multi(results)}</description>"
+           f"{''.join(styles)}{folders}</Document></kml>")
     return kml, icons
 
 

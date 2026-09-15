@@ -124,10 +124,17 @@ def cmd_build(args):
     manifest = run_build(ctx, sources, out_dir, args.format, not args.no_combined,
                          precision=args.precision, fail_fast=args.fail_fast,
                          do_reconcile=not args.no_reconcile,
-                         use_alternates=not args.no_fallbacks, jobs=args.jobs)
+                         use_alternates=not args.no_fallbacks, jobs=args.jobs,
+                         group_by=args.group_by)
 
-    print("\n==================== SUMMARY ====================")
-    for row in manifest["layers"]:
+    # sources and the files written are different things: a source that failed is
+    # not a missing pack, and a pack is not a source. Keep them in separate blocks.
+    packs = [r for r in manifest["layers"] if str(r.get("id", "")).startswith("SECTOR:")
+             or r.get("id") == "ALL"]
+    srcs = [r for r in manifest["layers"] if r not in packs]
+
+    print("\n--------------------- SOURCES ---------------------")
+    for row in srcs:
         extra = ""
         if row.get("dropped_outside_aoi"):
             extra += f"  -{row['dropped_outside_aoi']} outside AOI"
@@ -136,10 +143,18 @@ def cmd_build(args):
         if row.get("source"):
             extra += f"  [{row['source']}]"
         print(f"  {row.get('doc', row['layer']):28} {str(row['features']):>8} feat   {row['status'][:60]}{extra}")
-    print("=================================================")
+    if packs:
+        print("\n---------------------- PACKS ----------------------")
+        for row in packs:
+            n = row.get("placemarks", row.get("features", 0))
+            src_n = len(row.get("docs") or [])
+            note = f"   {src_n} source(s)" if src_n else ""
+            print(f"  {row.get('doc', row['layer']):38} {str(n):>8} placemarks{note}")
+    print("---------------------------------------------------")
     print(f"Output: {os.path.abspath(out_dir)}  ({manifest['seconds']}s)")
     print("ATAK: Import Manager > Local SD > select .kmz (or drop in atak/imports/).")
-    print("Toggle sectors/layers/classes with the eye button in Overlay Manager.")
+    print("Toggle a whole sector by its file; layers and classes with the eye button")
+    print("in Overlay Manager. Dense layers start hidden.")
     errs = [r for r in manifest["layers"] if str(r["status"]).startswith("ERROR")]
     return 2 if errs and len(errs) == len(sources) else 0
 
@@ -184,14 +199,23 @@ def cmd_doctor(args):
 
 def cmd_demo(args):
     """Build a synthetic sample pack offline, to check ATAK rendering."""
+    from .aoi import parse_aoi
     from .demo import PROV_NOTE, build_demo
     out = args.out or "demo"
+    aoi = parse_aoi(args.aoi, cache_dir=args.cache_dir) if args.aoi else None
     print(f"[*] building a SYNTHETIC sample pack in {os.path.abspath(out)}")
     print(f"    {PROV_NOTE}\n")
-    m = build_demo(out, precision=args.precision)
-    print(f"\n{len(m['layers'])} layers, {sum(r['features'] for r in m['layers'])} features")
-    print(f"Load {os.path.join(os.path.abspath(out), 'DEMO_SAMPLE_ALL.kmz')} into ATAK to check the")
-    print("folder tree, eye-toggles, icons, voltage styling and popup layout, then delete it.")
+    m = build_demo(out, precision=args.precision, aoi=aoi, group_by=args.group_by)
+    # report where it actually landed, which is not always where --aoi asked for
+    print(f"\n[*] placed on {m['placement']}")
+    print(f"{m['features_total']} features")
+    print(f"Output: {os.path.abspath(out)}")
+    if m["packs"]:
+        print("Load these into ATAK (Import Manager > Local SD) to check the folder tree,")
+        print("eye-toggles, icons, voltage styling and popup layout:")
+        for f in m["packs"]:
+            print(f"    {f}")
+    print("Everything here is SYNTHETIC. Delete it before it can be mistaken for real data.")
     return 0
 
 
@@ -258,6 +282,12 @@ def main(argv=None):
     _add_common(b)
     b.add_argument("--format", nargs="*", default=["kmz"], choices=["kmz", "geojson"])
     b.add_argument("--no-combined", action="store_true", help="skip ALL.kmz")
+    b.add_argument("--group-by", choices=["sector", "layer", "both"], default="sector",
+                   help="how to cut up the KMZ files: sector (default) writes one pack per "
+                        "sector, named <AOI>_<Sector>.kmz - e.g. MN_Energy-Electric.kmz - which "
+                        "is what ATAK's Import Manager can actually handle; layer writes the "
+                        "original one-file-per-source layout; both writes both. GeoJSON is "
+                        "always per source.")
     b.add_argument("--flat", action="store_true", help="write into --out directly (no AOI subfolder)")
     b.add_argument("--out", default="overlays")
     b.add_argument("--precision", type=int, default=6, help="coordinate decimals (5 ~ 1 m)")
@@ -294,6 +324,11 @@ def main(argv=None):
     dm = sub.add_parser("demo", help="build a synthetic sample pack offline (checks ATAK rendering)")
     dm.add_argument("--out", help="output directory (default ./demo)")
     dm.add_argument("--precision", type=int, default=6)
+    dm.add_argument("--aoi", help="place the sample grid inside this AOI's envelope "
+                                  "(e.g. state:MN, county:27025) instead of near Chisago County")
+    dm.add_argument("--cache-dir", default=".cache")
+    dm.add_argument("--group-by", choices=["sector", "layer", "both"], default="sector",
+                    help="same as `build --group-by` (default: sector)")
     dm.set_defaults(fn=cmd_demo)
 
     v = sub.add_parser("validate", help="lint the catalog offline")

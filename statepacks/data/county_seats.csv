@@ -1,0 +1,16 @@
+# County seats. SHIPS EMPTY ON PURPOSE.
+#
+# There is no authoritative federal machine-readable file of US county seats,
+# so nothing is typed in here from memory. Fill it with:
+#     python3 fetch_county_seats.py --state MN
+# which pulls from Wikidata and writes the source and the retrieval date into
+# every row, or add rows by hand from a source you trust.
+#
+# Any county not listed renders as "not in dataset" in the popup, which is
+# honest. A guessed seat on a tactical map is not.
+#
+# geoid  = 5-digit state+county FIPS, e.g. 27025 for Chisago County, MN
+# seat   = the county seat town/city name
+# source = where the value came from, shown in the popup
+# vintage= the year that source is good for, shown in the popup
+geoid,seat,source,vintage

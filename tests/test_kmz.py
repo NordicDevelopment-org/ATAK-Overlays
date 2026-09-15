@@ -149,3 +149,42 @@ def test_combined_keeps_each_source_specs_separate():
     assert "icons/transmission_lines__osm.png" in icons
     osm_folder = kml[kml.index("lines (OSM)"):]
     assert osm_folder.index("<visibility>0</visibility>") < osm_folder.index("<open>")
+
+
+def test_combined_pack_carries_every_sources_provenance_and_hides_when_all_hidden():
+    """A sector pack is the default output, so it must satisfy the provenance rule
+    on its own, and inherit a layer's hidden-by-default behaviour."""
+    from overlaybuilder.convert.kmz import combined_kml
+    from overlaybuilder.model import Feature, LayerResult, Provenance
+
+    def _r(layer, src):
+        p = Provenance(f"Source {src}", f"http://{src}/x", "ODbL" if src == "osm" else "public domain",
+                       "2026-09-14", "_t")
+        return LayerResult(layer, [Feature({"type": "Point", "coordinates": [-93.0, 45.5]},
+                                           {"name": f"{layer}-{src}"})], p)
+
+    # two sources, one visible layer -> document visible, both sources named
+    visible = [_r("power_plants", "eia"), _r("power_plants", "osm")]
+    for r, k in zip(visible, ("power_plants", "power_plants__osm")):
+        r.doc_key = k
+    kml, _ = combined_kml(visible, {"power_plants": {}, "power_plants__osm": {}},
+                          title="T", sector_folders=False)
+    head = kml[:kml.index("<Style")] if "<Style" in kml else kml
+    assert "2 sources in this pack" in head
+    assert "Source eia" in head and "Source osm" in head
+    assert "http://eia/x" in head and "http://osm/x" in head
+    assert "ODbL" in head and "2026-09-14" in head
+    assert "<visibility>0</visibility>" not in head
+    assert "<name>Energy - Electric</name>" not in kml        # no redundant sector folder
+
+    # every layer hidden by default -> the whole pack imports switched off
+    hidden = [_r("parcels", "county"), _r("address_points", "county")]
+    for r, k in zip(hidden, ("parcels", "address_points")):
+        r.doc_key = k
+    kml2, _ = combined_kml(hidden, {"parcels": {}, "address_points": {}},
+                           title="T2", sector_folders=False)
+    assert "<name>T2</name><visibility>0</visibility>" in kml2
+
+    # sector_folders=True still nests by sector (ALL.kmz keeps that level)
+    kml3, _ = combined_kml(visible, {"power_plants": {}, "power_plants__osm": {}}, title="T3")
+    assert "<name>Energy - Electric</name>" in kml3

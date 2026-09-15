@@ -11,7 +11,8 @@ national files (TIGER county polygons ~80 MB, NID CSV ~40 MB, FCC ASR
 overlaybuilder demo
 ```
 
-Writes `demo/DEMO_SAMPLE_ALL.kmz` from **synthetic** sample data. Load it into
+Writes `demo/SAMPLE_*.kmz` (one per sector) plus `demo/DEMO_SAMPLE_ALL.kmz` from
+**synthetic** sample data; `--aoi state:MN` places it inside Minnesota. Load it into
 ATAK to confirm the folder tree, eye-toggles, icons, voltage-styled lines and
 popup layout look right on your device before spending a real build. Delete it
 afterwards - none of it is real infrastructure.
@@ -89,7 +90,7 @@ Watch the summary. Typical outcomes per row:
 | `ERROR: no layer matched` | `layer_match` regex did not hit | probe the service, set `layer_id` |
 | `ERROR: overpass ...` | Overpass busy | rerun; the driver retries and rotates endpoints |
 
-Outputs: `overlays/us/mn/27025_chisago/` with one KMZ per layer, `ALL.kmz`,
+Outputs: `overlays/us/mn/27025_chisago/` with one KMZ per sector, `ALL.kmz`,
 `manifest.json`, `reconcile.md` and `ATTRIBUTION.txt`. Keep the attribution
 file with the pack if you pass it on: it names each layer's publisher and
 licence, carries the OpenStreetMap share-alike notice, and lists the sources
@@ -101,7 +102,7 @@ records to eyeball before a briefing.
 
 ## 5. Load into ATAK
 
-1. Copy `ALL.kmz` (or the per-layer files) to the device:
+1. Copy the per-sector `*.kmz` files (or `ALL.kmz`) to the device:
    `/sdcard/atak/imports/` triggers auto-import, or use
    Import Manager > Local SD and pick the file.
 2. Overlay Manager: expand the pack, toggle sectors / layers / classes with

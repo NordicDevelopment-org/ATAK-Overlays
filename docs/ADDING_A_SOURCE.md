@@ -18,7 +18,7 @@ driver.
 | `layer` | yes | logical layer key: `power_plants`, `substations`, `transmission_lines`, `pipelines`, `dams`, `hospitals`, ... (styling, icons, headline fields, default visibility key off this; see `convert/kmz.py` LAYER_STYLE and `normalize.py` HEADLINES) |
 | `driver` | yes | `arcgis`, `file`, `overpass`, `osm_pbf`, `census_tiger` |
 | `id` | no | unique id for logs/manifest (default `<layer>@<file>`) |
-| `sector` | no | folder in `ALL.kmz` (default from the layer key) |
+| `sector` | no | which sector KMZ the layer lands in, and its folder in `ALL.kmz` (default from the layer key) |
 | `coverage` | no | `world`, `us`, `state`, `state:MN`, `country:CA`, `county` (default from tier) |
 | `aoi_kinds` | no | restrict to some AOI kinds, e.g. `[county, bbox]` for dense layers |
 | `priority` | no | build order (boundaries 0, default 50) |

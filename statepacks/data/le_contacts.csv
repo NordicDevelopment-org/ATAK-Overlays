@@ -1,0 +1,19 @@
+# Sheriff / primary law-enforcement agency per county. SHIPS EMPTY ON PURPOSE.
+#
+# There is no clean national machine-readable source for sheriff office names
+# and non-emergency numbers. The FBI UCR agency tables cover agency names but
+# not phone numbers; state POST/LE directories vary in format and licence.
+# Rather than publish a number that might be wrong, this file starts empty and
+# any county not listed renders as "not in dataset".
+#
+# A wrong non-emergency number is worse than a missing one: it fails at the
+# moment someone actually dials it. Only add rows you have verified, and put
+# the year you verified them in the vintage column so the next person can see
+# how stale it is.
+#
+# geoid  = 5-digit state+county FIPS
+# agency = e.g. "Chisago County Sheriff's Office"
+# phone  = non-emergency number, digits and dashes
+# source = where you got it (agency website, state directory, ...)
+# vintage= the year you verified it
+geoid,agency,phone,source,vintage

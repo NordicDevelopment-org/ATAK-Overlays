@@ -89,7 +89,7 @@ sources:
     notes: "ARCHIVED - no updates after 2024-09-30. INFERRED=Y rows are estimated routes. SUB_1/SUB_2 name the end substations. Cross-checked against OSM power=line"
     confidence: high
     alternates:
-      - {driver: arcgis, url: "https://maps.nccs.nasa.gov/mapping/rest/services/hifld_open/energy/FeatureServer", layer_id: 21, note: "NASA NCCS mirror of HIFLD Open (vintage unknown)"}
+      - {driver: arcgis, url: "https://maps.nccs.nasa.gov/mapping/rest/services/hifld_open/energy/FeatureServer", layer_id: 21, note: "DEAD 2026-09-14 - maps.nccs.nasa.gov no longer resolves; kept for the record, will always fail over to the next alternate"}
       - {driver: file, url: "https://hifld.publicenvirodata.org/", note: "HIFLD Next archive (GeoParquet/FGDB downloads, resolve per-layer URL)"}
       - {driver: file, url: "https://source.coop/seerai/hifld", note: "SeerAI GeoParquet archive, CC BY 4.0"}
 
@@ -146,7 +146,6 @@ sources:
     id: service_territories@hifld-mirror
     provider: hifld
     driver: arcgis
-    enabled: false                       # ~3,000 large polygons; enable per need
     url: https://maps.nccs.nasa.gov/mapping/rest/services/hifld_open/energy/FeatureServer
     layer_id: 26
     spatial: bbox
@@ -158,8 +157,9 @@ sources:
       type: {from: [TYPE]}
     source_name: "Electric Retail Service Territories (HIFLD / EIA-861, NASA NCCS mirror)"
     source_url: https://maps.nccs.nasa.gov/mapping/rest/services/hifld_open/energy/FeatureServer/26
-    notes: "SUMMR_PEAK / WINTR_PEAK (MW), CUSTOMERS, RETAIL_MWH in source attributes. Frozen at the Aug 2025 HIFLD shutdown"
-    confidence: medium
+    notes: "SUMMR_PEAK / WINTR_PEAK (MW), CUSTOMERS, RETAIL_MWH in source attributes. Frozen at the Aug 2025 HIFLD shutdown || HOST DEAD 2026-09-14: maps.nccs.nasa.gov no longer resolves ('ping: unknown host', 'curl: Could not resolve host') - not blocked, not IPv6; the NASA NCCS re-host of HIFLD Open is gone from DNS. Disabled until a live mirror is found."
+    confidence: dead
+    enabled: false
 
   - layer: generators
     id: generators@eia-860m
