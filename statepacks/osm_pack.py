@@ -235,6 +235,7 @@ def rows_for(spec, r):
         out.append((label, value, "" if value else note))
     out.append(("Address", " ".join(x for x in (r.get("address", ""),
                                                 r.get("city", "")) if x).strip(), ""))
+    out.append(("County", r.get("county", ""), ""))
     out.append(("OSM", f"{r.get('osm_type', '')}/{r.get('osm_id', '')}".strip("/"), ""))
     out.append(("Retrieved", r.get("fetched", ""), ""))
     return out
@@ -315,6 +316,88 @@ def build_kml(spec, state, rows, built, classes=None):
             + "</Document></kml>"), icons
 
 
+def county_index(shapes):
+    """[(geoid, bbox, polys)] - each county's bounding box, precomputed.
+
+    A point-in-polygon test walks every vertex of every ring. Minnesota's
+    counties carry about 1,900 vertices each, so testing 6,235 features
+    against 87 counties unfiltered is on the order of a billion operations in
+    pure Python - minutes on a phone, for a question a rectangle answers.
+
+    The bbox is not an approximation of the answer, only of the search: a
+    point inside the box still gets the full polygon test, and a point outside
+    it cannot possibly be inside the polygon.
+    """
+    out = []
+    for geoid, polys in shapes:
+        xs, ys = [], []
+        for rings in polys:
+            for ring in rings:
+                for pt in ring:
+                    xs.append(pt[0])
+                    ys.append(pt[1])
+        if not xs:
+            continue
+        out.append((geoid, (min(xs), min(ys), max(xs), max(ys)), polys))
+    return out
+
+
+def clip_to_state(rows, state, log=print, refresh=False):
+    """Drop features outside the state, and tag the survivors with a county.
+
+    THE BUG THIS EXISTS FOR. The Overpass query is a bounding box, and a box
+    around Minnesota necessarily contains slices of Wisconsin, Iowa, both
+    Dakotas and Ontario. Nothing clipped them, so every pack carried hundreds
+    of features in states it does not claim to cover. seed_le_contacts already
+    clipped its own results this way and said so on screen; this path never
+    did.
+
+    A point outside every county is DROPPED, never filed under the nearest
+    one. A hospital attributed to the wrong state is worse than one absent.
+    """
+    fips = seed.STATE_FIPS.get(state.upper())
+    if not fips:
+        raise SystemExit(f"no FIPS code for state {state!r}")
+    shapes, names = seed.county_shapes(fips, log=log, refresh=refresh,
+                                       with_names=True)
+    index = county_index(shapes)
+    if not index:
+        raise SystemExit(f"no county shapes for {state}; cannot clip")
+
+    # One box around the whole state, tested first. Most out-of-state points
+    # fail here and never touch a polygon.
+    sw = min(b[0] for _g, b, _p in index)
+    ss = min(b[1] for _g, b, _p in index)
+    se = max(b[2] for _g, b, _p in index)
+    sn = max(b[3] for _g, b, _p in index)
+
+    kept, dropped = [], 0
+    for r in rows:
+        x, y = r["lon"], r["lat"]
+        if not (sw <= x <= se and ss <= y <= sn):
+            dropped += 1
+            continue
+        geoid = None
+        for gid, (w, s_, e, n), polys in index:
+            if not (w <= x <= e and s_ <= y <= n):
+                continue
+            if any(seed.point_in_polygon(x, y, rings) for rings in polys):
+                geoid = gid
+                break
+        if geoid is None:
+            dropped += 1
+            continue
+        r["county_geoid"] = geoid
+        r["county"] = names.get(geoid, "")
+        kept.append(r)
+
+    if dropped:
+        log(f"    {dropped} feature(s) fell outside every {state} county and "
+            f"were dropped, not guessed - the Overpass query is a RECTANGLE "
+            f"around the state, so it reaches into the neighbours.")
+    return kept
+
+
 def report(spec, rows, log=print, classes=None):
     """What came back, per class, including the zeroes.
 
@@ -380,6 +463,9 @@ def build_state(spec, state, out_dir, log=print, mirrors=None, deadline_s=None,
         keep = {c[0] for c in chosen}
         rows = [r for r in rows if r["layer"] in keep]
 
+    # The box is a rectangle; the state is not. Clip before anything counts
+    # the results, or every number below includes the neighbours.
+    rows = clip_to_state(rows, state, log=log)
     report(spec, rows, log=log, classes=chosen)
     built = today or dt.date.today().isoformat()
     kml, icons = build_kml(spec, state, rows, built, classes=chosen)

@@ -41,6 +41,7 @@ DUP = "statepacks/atak_find_dupes.py"
 SYM = "statepacks/symbology.py"
 EMG = "statepacks/build_emergency_pack.py"
 MPK = "statepacks/merge_packs.py"
+OSP = "statepacks/osm_pack.py"
 RPT = "statepacks/repeater_diagnose.py"
 NWR = "statepacks/build_nwr_pack.py"
 PWR = "statepacks/build_power_pack.py"
@@ -263,6 +264,21 @@ MUTATIONS = {
         ("follow a symlinked root twice",
          "                real = os.path.realpath(path)",
          "                real = path"),
+    ],
+    OSP: [
+        ("skip the clip, so the pack carries the neighbouring states",
+         "    rows = clip_to_state(rows, state, log=log)", "    pass"),
+        ("file a point outside every county under the last one tested",
+         "        if geoid is None:\n            dropped += 1\n            continue",
+         "        if geoid is None:\n            geoid = index[0][0]"),
+        ("clip after counting, so the report includes the neighbours",
+         "    rows = clip_to_state(rows, state, log=log)\n"
+         "    report(spec, rows, log=log, classes=chosen)",
+         "    report(spec, rows, log=log, classes=chosen)\n"
+         "    rows = clip_to_state(rows, state, log=log)"),
+        ("trust the bounding box instead of the polygon",
+         "            if any(seed.point_in_polygon(x, y, rings) for rings in polys):",
+         "            if True:"),
     ],
     MPK: [
         ("write a half-filled label, which reads as a real one",

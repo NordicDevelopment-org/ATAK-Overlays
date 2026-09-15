@@ -8,6 +8,7 @@ builder never invents a value and never mangles a shape.
 import html
 import importlib.util
 import json
+import math
 import os
 import re
 import sys
@@ -5065,3 +5066,90 @@ def test_render_applies_normalization():
     before = _extent(gly.GLYPHS["broadcast"]())
     assert before > gly.GLYPH_EXTENT, "fixture no longer tests an oversized glyph"
     assert gly.render("broadcast", (255, 0, 0))[:8] == b"\x89PNG\r\n\x1a\n"
+
+
+# --------------------------------------------------------------------------
+# Clipping to the state. The Overpass query is a bounding box, and a box round
+# Minnesota contains slices of Wisconsin, Iowa, both Dakotas and Ontario.
+# Nothing clipped them, so every pack carried features in states it does not
+# claim to cover. seed_le_contacts already did this and said so on screen;
+# this code path never did.
+# --------------------------------------------------------------------------
+def _square(geoid, cx, cy, half=0.25, n=40):
+    ring = [(cx + half * math.cos(2 * math.pi * k / n),
+             cy + half * math.sin(2 * math.pi * k / n)) for k in range(n)]
+    return (geoid, [[ring]])
+
+
+@pytest.fixture
+def fake_state(monkeypatch):
+    shapes = [_square("27001", -94.0, 45.0), _square("27003", -93.0, 45.0)]
+    names = {"27001": "Alpha", "27003": "Beta"}
+    monkeypatch.setitem(sle.STATE_FIPS, "MN", "27")
+    monkeypatch.setattr(sle, "county_shapes", lambda *a, **k: (shapes, names))
+    return shapes, names
+
+
+def test_clip_drops_a_feature_in_the_neighbouring_state(fake_state):
+    rows = [{"lon": -94.0, "lat": 45.0, "layer": "x"},     # inside Alpha
+            {"lon": -87.0, "lat": 45.0, "layer": "x"}]     # Wisconsin
+    said = []
+    kept = osp.clip_to_state(rows, "MN", log=said.append)
+    assert len(kept) == 1
+    assert kept[0]["lon"] == -94.0
+    assert "1 feature(s) fell outside" in " ".join(said)
+    assert "RECTANGLE" in " ".join(said)
+
+
+def test_clip_never_files_an_outside_point_under_the_nearest_county(fake_state):
+    """A hospital attributed to the wrong state is worse than one absent."""
+    rows = [{"lon": -93.4, "lat": 45.0, "layer": "x"}]     # between the two
+    kept = osp.clip_to_state(rows, "MN", log=lambda *a: None)
+    assert kept == []
+
+
+def test_clip_tags_survivors_with_their_county(fake_state):
+    rows = [{"lon": -93.0, "lat": 45.0, "layer": "x"}]
+    kept = osp.clip_to_state(rows, "MN", log=lambda *a: None)
+    assert kept[0]["county"] == "Beta"
+    assert kept[0]["county_geoid"] == "27003"
+
+
+def test_clip_county_reaches_the_popup(fake_state):
+    row = osp.parse_element(emg.SPEC, {"amenity": "police", "name": "PD"},
+                            -93.0, 45.0, "2026-09-15",
+                            {"type": "node", "id": 1})
+    kept = osp.clip_to_state([row], "MN", log=lambda *a: None)
+    rows = {a: b for a, b, _c in osp.rows_for(emg.SPEC, kept[0])}
+    assert rows["County"] == "Beta"
+
+
+def test_clip_says_nothing_when_everything_is_inside(fake_state):
+    rows = [{"lon": -94.0, "lat": 45.0, "layer": "x"}]
+    said = []
+    assert len(osp.clip_to_state(rows, "MN", log=said.append)) == 1
+    assert not any("fell outside" in m for m in said)
+
+
+def test_clip_refuses_an_unknown_state(fake_state):
+    with pytest.raises(SystemExit):
+        osp.clip_to_state([], "ZZ", log=lambda *a: None)
+
+
+def test_county_index_precomputes_a_usable_bounding_box(fake_state):
+    shapes, _names = fake_state
+    index = osp.county_index(shapes)
+    assert len(index) == 2
+    for _geoid, (w, s_, e, n), polys in index:
+        assert w < e and s_ < n
+        assert polys
+    # The box must CONTAIN the polygon, or the prefilter would reject real hits.
+    _g, (w, s_, e, n), polys = index[0]
+    for rings in polys:
+        for ring in rings:
+            for x, y in ring:
+                assert w <= x <= e and s_ <= y <= n
+
+
+def test_county_index_skips_a_county_with_no_geometry():
+    assert osp.county_index([("27999", [])]) == []
