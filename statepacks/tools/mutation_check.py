@@ -193,6 +193,9 @@ MUTATIONS = {
          '    return "repeaters"'),
     ],
     INV: [
+        ("print a progress line long enough to wrap a phone terminal",
+         '            print(f"\\r  reading {i}/{total}   ", end="", file=sys.stderr,',
+         '            print(f"\\r  reading {i}/{total} {os.path.basename(path)[:40]:<40}", end="", file=sys.stderr,'),
         ("open every file in the folder to answer a filtered name query",
          "             and (not only or only.lower() in n.lower())]",
          "             ]"),

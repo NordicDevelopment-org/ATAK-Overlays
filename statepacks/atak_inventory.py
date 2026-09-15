@@ -181,15 +181,21 @@ def scan(directory, deep=True, only=None):
     # halfway. Progress goes to stderr so `| grep` still works.
     # Only to a terminal. A \r progress line redirected to a file is 100 lines
     # of overwritten junk in the middle of someone's saved output.
+    #
+    # And it has to be SHORT. The first version printed the filename too, ran
+    # past 60 characters, and wrapped on a phone - at which point \r returns to
+    # the start of the wrapped row rather than the line, so every update was
+    # left on screen as a smear instead of a counter ticking in place. Keep it
+    # inside the narrowest terminal anyone runs this in.
     show = sys.stderr.isatty()
     rows, total = [], len(files)
     for i, path in enumerate(files, 1):
         if show:
-            print(f"\r  reading {i}/{total} {os.path.basename(path)[:40]:<40}",
-                  end="", file=sys.stderr, flush=True)
+            print(f"\r  reading {i}/{total}   ", end="", file=sys.stderr,
+                  flush=True)
         rows.append(inspect_kmz(path, deep=True))
     if show:
-        print("\r" + " " * 60 + "\r", end="", file=sys.stderr, flush=True)
+        print("\r" + " " * 24 + "\r", end="", file=sys.stderr, flush=True)
     return rows
 
 

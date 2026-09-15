@@ -4334,3 +4334,33 @@ def test_inventory_name_filter_is_case_insensitive(tmp_path):
     assert len(ainv.scan(str(d), only="county")) == 1
     assert len(ainv.scan(str(d), only="COUNTY")) == 1
     assert len(ainv.scan(str(d), only="nomatch")) == 0
+
+
+def test_inventory_progress_line_fits_a_narrow_terminal(monkeypatch, tmp_path):
+    """A wrapped \\r line smears instead of updating in place.
+
+    The first version printed the filename and ran past 60 characters, which
+    wraps on a phone - and a wrapped carriage return goes to the start of the
+    wrapped row, not the line, so every update stays on screen.
+    """
+    d = tmp_path / "overlays"
+    for i in range(3):
+        _county_kmz(str(d / f"a_very_long_overlay_filename_{i}.kmz"), ["X"], True)
+
+    written = []
+
+    class FakeTTY:
+        def isatty(self):
+            return True
+
+        def write(self, s):
+            written.append(s)
+
+        def flush(self):
+            pass
+
+    monkeypatch.setattr(sys, "stderr", FakeTTY())
+    ainv.scan(str(d))
+    lines = "".join(written).split("\r")
+    assert lines, "no progress was emitted to a tty"
+    assert max(len(x) for x in lines) <= 40, max(lines, key=len)
