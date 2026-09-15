@@ -145,7 +145,7 @@ them on. `overlaybuilder doctor --aoi <aoi> --include-disabled` tests them.
 | WI | service_territories | WI PSC Electric Service Territories (3 layers) | `maps.psc.wi.gov/server/rest/services/Electric/PSC_ElectricServiceTerritories/MapServer/0-2` | high |
 | WI | dams | WI DNR Repository of Dams | `dnrmaps.wi.gov/arcgis2/rest/services/WT_DAM/WT_Dam_WTM_Ext/MapServer` | medium |
 | IA | wastewater_treatment | Iowa DNR NPDES facilities | `programs.iowadnr.gov/geospatial/rest/services/OneStop/QueryEnvFacs/MapServer/12` | medium |
-| IA | fire_stations, hospitals, shelters, schools | Iowa HSEMD EmergencyManagement service | `eoc.iowa.gov/arcgis/rest/services/Public/EmergencyManagement/MapServer` (FireStations, Hospital, Shelter, School) | medium |
+| IA | fire_stations, hospitals, shelters, schools | Iowa HSEMD EmergencyManagement service | `eoc.iowa.gov/arcgis/rest/services/Public/EmergencyManagement/MapServer` (FireStations, Hospital, Shelter, School) | dead - disabled 2026-09-15, timed out on 2 separate CI runs an hour apart after answering fine on the run before that |
 | WI | hospitals, nursing_homes | WI DHS Facilities | `dhsgis.wi.gov/server/rest/services/DHS_GIS/Facilities/MapServer` (Hospital 5, Nursing Home 4) | high |
 | WI | ems | WI DHS licensed EMS services | `dhsgis.wi.gov/server/rest/services/DHS_RAFT/Emergency_Management_Resources/MapServer/0` | medium |
 | MN | fire_stations, police, hospitals (off) | U-Spatial / MnGeo datasets - resolve service URL from gis.data.mn.gov | see `catalog/states/mn/emergency.yaml` | low |

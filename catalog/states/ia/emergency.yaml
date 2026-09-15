@@ -13,29 +13,41 @@ sources:
     id: fire_stations@ia-hsemd
     entity: fire_station
     layer_match: "^FireStations$"
+    enabled: false
     fields:
       name: {from: [Name, NAME]}
     source_name: "Iowa HSEMD - Fire Stations"
+    notes: "HOST DEAD 2026-09-15 (confirmed by CI, twice, one hour apart): eoc.iowa.gov times out on every attempt including retries - not a single blip, since the same URL answered fine on the prior CI run. Disabled until confirmed live again"
+    confidence: dead
   - layer: hospitals
     id: hospitals@ia-hsemd
     entity: hospital
     layer_match: "^Hospital$"
+    enabled: false
     fields:
       name: {from: [Name, NAME]}
     source_name: "Iowa HSEMD - Hospitals"
+    notes: "HOST DEAD 2026-09-15 (confirmed by CI, twice, one hour apart): eoc.iowa.gov times out on every attempt including retries - not a single blip, since the same URL answered fine on the prior CI run. Disabled until confirmed live again"
+    confidence: dead
   - layer: shelters
     id: shelters@ia-hsemd
     layer_match: "^Shelter$"
     hidden: true
+    enabled: false
     fields:
       name: {from: [Name, NAME]}
     source_name: "Iowa HSEMD - Shelters"
+    notes: "HOST DEAD 2026-09-15 (confirmed by CI, twice, one hour apart): eoc.iowa.gov times out on every attempt including retries - not a single blip, since the same URL answered fine on the prior CI run. Disabled until confirmed live again"
+    confidence: dead
   - layer: schools
     id: schools@ia-hsemd
     sector: Government
     layer_match: "^School$"
     hidden: true
+    enabled: false
     aoi_kinds: [county, state, bbox]
     fields:
       name: {from: [Name, NAME]}
     source_name: "Iowa HSEMD - Schools"
+    notes: "HOST DEAD 2026-09-15 (confirmed by CI, twice, one hour apart): eoc.iowa.gov times out on every attempt including retries - not a single blip, since the same URL answered fine on the prior CI run. Disabled until confirmed live again"
+    confidence: dead
