@@ -449,6 +449,18 @@ def build_state(spec, state, out_dir, log=print, mirrors=None, deadline_s=None,
 
     log(f"[*] {state}: asking OpenStreetMap for {len(chosen)} class(es)")
     query = build_query(spec, chosen)
+    # classify() walks spec["classes"] in TABLE order and returns the first
+    # match, so it must be scoped to CHOSEN, not the full table, whenever
+    # --only narrows the query. Otherwise an element Overpass legitimately
+    # returned for an --only class can also happen to match an unrelated,
+    # UN-queried class that sits earlier in the full table - eoc's selector
+    # checks office/government tags, and a joint public-safety building can
+    # genuinely carry amenity=police at the same time, which sits earlier -
+    # and gets classified into that earlier class instead, then silently
+    # dropped by the keep-filter below with no error and no log line. The
+    # element the query specifically asked for and Overpass specifically
+    # returned would just be gone from the count.
+    scoped_spec = {**spec, "classes": chosen} if only else spec
     rows = seed.fetch_osm(
         state, mirrors=mirrors, log=log, query=query,
         # The cache namespace is a hash of the ACTUAL QUERY TEXT, not the
@@ -475,12 +487,16 @@ def build_state(spec, state, out_dir, log=print, mirrors=None, deadline_s=None,
         # its own version of this exact trap.
         prefix=bcp.safe(spec["kind"]).lower() + "_" + hashlib.sha1(
             query.encode("utf-8")).hexdigest()[:10],
-        parse=lambda t, lon, lat, f, el: parse_element(spec, t, lon, lat, f, el),
+        parse=lambda t, lon, lat, f, el: parse_element(scoped_spec, t, lon, lat, f, el),
         allow_partial=allow_partial,
         deadline_s=deadline_s or seed.OSM_DEADLINE_S,
         partial_note=("the classes above are undercounted because a tile "
                       "failed, not because the features do not exist"))
     if only:
+        # Now a backstop, not doing real work: classify() above is already
+        # scoped to `chosen`, so every row's layer is already in `keep`. Kept
+        # anyway as defence in depth against a future change to classify()
+        # reintroducing the same class of bug silently.
         keep = {c[0] for c in chosen}
         rows = [r for r in rows if r["layer"] in keep]
 

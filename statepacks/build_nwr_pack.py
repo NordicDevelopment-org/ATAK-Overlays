@@ -182,11 +182,19 @@ def placemark(station, state, meta):
         body += (f'<br/><font color="{bcp.GREY}"><i>SAME codes ({state}): '
                  f'{bcp.esc(listed)}{more}</i></font><br/>')
 
+    # .get() with a default, not meta[...]: a caller built before data_as_of
+    # and data_verified_live existed is a caller that only ever meant a live
+    # fetch, so the historically-correct fallback IS "verified live, as-of
+    # the build date" - the same values build() used to hardcode everywhere.
+    as_of_note = ("" if meta.get("data_verified_live", True)
+                 else " (from a saved file, not a live check)")
+    data_as_of = meta.get("data_as_of", meta.get("built", ""))
     footer = (f'<hr/><font color="{bcp.GREY}"><i>'
               f"Source: NOAA/NWS Weather Radio county coverage<br/>"
               f"{bcp.esc(meta['url'])}<br/>"
               f"Licence: public domain (NOAA/NWS)<br/>"
-              f"Status read: {bcp.esc(meta['built'])} - it changes<br/>"
+              f"Data as of: {bcp.esc(data_as_of)}{bcp.esc(as_of_note)}"
+              f" - it changes<br/>"
               f"Pack built: {bcp.esc(meta['built'])}</i></font>")
 
     name = f"{call} {freq}".strip() if freq else call
@@ -247,7 +255,8 @@ def pack_kml(state, stations, meta):
         f"{folders}</Document></kml>")
 
 
-def build(state, out_dir, rows, coverage=False, url=CCL_URL, log=print):
+def build(state, out_dir, rows, coverage=False, url=CCL_URL, log=print,
+         data_as_of=None, data_verified_live=True):
     state = state.strip().upper()
     picked = [s for s in rows if in_state(s, state, coverage=coverage)]
     sited = sum(1 for s in picked
@@ -271,8 +280,18 @@ def build(state, out_dir, rows, coverage=False, url=CCL_URL, log=print):
             f"{', '.join(str(s.get('callsign')) for s in off[:6])}")
 
     built = dt.date.today().isoformat()
+    # "built" is when THIS KMZ was assembled - true regardless of source, and
+    # used for the edition stamp. "data_as_of" is when the underlying NWR
+    # status is actually FROM, which is a different fact: a live fetch means
+    # today really is both, but --from-file means the file can be an old
+    # snapshot, and stamping it with today's date claimed NWS was checked
+    # today when it was not. Rule 1 - never invent a value - covers a date
+    # exactly as much as a coordinate or a capacity figure.
+    if data_as_of is None:
+        data_as_of = built
     meta = {"title": f"{state} NOAA Weather Radio ({built})",
-            "url": url, "built": built}
+            "url": url, "built": built, "data_as_of": data_as_of,
+            "data_verified_live": data_verified_live}
     kml = pack_kml(state, picked, meta)
     # Amber for a working transmitter; the folder already separates
     # the dead ones, so one icon is enough.
@@ -303,9 +322,15 @@ def main(argv=None):
     ap.add_argument("--from-file", metavar="FILE",
                     help="read an already-downloaded ccl-data.js, or the JSON "
                          "array parsed out of it, instead of fetching")
+    ap.add_argument("--as-of", metavar="YYYY-MM-DD",
+                    help="the date the --from-file snapshot is actually FROM, "
+                         "if known. Without this, the file's own last-modified "
+                         "date is used - never today's date, which would claim "
+                         "NWS was checked today when it was not")
     ap.add_argument("--url", default=CCL_URL)
     a = ap.parse_args(argv)
 
+    data_as_of, data_verified_live = None, True
     if a.from_file:
         text = open(a.from_file, encoding="utf-8").read()
         try:
@@ -318,11 +343,23 @@ def main(argv=None):
                 f"This builder wants the NWS file so it can read the SAME "
                 f"codes and status; pass the .js or the array it contains.")
         print(f"[*] {len(rows)} transmitters from {a.from_file}")
+        data_verified_live = False
+        if a.as_of:
+            data_as_of = a.as_of
+        else:
+            mtime = os.path.getmtime(a.from_file)
+            data_as_of = dt.date.fromtimestamp(mtime).isoformat()
+            print(f"    [!] no --as-of given; using {a.from_file}'s own "
+                 f"last-modified date ({data_as_of}) as the best available "
+                 f"answer to 'as of when'. That is a proxy, not a guarantee -  "
+                 f"a copy, download or extraction can change a file's "
+                 f"modified time without changing what it says.")
     else:
         rows = fetch_ccl(a.url)
 
     os.makedirs(a.out, exist_ok=True)
-    build(a.state, a.out, rows, coverage=a.coverage, url=a.url)
+    build(a.state, a.out, rows, coverage=a.coverage, url=a.url,
+         data_as_of=data_as_of, data_verified_live=data_verified_live)
     return 0
 
 

@@ -10,6 +10,7 @@ import importlib.util
 import json
 import math
 import os
+import datetime as dt
 import subprocess
 import re
 import sys
@@ -3569,7 +3570,11 @@ def test_the_pack_parses_as_xml_and_states_its_licence_and_read_date():
                        {"title": "t", "url": "u", "built": "2026-09-14"})
     ET.fromstring(kml)
     assert "public domain (NOAA/NWS)" in kml
-    assert "Status read: 2026-09-14" in kml       # status is live data
+    # "Status read" claimed a live NWS check even for an old --from-file
+    # snapshot; renamed to "Data as of" and separated from "Pack built" so
+    # the two can differ honestly. A caller with no data_as_of (this one)
+    # still gets the historically-correct fallback: as-of == built.
+    assert "Data as of: 2026-09-14" in kml
     assert "not CTCSS or DCS" in kml             # said once, where it matters
 
 
@@ -5515,3 +5520,108 @@ def test_mutation_check_main_all_clean_says_so(monkeypatch, capsys):
     out = capsys.readouterr().out
     assert rc == 0
     assert "every mutation is caught by at least one test" in out
+
+
+# --------------------------------------------------------------------------
+# osm_pack --only misclassification. classify() walks the class table in
+# order and returns the first match; scoped to the full table even under
+# --only, an element genuinely returned for the queried class can also match
+# an UNqueried class earlier in table order and be classified into it, then
+# silently dropped by the keep-filter with no error and no log line.
+# --------------------------------------------------------------------------
+def test_only_scopes_classification_so_an_earlier_class_cannot_steal_a_row():
+    """The actual reproduction: police (index 5) sits before eoc (index 7).
+    A joint public-safety building tagged both amenity=police and the eoc
+    office/government combination is exactly what --only eoc asked Overpass
+    for, and must not vanish because it also happens to look like police."""
+    tags = {"office": "government", "government": "emergency_management",
+            "amenity": "police"}
+    assert osp.classify(emg.SPEC, tags) == "police", (
+        "fixture must still reproduce the collision against the full table")
+
+    only_eoc = [c for c in emg.SPEC["classes"] if c[0] == "eoc"]
+    scoped = {**emg.SPEC, "classes": only_eoc}
+    assert osp.classify(scoped, tags) == "eoc"
+
+
+def test_build_state_only_never_drops_a_row_the_query_asked_for(monkeypatch):
+    """End to end: the row must survive build_state's own pipeline."""
+    tags = {"office": "government", "government": "emergency_management",
+            "amenity": "police"}
+
+    def fake_fetch_osm(state, mirrors=None, log=print, query=None, prefix=None,
+                       parse=None, **kw):
+        row = parse(tags, -93.0, 45.0, "2026-09-15", {"type": "node", "id": 1})
+        return [row] if row else []
+
+    monkeypatch.setattr(osp.seed, "fetch_osm", fake_fetch_osm)
+    monkeypatch.setattr(osp, "clip_to_state", lambda rows, state, log=print: rows)
+    result = osp.build_state(emg.SPEC, "MN", "/tmp", log=lambda *a: None,
+                             only=["eoc"])
+    assert result["features"] == 1, "the element the query asked for was dropped"
+    assert result["counts"] == {"eoc": 1}
+
+
+def test_only_still_excludes_a_row_that_genuinely_belongs_elsewhere(monkeypatch):
+    """The backstop filter still has a job on data that is not the exploit."""
+    def fake_fetch_osm(state, mirrors=None, log=print, query=None, prefix=None,
+                       parse=None, **kw):
+        # A plain, unambiguous police row - not a collision case.
+        row = parse({"amenity": "police"}, -93.0, 45.0, "2026-09-15",
+                    {"type": "node", "id": 1})
+        return [row] if row else []
+
+    monkeypatch.setattr(osp.seed, "fetch_osm", fake_fetch_osm)
+    monkeypatch.setattr(osp, "clip_to_state", lambda rows, state, log=print: rows)
+    result = osp.build_state(emg.SPEC, "MN", "/tmp", log=lambda *a: None,
+                             only=["eoc"])
+    assert result["features"] == 0, "a genuine police row must not count as eoc"
+
+
+# --------------------------------------------------------------------------
+# build_nwr_pack date honesty. "Status read" and "Pack built" were the same
+# value - today's date - even for --from-file, which claimed NWS was checked
+# today when the file could be an old snapshot.
+# --------------------------------------------------------------------------
+def test_nwr_live_fetch_data_as_of_is_verified_and_equals_today():
+    kml, _drawn = nwr.build("MN", "/tmp", [], log=lambda *a: None)
+    assert "not a live check" not in kml
+
+
+def test_nwr_from_file_without_as_of_uses_the_files_own_mtime(tmp_path, monkeypatch):
+    f = tmp_path / "ccl.json"
+    f.write_text("[]", encoding="utf-8")
+    old_time = time.time() - 10 * 86400        # ten days old
+    os.utime(f, (old_time, old_time))
+
+    argv = ["--from-file", str(f), "--out", str(tmp_path / "out"), "--state", "MN"]
+    said = []
+    monkeypatch.setattr("builtins.print", lambda *a, **k: said.append(" ".join(map(str, a))))
+    nwr.main(argv)
+    joined = " ".join(said)
+    assert "own last-modified date" in joined
+    expected = dt.date.fromtimestamp(old_time).isoformat()
+    assert expected in joined
+
+
+def test_nwr_from_file_with_explicit_as_of_uses_it_verbatim():
+    meta = {"title": "MN NOAA Weather Radio", "url": nwr.CCL_URL,
+            "built": dt.date.today().isoformat(), "data_as_of": "2020-01-01",
+            "data_verified_live": False}
+    kml = nwr.pack_kml("MN", [{"callsign": "WXL30", "freq": "162.550", "lat": "45.0", "lon": "-93.0"}], meta)
+    assert "2020-01-01" in kml
+    assert "not a live check" in kml
+    assert "Pack built:" in kml
+
+
+def test_nwr_footer_never_conflates_status_read_with_pack_built_for_a_snapshot():
+    """The exact false claim: 'Status read: {today}' when the data is old."""
+    today = dt.date.today().isoformat()
+    meta = {"title": "MN NOAA Weather Radio", "url": nwr.CCL_URL,
+            "built": today, "data_as_of": "2019-06-01",
+            "data_verified_live": False}
+    kml = nwr.pack_kml("MN", [{"callsign": "WXL30", "freq": "162.550", "lat": "45.0", "lon": "-93.0"}], meta)
+    assert "2019-06-01" in kml
+    # "Pack built" legitimately says today; "Data as of" must not also say
+    # today when the underlying snapshot is from 2019.
+    assert f"Data as of: {today}" not in kml
