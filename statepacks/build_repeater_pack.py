@@ -94,26 +94,191 @@ def classify_tone(raw):
     return "unrecognised", "not a CTCSS tone, DCS code or DMR colour code"
 
 
-def dedupe(feats, log=print):
-    """Drop records identical in every property AND coordinate.
+def _squash(value):
+    """Collapse runs of whitespace inside a string value.
 
-    Only exact duplicates. Two rows that differ anywhere are kept, because a
-    difference might be real - one callsign genuinely running FM and DMR from
-    one tower is two rows, not a mistake.
+    ONLY for building a comparison key - the record that is kept keeps its
+    original value, because rule 3 of this project is that raw attributes
+    ride along untouched.
+
+    A run of spaces inside a field is a PDF column-extraction artifact, never
+    a fact about a repeater. The MRC list is published as a PDF, and pulling
+    columns out of it produced rows differing only in how many spaces sat
+    between a callsign and its access flags:
+        'N0ANC             O'
+        'N0ANC              O'
+    Those are one record written twice, and treating them as two puts a
+    second pin exactly on top of the first.
     """
-    seen, out = set(), []
+    if isinstance(value, str):
+        return re.sub(r"\s+", " ", value).strip()
+    return value
+
+
+def _key(f, squash=False):
+    props = f.get("properties") or {}
+    if squash:
+        props = {k: _squash(v) for k, v in props.items()}
+    return (json.dumps(props, sort_keys=True),
+            json.dumps(f.get("geometry") or {}, sort_keys=True))
+
+
+def identity(f):
+    """What makes this one machine: callsign, output frequency, mode.
+
+    Not a dedupe key - a reporting key. Two rows sharing an identity might be
+    one record duplicated or two genuinely separate coordination entries, and
+    only a person reading them can say which.
+    """
+    p = f.get("properties") or {}
+    return (str(p.get("callsign") or "").strip().upper(),
+            str(p.get("output_mhz") or "").strip(),
+            str(p.get("mode") or "").strip())
+
+
+def cities_of(group):
+    return sorted({str((f.get("properties") or {}).get("city") or "?").strip()
+                   for f in group})
+
+
+def stacked(feats):
+    """[(identity, group, cities)] for identities drawn at one coordinate.
+
+    Two different things land here and they are NOT the same problem:
+
+    ONE SITE, TWO ENTRIES - same identity, same coordinate, same city. A
+    machine can hold two coordination entries with different sponsors or
+    dates. Both are true; they just draw as a single pin.
+
+    ONE COORDINATE, TWO TOWNS - same identity, same coordinate, DIFFERENT
+    cities. Measured on the Minnesota list: N0BZZ 147.36 FM is listed in both
+    Aitkin and Cook, about a hundred miles apart, at one set of coordinates.
+    WA0CQG 442.15 sits in Balaton and Bloomington. Those cannot both be right,
+    so at least one pin is in a town the repeater is not in. The
+    callsign-plus-frequency join matched one site record to two coordination
+    entries and gave both the same position.
+
+    A pin in the wrong place is worse than two pins in the right one, and
+    nothing is dropped to tidy it up: which entry is misplaced is not
+    something this builder can know.
+    """
+    by = {}
     for f in feats:
-        key = (json.dumps(f.get("properties") or {}, sort_keys=True),
-               json.dumps(f.get("geometry") or {}, sort_keys=True))
-        if key in seen:
+        by.setdefault(identity(f), []).append(f)
+    out = []
+    for ident, group in sorted(by.items()):
+        if len(group) < 2:
             continue
-        seen.add(key)
-        out.append(f)
-    if len(out) != len(feats):
-        log(f"    [!] {len(feats) - len(out)} duplicate record(s) collapsed; "
-            f"{len(out)} distinct. Stacked pins look like one pin, so this is "
-            f"invisible on a map until someone counts.")
+        coords = {json.dumps((f.get("geometry") or {}).get("coordinates"))
+                  for f in group}
+        if len(coords) == 1:
+            out.append((ident, group, cities_of(group)))
     return out
+
+
+def mark_contested(feats):
+    """Flag every feature whose position is shared with another town.
+
+    The popup has to carry this. A report on the build log is read once by
+    whoever ran it; the person who taps the pin in the field six months later
+    is the one who needs to know the position is disputed.
+    """
+    marked, n = [], 0
+    contested = {}
+    for _ident, group, cities in stacked(feats):
+        if len(cities) < 2:
+            continue
+        for f in group:
+            contested[id(f)] = cities
+    for f in feats:
+        cities = contested.get(id(f))
+        if not cities:
+            marked.append(f)
+            continue
+        copy = dict(f)
+        props = dict(f.get("properties") or {})
+        mine = str(props.get("city") or "?").strip()
+        others = [c for c in cities if c != mine]
+        props["_position_contested"] = (
+            "also listed in " + ", ".join(others) +
+            " at these exact coordinates - at least one of those positions "
+            "is wrong")
+        copy["properties"] = props
+        marked.append(copy)
+        n += 1
+    return marked, n
+
+
+def dedupe(feats, log=print):
+    """Drop duplicate records, in two passes that are reported separately.
+
+    PASS 1 - identical in every property AND coordinate. Unambiguous.
+
+    PASS 2 - identical once runs of whitespace are collapsed. Also
+    unambiguous, but worth its own line: it says the SOURCE has a formatting
+    problem rather than a content one, which is a different thing to go and
+    fix. Measured on the Minnesota list: 2,080 rows -> 648 after pass 1 ->
+    518 after pass 2.
+
+    Anything still differing after that is kept. A difference might be real -
+    one callsign running FM and DMR from one tower is two rows, not a mistake
+    - and this builder does not get to decide otherwise.
+    """
+    exact, out = set(), []
+    for f in feats:
+        k = _key(f)
+        if k in exact:
+            continue
+        exact.add(k)
+        out.append(f)
+    n_exact = len(feats) - len(out)
+
+    squashed, kept = set(), []
+    for f in out:
+        k = _key(f, squash=True)
+        if k in squashed:
+            continue
+        squashed.add(k)
+        kept.append(f)
+    n_space = len(out) - len(kept)
+
+    if n_exact:
+        log(f"    [!] {n_exact} record(s) were byte-identical to another and "
+            f"were collapsed. Stacked pins look like one pin, so this is "
+            f"invisible on a map until someone counts.")
+    if n_space:
+        log(f"    [!] {n_space} more differed only in runs of whitespace - a "
+            f"PDF column artifact, not a fact about a repeater - and were "
+            f"collapsed too. The kept record keeps its original spelling.")
+    if n_exact or n_space:
+        log(f"    {len(feats)} row(s) in, {len(kept)} distinct record(s) out.")
+
+    same_town, two_towns = [], []
+    for ident, group, cities in stacked(kept):
+        (two_towns if len(cities) > 1 else same_town).append(
+            (ident, group, cities))
+
+    for ident, group, cities in same_town:
+        call, out_mhz, mode = ident
+        log(f"    [i] {call} {out_mhz} {mode}: {len(group)} coordination "
+            f"entries at one site in {cities[0]}. Both kept; they draw as a "
+            f"single pin.")
+
+    if two_towns:
+        log(f"    [!] {len(two_towns)} repeater(s) are placed at ONE "
+            f"coordinate while the list names TWO different towns for them. "
+            f"At least one pin in each pair is in a town the machine is not "
+            f"in - the callsign+frequency join gave two entries one site.")
+        for ident, _group, cities in two_towns:
+            call, out_mhz, mode = ident
+            log(f"        {call} {out_mhz} {mode}: {' / '.join(cities)}")
+        log(f"        Nothing was dropped - which entry is misplaced is not "
+            f"something this builder can know. Each popup says so.")
+
+    kept, n_marked = mark_contested(kept)
+    if n_marked:
+        log(f"    {n_marked} placemark(s) carry a contested-position note.")
+    return kept
 
 
 def rows_for(p):
@@ -141,6 +306,11 @@ def rows_for(p):
         ("Coordinated", str(p.get("coordinated") or "").strip(), ""),
         ("Coordination date", str(p.get("update") or "").strip(), ""),
         ("Position from", src, src_note),
+        # Last, and only when it applies. A disputed position is the single
+        # most important thing on this popup for anyone about to rely on it.
+        ("Position disputed",
+         "yes" if p.get("_position_contested") else "",
+         str(p.get("_position_contested") or "")),
     ]
 
 

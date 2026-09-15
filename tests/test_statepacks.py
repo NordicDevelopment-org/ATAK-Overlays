@@ -4364,3 +4364,97 @@ def test_inventory_progress_line_fits_a_narrow_terminal(monkeypatch, tmp_path):
     lines = "".join(written).split("\r")
     assert lines, "no progress was emitted to a tty"
     assert max(len(x) for x in lines) <= 40, max(lines, key=len)
+
+
+# --------------------------------------------------------------------------
+# Repeater fan-out. The supplied MN list carried 2,080 rows for 504 machines:
+# a 4x join fan-out, plus rows differing only in PDF column whitespace, plus
+# 13 repeaters given one coordinate while the list names two towns for them.
+# --------------------------------------------------------------------------
+def _rep(callsign, out_mhz, mode, city, coords=(-93.0, 45.0), **extra):
+    props = {"callsign": callsign, "output_mhz": out_mhz, "mode": mode,
+             "city": city}
+    props.update(extra)
+    return {"type": "Feature", "properties": props,
+            "geometry": {"type": "Point", "coordinates": list(coords)}}
+
+
+def test_repeater_dedupe_collapses_byte_identical_rows():
+    f = _rep("W0ABC", 146.94, "FM", "DULUTH")
+    out = rep.dedupe([f, dict(f), dict(f), dict(f)], log=lambda *a: None)
+    assert len(out) == 1
+
+
+def test_repeater_dedupe_collapses_whitespace_only_differences():
+    """A run of spaces is a PDF column artifact, never a fact about a radio."""
+    a = _rep("W0ABC", 146.94, "FM", "DULUTH", access="W0ABC     O")
+    b = _rep("W0ABC", 146.94, "FM", "DULUTH", access="W0ABC      O")
+    c = _rep("W0ABC", 146.94, "FM", "DULUTH", access="W0ABC  O")
+    out = rep.dedupe([a, b, c], log=lambda *a: None)
+    assert len(out) == 1
+    # Rule 3: the record that survives keeps its ORIGINAL spelling, because
+    # the raw attribute is what rides along in the placemark.
+    assert out[0]["properties"]["access"] == "W0ABC     O"
+
+
+def test_repeater_dedupe_keeps_a_real_difference():
+    """One callsign running FM and DMR from one tower is two rows."""
+    a = _rep("W0ABC", 146.94, "FM", "DULUTH")
+    b = _rep("W0ABC", 146.94, "DMR", "DULUTH")
+    assert len(rep.dedupe([a, b], log=lambda *a: None)) == 2
+
+
+def test_repeater_two_entries_for_one_site_are_kept_and_not_alarmed():
+    """Same town, same point: two coordination entries for one machine."""
+    a = _rep("W0ABC", 146.94, "FM", "DULUTH", sponsor="CLUB A", update="01/01/25")
+    b = _rep("W0ABC", 146.94, "FM", "DULUTH", sponsor="CLUB B", update="02/02/26")
+    said = []
+    out = rep.dedupe([a, b], log=said.append)
+    assert len(out) == 2
+    joined = " ".join(said)
+    assert "one site" in joined
+    # Not the loud case, and no disputed-position note on either.
+    assert "at least one pin" not in joined
+    assert not any(f["properties"].get("_position_contested") for f in out)
+
+
+def test_repeater_one_coordinate_two_towns_is_reported_loudly():
+    """Balaton and Bloomington cannot both be at one point."""
+    a = _rep("WA0CQG", 442.15, "DMR", "BALATON")
+    b = _rep("WA0CQG", 442.15, "DMR", "BLOOMINGTON")
+    said = []
+    out = rep.dedupe([a, b], log=said.append)
+    assert len(out) == 2, "nothing may be dropped to tidy this up"
+    joined = " ".join(said)
+    assert "TWO different towns" in joined
+    assert "BALATON / BLOOMINGTON" in joined
+
+
+def test_repeater_contested_position_reaches_the_popup():
+    """The build log is read once; the pin is tapped in the field later."""
+    a = _rep("WA0CQG", 442.15, "DMR", "BALATON")
+    b = _rep("WA0CQG", 442.15, "DMR", "BLOOMINGTON")
+    out = rep.dedupe([a, b], log=lambda *x: None)
+    balaton = next(f for f in out if f["properties"]["city"] == "BALATON")
+    rows = {label: (value, note) for label, value, note in
+            rep.rows_for(balaton["properties"])}
+    assert rows["Position disputed"][0] == "yes"
+    assert "BLOOMINGTON" in rows["Position disputed"][1]
+    # And the other one names Balaton, not itself.
+    bloom = next(f for f in out if f["properties"]["city"] == "BLOOMINGTON")
+    assert "BALATON" in bloom["properties"]["_position_contested"]
+
+
+def test_repeater_same_identity_at_different_points_is_not_contested():
+    """Two towns AND two coordinates is just two repeaters."""
+    a = _rep("W0ABC", 146.94, "FM", "DULUTH", coords=(-92.1, 46.8))
+    b = _rep("W0ABC", 146.94, "FM", "SAINT PAUL", coords=(-93.1, 44.9))
+    out = rep.dedupe([a, b], log=lambda *x: None)
+    assert len(out) == 2
+    assert not any(f["properties"].get("_position_contested") for f in out)
+
+
+def test_repeater_uncontested_placemark_has_no_disputed_row():
+    f = _rep("W0ABC", 146.94, "FM", "DULUTH")
+    rows = {label: value for label, value, _n in rep.rows_for(f["properties"])}
+    assert rows["Position disputed"] == ""

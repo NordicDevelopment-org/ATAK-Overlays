@@ -181,6 +181,20 @@ MUTATIONS = {
          '        status = "NORMAL"'),
     ],
     RPT: [
+        ("stop collapsing whitespace-only duplicates",
+         "        k = _key(f, squash=True)", "        k = _key(f)"),
+        ("rewrite the kept record with the squashed value",
+         "    if isinstance(value, str):\n"
+         '        return re.sub(r"\\s+", " ", value).strip()',
+         "    if isinstance(value, str):\n        return value"),
+        ("call one coordinate in two towns a normal two-entry site",
+         "        (two_towns if len(cities) > 1 else same_town).append(",
+         "        (same_town if True else two_towns).append("),
+        ("drop the contested entries instead of reporting them",
+         "    kept, n_marked = mark_contested(kept)",
+         "    kept = [f for f in kept if True]; n_marked = 0"),
+        ("keep the disputed position out of the popup",
+         '        ("Position disputed",', '        ("_unused",'),
         ("anchor the query on a parent key the data does not carry",
          '    "communication:amateur_radio:repeater:frequency_out",\n'
          '    "communication:amateur_radio:repeater:frequency_in",',
