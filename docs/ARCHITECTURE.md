@@ -5,7 +5,7 @@ critical infrastructure, for **any area of interest** - one county today, a
 state, a multi-state region, the whole US, another country, or the world.
 
 ```
---aoi county:27025 | state:MN | region:upper-midwest | us | country:CA | bbox:W,S,E,N
+--aoi county:27025 | state:MN | region:upper-midwest | us | country:<ISO2> | bbox:W,S,E,N
         │
         ▼
    AOI (aoi.py)            kind, bbox envelope, boundary polygon, template vars
