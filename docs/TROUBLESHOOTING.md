@@ -10,7 +10,7 @@ something is wrong on the tablet.
 ## Start here: ask the folder what is in it
 
 ```bash
-cd ~/atak-build/statepacks/termux && ./atak-list.sh
+cd ~/atak-packs/ATAK-Overlays/statepacks/termux && ./atak-list.sh
 ```
 
 It opens every overlay and reports the placemark count, whether the document

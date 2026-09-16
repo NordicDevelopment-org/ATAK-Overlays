@@ -555,6 +555,8 @@ opens every installed overlay and names what is wrong with the set.
 | Population all `not in dataset` | ACS didn't answer. Build still works. Re-run later, or `--acs-year 2022`. |
 | Pack is huge / ATAK is sluggish | `--precision 5` (~1 m accuracy, roughly 40% smaller). |
 | `permission denied` running a script | `chmod +x termux/*.sh` |
+| `bash: cd: ...: No such file or directory` pasting a later section's block | You're not in the checkout §2 made, or it's not at `~/atak-packs/ATAK-Overlays` (a new Termux session starts back at `~`). Find it: `find ~ -maxdepth 4 -iname ATAK-Overlays -type d 2>/dev/null`, then `cd` there + `statepacks`. `~/atak-packs` is *also* where built packs land (`atak-env.sh`'s `STAGE_DIR`) - don't confuse "the checkout" with "the staging folder"; they're both under it. |
+| `./make-state-pack.sh: No such file or directory` / `chmod: cannot access '*.sh'` | The scripts live in `statepacks/termux/`, not `statepacks/`. `cd termux` first, or run `./termux/make-state-pack.sh` from `statepacks/`. |
 | `unknown option: --x` from remove | deliberate — an unrecognised flag is never treated as a filename pattern |
 | Seats/contacts still say `not in dataset` after editing a CSV | check the row has a 5-digit `geoid` in the first column and that you kept the `geoid,...` header line |
 | The LE fetch sits there for ages | It prints a line per tile with time used/left. It stops on its own at 600s; `--deadline 1800` gives it longer. Finished tiles are cached, so a re-run resumes where it stopped. |
