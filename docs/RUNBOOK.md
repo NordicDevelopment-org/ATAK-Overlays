@@ -117,7 +117,6 @@ records to eyeball before a briefing.
 overlaybuilder build --aoi state:MN --sectors energy water comm --jobs 6   # state-wide
 overlaybuilder build --aoi region:mn-neighbors --layers power_plants substations transmission_lines pipelines dams
 overlaybuilder build --aoi us --layers power_plants transmission_lines dams refineries   # national (non-OSM layers)
-overlaybuilder build --aoi country:CA --sectors energy                                # OSM world tier
 ```
 
 Notes:

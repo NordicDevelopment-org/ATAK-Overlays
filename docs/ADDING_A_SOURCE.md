@@ -19,7 +19,7 @@ driver.
 | `driver` | yes | `arcgis`, `file`, `overpass`, `osm_pbf`, `census_tiger` |
 | `id` | no | unique id for logs/manifest (default `<layer>@<file>`) |
 | `sector` | no | which sector KMZ the layer lands in, and its folder in `ALL.kmz` (default from the layer key) |
-| `coverage` | no | `world`, `us`, `state`, `state:MN`, `country:CA`, `county` (default from tier) |
+| `coverage` | no | `world`, `us`, `state`, `state:MN`, `country:<ISO2>`, `county` (default from tier) |
 | `aoi_kinds` | no | restrict to some AOI kinds, e.g. `[county, bbox]` for dense layers |
 | `priority` | no | build order (boundaries 0, default 50) |
 | `enabled` | no | `false` keeps the entry documented but skipped |
