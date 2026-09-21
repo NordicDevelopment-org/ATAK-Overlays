@@ -23,3 +23,9 @@ htmlcov/
 .pytest_cache/
 .ruff_cache/
 .mypy_cache/
+
+# Xweather credentials - environment only, never committed.
+# Keys are a pair from https://data.portal.xweather.com/account/keys and are
+# namespace-bound; see .claude/skills/VENDOR.md.
+.env
+.env.local
