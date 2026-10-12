@@ -188,6 +188,8 @@ def test_a_permanent_gateway_timeout_eventually_reports_dead(monkeypatch):
 
     def always_504(req, timeout=None):
         calls.append(1)
+        if len(calls) > 50:                       # bound: an unbounded retry must fail, not hang
+            raise RuntimeError("retried without limit")
         raise _http_error(504)
 
     monkeypatch.setattr(health, "urlopen", always_504)
