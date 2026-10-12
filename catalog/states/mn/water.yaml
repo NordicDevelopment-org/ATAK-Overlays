@@ -12,7 +12,7 @@ sources:
     layer_id: 0
     spatial: bbox
     source_name: "MPCA Wastewater Facilities in Minnesota (NPDES/SDS permitted)"
-    source_url: https://gisdata.mn.gov/dataset/util-wastewater-facilities
+    source_url: https://gis.data.mn.gov/datasets/fd89ea84b8b142e8871ba409db8c10b0
     notes: "~1,500 permitted facilities, refreshed daily from MPCA Tempo; cross-checked against EPA FRS"
     confidence: medium
 
@@ -20,12 +20,23 @@ sources:
     id: dams@mn-dnr
     provider: mn-dnr
     entity: dam
-    driver: file
-    url: https://resources.gisdata.mn.gov/pub/gdrs/data/pub/us_mn_state_dnr/struc_mn_dams_inventory_pub/gpkg_struc_mn_dams_inventory_pub.zip
-    format: gpkg
-    zip_member: "\\.gpkg$"
+    driver: arcgis
+    url: https://enterprise.gisdata.mn.gov/aghost/rest/services/us_mn_state_dnr/struc_mn_dams_inventory_pub/FeatureServer
+    layer_id: 0                             # "Dam Locations", point
+    spatial: bbox
     group_by: [hazard_class]
+    fields:
+      name: {from: [dam_name]}
+      source_id: {from: [nid_id]}
+      storage_acre_ft: {from: [max_store]}  # metadata: "Maximum storage capacity, in acre-feet"
+      hazard_class: {from: [hazard]}
+      condition: {from: [condition_assessment]}
+      purpose: {from: [present_purpose]}
+      year_built: {from: [year_completed]}
+      owner: {from: [owner]}
+      status: {from: [status_of_dam]}
+      county: {from: [county]}
     source_name: "MN DNR Inventory of Dams in Minnesota (Dam Safety Unit)"
-    source_url: https://gisdata.mn.gov/dataset/struc-mn-dams-inventory-pub
-    notes: "Includes structures below NID thresholds and removed dams (filter on status). Zip name follows the MnGeo GDRS pattern; confirm on the dataset page"
-    confidence: medium
+    source_url: https://gis.data.mn.gov/datasets/e21f9058e0504a99b118273c8a433b7d
+    notes: "Probed live 2026-10-12: 1,742 points, schema read from the service. Moved here when MnGeo retired gisdata.mn.gov (now 301s to the gis.data.mn.gov ArcGIS Hub) and the GDRS zip began 404ing. Includes structures below NID thresholds and removed dams (filter on status). top_dam_hgt is deliberately NOT mapped to height_ft: the metadata PDF defines it only as 'Top Dam Height' with no unit; it still rides in the raw attributes"
+    confidence: high
