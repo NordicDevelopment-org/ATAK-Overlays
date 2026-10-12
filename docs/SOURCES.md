@@ -141,7 +141,7 @@ them on. `overlaybuilder doctor --aoi <aoi> --include-disabled` tests them.
 |---|---|---|---|---|
 | MN | service_territories | MN PUC Electric Utility Service Areas (MnGeo) | `app.gisdata.mn.gov/arcgis/rest/services/EUSA/EUSA/FeatureServer/0` | dead - disabled 2026-09-15, DNS failure (host no longer resolves); dataset still active per gisdata.mn.gov, unconfirmed candidate `feat.gisdata.mn.gov` added as alternate |
 | MN | wastewater_treatment | MPCA Wastewater Facilities | `enterprise.gisdata.mn.gov/aghost/rest/services/us_mn_state_pca/util_wastewater_facilities/FeatureServer/0` | medium |
-| MN | dams | MN DNR Inventory of Dams (GeoPackage) | `resources.gisdata.mn.gov/pub/gdrs/data/pub/us_mn_state_dnr/struc_mn_dams_inventory_pub/gpkg_struc_mn_dams_inventory_pub.zip` | medium |
+| MN | dams | MN DNR Inventory of Dams | `enterprise.gisdata.mn.gov/aghost/rest/services/us_mn_state_dnr/struc_mn_dams_inventory_pub/FeatureServer/0` | high - probed live 2026-10-12 (1,742 points); replaced the GDRS GeoPackage zip, which began 404ing |
 | WI | service_territories | WI PSC Electric Service Territories (3 layers) | `maps.psc.wi.gov/server/rest/services/Electric/PSC_ElectricServiceTerritories/MapServer/0-2` | high |
 | WI | dams | WI DNR Repository of Dams | `dnrmaps.wi.gov/arcgis2/rest/services/WT_DAM/WT_Dam_WTM_Ext/MapServer` | medium |
 | IA | wastewater_treatment | Iowa DNR NPDES facilities | `programs.iowadnr.gov/geospatial/rest/services/OneStop/QueryEnvFacs/MapServer/12` | medium |
@@ -151,9 +151,17 @@ them on. `overlaybuilder doctor --aoi <aoi> --include-disabled` tests them.
 | MN | fire_stations, police, hospitals (off) | U-Spatial / MnGeo datasets - resolve service URL from gis.data.mn.gov | see `catalog/states/mn/emergency.yaml` | low |
 | IA | service_territories (off) | Iowa Utilities Commission boundaries | resolve from geodata.iowa.gov hub item | low |
 
-MnGeo Commons pattern for adding more MN layers:
-`https://resources.gisdata.mn.gov/pub/gdrs/data/pub/<agency>/<dataset>/{shp,gpkg,fgdb}_<dataset>.zip`
-with metadata at `.../<dataset>/metadata/metadata.html`.
+MnGeo Commons pattern for adding more MN layers (as of 2026-10-12):
+the Commons moved to an ArcGIS Hub site. `gisdata.mn.gov/dataset/<name>` now
+301s to the `gis.data.mn.gov` home page, and the old GDRS bulk-download path
+(`resources.gisdata.mn.gov/pub/gdrs/data/pub/<agency>/<dataset>/...zip`)
+returns 404. Find a dataset with the Hub search API, which returns the live
+service URL directly:
+`https://gis.data.mn.gov/api/search/v1/collections/all/items?q=<words>`.
+Most state datasets are served as
+`enterprise.gisdata.mn.gov/aghost/rest/services/<agency>/<dataset>/FeatureServer`;
+the dataset page is `gis.data.mn.gov/datasets/<item id>` and its description
+links the metadata PDF.
 
 ## County tier
 

@@ -11,7 +11,7 @@ import json
 import os
 import sys
 import time
-from urllib.error import URLError
+from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -35,11 +35,28 @@ SAMPLE_VARS = parse_aoi("state:MN").template_vars()
 RETRIES_ON_TIMEOUT = 2
 RETRY_BACKOFF_S = 3
 
+# A 502/503/504 is the same kind of answer as a timeout: a proxy or load
+# balancer in front of the service gave up waiting, or the service is briefly
+# overloaded. It says nothing about whether the endpoint exists. Measured
+# 2026-10-12: EPA geodata.epa.gov FRS_Wastewater/MapServer/1 failed a CI run
+# with "HTTP Error 504: Gateway Time-out"; probed again minutes later it
+# alternated 504 / 200 / 504 / 200 with valid layer JSON on every 200, and an
+# unrelated service on the same host 504'd too - a host-wide gateway flapping,
+# not a dead source. These come back in ~10s (the gateway's own cutoff), so
+# more attempts than a 45s socket timeout get is cheap.
+TRANSIENT_HTTP = {502, 503, 504}
+RETRIES_ON_GATEWAY = 4
+GATEWAY_BACKOFF_S = 5
+
 
 def _is_timeout(e):
     if isinstance(e, TimeoutError):
         return True
     return isinstance(e, URLError) and isinstance(e.reason, TimeoutError)
+
+
+def _is_gateway(e):
+    return isinstance(e, HTTPError) and e.code in TRANSIENT_HTTP
 
 
 def ping_monthly(url: str, arcgis: bool) -> str:
@@ -57,7 +74,8 @@ def ping_monthly(url: str, arcgis: bool) -> str:
 def ping(url: str, arcgis: bool) -> str:
     u = url + ("&" if "?" in url else "?") + "f=json" if arcgis else url
     req = Request(u, headers={"User-Agent": "overlaybuilder-health/0.2"}, method="GET")
-    for attempt in range(RETRIES_ON_TIMEOUT + 1):
+    timeouts = gateways = 0
+    while True:
         try:
             with urlopen(req, timeout=45) as r:
                 if arcgis:
@@ -72,8 +90,13 @@ def ping(url: str, arcgis: bool) -> str:
                         return "WARN no layers/fields in response"
                 return f"ok {r.status}"
         except Exception as e:  # noqa: BLE001
-            if _is_timeout(e) and attempt < RETRIES_ON_TIMEOUT:
+            if _is_timeout(e) and timeouts < RETRIES_ON_TIMEOUT:
+                timeouts += 1
                 time.sleep(RETRY_BACKOFF_S)
+                continue
+            if _is_gateway(e) and gateways < RETRIES_ON_GATEWAY:
+                gateways += 1
+                time.sleep(GATEWAY_BACKOFF_S)
                 continue
             return f"DEAD {e}"
 

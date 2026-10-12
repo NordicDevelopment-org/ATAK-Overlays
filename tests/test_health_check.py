@@ -139,3 +139,75 @@ def test_a_definite_error_is_not_retried(monkeypatch):
     status = health.ping("https://example.test/svc", True)
     assert status.startswith("DEAD")
     assert len(calls) == 1, "a non-timeout error must not be retried"
+
+
+# --------------------------------------------------------------------------
+# Gateway retry. A 502/503/504 is a proxy giving up waiting, the same class of
+# answer as a timeout - EPA geodata flapped 504/200/504/200 on 2026-10-12 and
+# failed a scheduled run. A 404/403 is still a definite answer and is not
+# retried.
+# --------------------------------------------------------------------------
+def _http_error(code):
+    from urllib.error import HTTPError
+    return HTTPError("https://example.test/svc", code, "gateway", {}, None)
+
+
+def test_a_gateway_timeout_is_retried_and_can_still_succeed(monkeypatch):
+    calls = []
+
+    def fake_urlopen(req, timeout=None):
+        calls.append(1)
+        if len(calls) <= 2:
+            raise _http_error(504)
+        return _FakeResponse()
+
+    monkeypatch.setattr(health, "urlopen", fake_urlopen)
+    monkeypatch.setattr(health.time, "sleep", lambda s: None)
+    status = health.ping("https://example.test/svc", True)
+    assert status.startswith("ok"), status
+    assert len(calls) == 3
+
+
+def test_every_transient_gateway_code_is_retried(monkeypatch):
+    for code in (502, 503, 504):
+        calls = []
+
+        def fake_urlopen(req, timeout=None, _code=code, _calls=calls):
+            _calls.append(1)
+            if len(_calls) == 1:
+                raise _http_error(_code)
+            return _FakeResponse()
+
+        monkeypatch.setattr(health, "urlopen", fake_urlopen)
+        monkeypatch.setattr(health.time, "sleep", lambda s: None)
+        assert health.ping("https://example.test/svc", True).startswith("ok"), code
+
+
+def test_a_permanent_gateway_timeout_eventually_reports_dead(monkeypatch):
+    calls = []
+
+    def always_504(req, timeout=None):
+        calls.append(1)
+        if len(calls) > 50:                       # bound: an unbounded retry must fail, not hang
+            raise RuntimeError("retried without limit")
+        raise _http_error(504)
+
+    monkeypatch.setattr(health, "urlopen", always_504)
+    monkeypatch.setattr(health.time, "sleep", lambda s: None)
+    status = health.ping("https://example.test/svc", True)
+    assert status.startswith("DEAD") and "504" in status
+    assert len(calls) == health.RETRIES_ON_GATEWAY + 1, "retries must be bounded"
+
+
+def test_a_404_is_not_retried(monkeypatch):
+    calls = []
+
+    def fake_urlopen(req, timeout=None):
+        calls.append(1)
+        raise _http_error(404)
+
+    monkeypatch.setattr(health, "urlopen", fake_urlopen)
+    monkeypatch.setattr(health.time, "sleep", lambda s: None)
+    status = health.ping("https://example.test/svc", True)
+    assert status.startswith("DEAD") and "404" in status
+    assert len(calls) == 1, "a 404 is a definite answer and must not be retried"

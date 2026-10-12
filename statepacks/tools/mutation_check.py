@@ -47,8 +47,24 @@ NWR = "statepacks/build_nwr_pack.py"
 PWR = "statepacks/build_power_pack.py"
 GLY = "statepacks/glyphs.py"
 REP = "statepacks/build_repeater_pack.py"
+HC = "scripts/health_check.py"
 
 MUTATIONS = {
+    # The weekly catalog health check gates CI; a false DEAD fails main.
+    HC: [
+        ("stop retrying a 502/503/504 and fail on the first gateway timeout",
+         "    return isinstance(e, HTTPError) and e.code in TRANSIENT_HTTP",
+         "    return False"),
+        ("retry a 404 as though it were transient",
+         "TRANSIENT_HTTP = {502, 503, 504}",
+         "TRANSIENT_HTTP = {404, 502, 503, 504}"),
+        ("retry a gateway error without any limit",
+         "            if _is_gateway(e) and gateways < RETRIES_ON_GATEWAY:",
+         "            if _is_gateway(e):"),
+        ("let a dead primary pass without checking its alternates",
+         "            if ping_alternates(s.get(\"alternates\"), where):",
+         "            if True:"),
+    ],
     SEED: [
         ("truncate the file before the new content is fully written",
          "    fd, tmp = tempfile.mkstemp(dir=directory, "
@@ -522,7 +538,7 @@ MUTATIONS = {
     ],
 }
 
-TESTS = ["tests/test_statepacks.py", "tests/test_kmz.py"]
+TESTS = ["tests/test_statepacks.py", "tests/test_kmz.py", "tests/test_health_check.py"]
 # Roughly 5x a normal ~22s uncontested run. A mutation that hangs the whole
 # suite (an unbounded mock with no failure path, paired with a mutation that
 # removes its only stopping condition) is the worst outcome this harness can
